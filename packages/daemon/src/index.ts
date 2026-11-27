@@ -6,6 +6,7 @@ import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay
 import { runReplayTurn, type ProviderAdapter } from "@kraka/environment";
 import { ReplayRunRequestSchema } from "@kraka/protocol";
 import * as v from "valibot";
+import { listenFlow } from "./flow-socket";
 
 type SocketState = { claimed: boolean; controller: AbortController; terminal: boolean };
 async function replay(args: string[]) {
@@ -145,8 +146,27 @@ export async function listenReplay<H extends object>({
 }
 if (import.meta.main && process.argv.length > 2) {
   try {
-    if (process.argv[2] !== "replay") throw new Error("Unknown command, expected replay");
-    await replay(process.argv.slice(3));
+    if (process.argv[2] === "daemon") {
+      const { values } = parseArgs({
+        args: process.argv.slice(3),
+        options: {
+          "state-dir": { type: "string" },
+          listen: { type: "string" },
+          port: { type: "string" },
+        },
+      });
+      if (!values["state-dir"] || !values.listen || !values.port || !/^\d+$/.test(values.port))
+        throw new Error("Expected daemon --state-dir DIR --listen 127.0.0.1 --port N");
+      const listener = await listenFlow({
+        stateDir: values["state-dir"],
+        host: values.listen,
+        port: Number(values.port),
+      });
+      process.once("SIGTERM", listener.shutdown);
+      process.once("SIGINT", listener.shutdown);
+      process.stdout.write(`${JSON.stringify(listener.ready)}\n`);
+    } else if (process.argv[2] === "replay") await replay(process.argv.slice(3));
+    else throw new Error("Unknown command, expected replay or daemon");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

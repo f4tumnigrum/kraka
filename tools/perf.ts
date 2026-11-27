@@ -236,8 +236,7 @@ async function measureClosure(base: ReportBase, root: string) {
   );
   return measured(base, { external: 1, native: 1 });
 }
-async function checkReplayOnly(root: string) {
-  // S01 has a single command. Verify its explicit rejection at this root before declaring missing endpoints.
+async function daemonCommands(root: string) {
   return withState(async (dir) => {
     const r = Bun.spawnSync([process.execPath, join(root, entry), "start", "--state-dir", dir], {
       cwd: root,
@@ -249,11 +248,12 @@ async function checkReplayOnly(root: string) {
       r.exitCode !== 1 ||
       r.signalCode ||
       r.stdout.length ||
-      r.stderr.toString().trim() !== "Unknown command, expected replay"
+      !["Unknown command, expected replay", "Unknown command, expected replay or daemon"].includes(
+        r.stderr.toString().trim(),
+      )
     )
-      throw new Error(
-        `Cannot confirm replay-only command surface (exit ${r.exitCode}): ${r.stderr}`,
-      );
+      throw new Error(`Cannot confirm daemon command surface (exit ${r.exitCode}): ${r.stderr}`);
+    return r.stderr.toString().trim();
   });
 }
 export function parseSelection(args: string[]) {
@@ -305,7 +305,7 @@ export async function runBudget({
   let exit = 0,
     stub = false,
     replayAttempted = false;
-  let capability: Promise<void> | undefined;
+  let capability: Promise<string> | undefined;
   for (const metric of metricIds.filter((m) => !metrics.length || metrics.includes(m))) {
     const base: ReportBase = {
       metric,
@@ -337,9 +337,34 @@ export async function runBudget({
         }
         if (report.status === "unavailable" && report.reason.startsWith("Known baseline stub"))
           stub = true;
+      } else if (
+        metric === "P11" &&
+        (await Bun.file(join(root, "packages/daemon/src/flow-socket.ts")).exists())
+      ) {
+        const { sampleTransfers } = await import("./stream-flow-bench");
+        base.expected = {
+          uploads: 10,
+          downloads: 10,
+          uploadBytes: 200_000_000,
+          downloadBytes: 200_000_000,
+        };
+        base.actual = { uploads: 0, downloads: 0, uploadBytes: 0, downloadBytes: 0 };
+        const series = { upload: 0, download: 0 };
+        for await (const trial of sampleTransfers(root)) {
+          const { direction, bytes, receiptsMs } = trial;
+          base.observations.push(trial);
+          base.actual[`${direction}s`] = (base.actual[`${direction}s`] ?? 0) + 1;
+          base.actual[`${direction}Bytes`] = (base.actual[`${direction}Bytes`] ?? 0) + bytes;
+          series[direction] += receiptsMs.length;
+          for (const value of receiptsMs)
+            base.samples.push({ series: direction, unit: "ms", value });
+        }
+        report = measured(base, series);
       } else {
         base.expected = { capabilityChecks: 1, workloadSamples: 0 };
         base.actual = { capabilityChecks: 0, workloadSamples: 0 };
+        if (metric === "P11" && role === "candidate")
+          throw new Error("Missing required flow-controlled transfer endpoint");
         if (metric === "P8") {
           if (
             !(await Bun.file(join(root, "packages/daemon/package.json")).exists()) ||
@@ -347,8 +372,10 @@ export async function runBudget({
           )
             throw new Error("Cannot confirm absence of the daemon release packager");
         } else if (!stub) {
-          capability ??= checkReplayOnly(root);
-          await capability;
+          capability ??= daemonCommands(root);
+          const commands = await capability;
+          if (metric === "P11" && commands !== "Unknown command, expected replay")
+            throw new Error("Cannot confirm absence of the flow-controlled endpoint");
         }
         base.actual.capabilityChecks = 1;
         report = unavailable(base, `Missing ${base.endpoint}`);

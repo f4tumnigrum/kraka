@@ -31,9 +31,23 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test ./tools/reference-conformance.live.test.ts
-      - run: bun test --path-ignore-patterns "**/reference-conformance.live.test.ts"
+      - name: Test workspace and require all three short socket cases
+        shell: bash
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          bun test --path-ignore-patterns "**/reference-conformance.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
+          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done
       - run: bun run build
       - run: bun run protocol:reference:check
+      - name: Measure control receipts on delayed and bandwidth-limited sockets
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun tools/stream-flow-bench.ts --shaped | tee "$RUNNER_TEMP/budget-shaped.jsonl"
+          grep -Fx '{"group":4,"completed":true}' "$RUNNER_TEMP/budget-shaped.jsonl"
       - name: Measure budgets on the PR base
         if: runner.os == 'macOS' && github.event_name == 'pull_request'
         shell: bash
@@ -62,5 +76,7 @@ jobs:
         if: always() && runner.os == 'macOS'
         with:
           name: daemon-budget-reports
-          path: ${{ runner.temp }}/budget-*.jsonl
+          path: |
+            ${{ runner.temp }}/budget-*.jsonl
+            ${{ runner.temp }}/flow-tests.log
           if-no-files-found: error
