@@ -1,5 +1,3 @@
-import { existsSync, readFileSync, renameSync, watch, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import * as v from "valibot";
 import {
   HistoryPageSchema,
@@ -7,6 +5,7 @@ import {
   type SignedRequest,
   type CommandReceipt,
   RoundSchema,
+  RoundPhaseSchema,
   MessageSchema,
   SyncPositionSchema,
 } from "@kraka/protocol";
@@ -79,34 +78,34 @@ export function scenarioInput(
     },
   };
 }
-export function serveSeed(store: FirstSendStore, dir: string) {
-  const path = join(dir, "sync-command.json"),
-    ack = join(dir, "sync-result.json");
-  let last = "";
-  const file = watch(dir, (_event, name) => {
-    if (String(name) !== "sync-command.json" || !existsSync(path)) return;
-    const { id, rows, transactions, floor, phase } = JSON.parse(readFileSync(path, "utf8"));
-    if (id === last) return;
-    last = id;
+const seedCommand = v.union([
+  v.strictObject({ transactions: v.array(v.array(schema)) }),
+  v.strictObject({ rows: v.array(schema) }),
+  v.strictObject({ floor: SyncPositionSchema }),
+  v.strictObject({ phase: RoundPhaseSchema }),
+]);
+
+export function serveSeed(store: FirstSendStore) {
+  if (!process.send) throw Error("Seed writer requires a private IPC channel");
+  const reply = process.send.bind(process);
+  process.on("message", (message: unknown) => {
+    const { id, command } = v.parse(v.object({ id: v.string(), command: v.unknown() }), message);
     let error: string | null = null;
     try {
-      if (transactions)
-        for (const batch of v.parse(v.array(v.array(schema)), transactions)) persist(store, batch);
-      if (rows) persist(store, v.parse(v.array(schema), rows));
-      if (floor) store.db.run("UPDATE sync_meta SET floor=?", [v.parse(SyncPositionSchema, floor)]);
-      if (phase) {
-        const r = readRound(store.db, "round-heading");
-        if (!r) throw Error("Missing test round");
-        store.setPhase(
-          r,
-          v.parse(RoundSchema, { ...r, attempt: { ...r.attempt, phase } }).attempt.phase,
-        );
+      const op = v.parse(seedCommand, command);
+      if ("transactions" in op) {
+        for (const rows of op.transactions) persist(store, rows);
+      } else if ("rows" in op) persist(store, op.rows);
+      else if ("floor" in op) store.db.run("UPDATE sync_meta SET floor=?", [op.floor]);
+      else {
+        const round = readRound(store.db, "round-heading");
+        if (!round) throw Error("Missing test round");
+        store.setPhase(round, op.phase);
       }
     } catch (e) {
       error = String(e);
     }
-    writeFileSync(ack + ".tmp", JSON.stringify({ id, error }));
-    renameSync(ack + ".tmp", ack);
+    reply({ id, error });
   });
-  file.unref();
+  process.channel?.unref();
 }

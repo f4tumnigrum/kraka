@@ -56,6 +56,7 @@ export function launchWriter(
   root: string,
   point?: Fault | "codex" | "codex-cli",
   recording = join(root, fixture),
+  ipc?: (message: unknown) => void,
 ) {
   const args =
     point === "codex-cli"
@@ -71,6 +72,7 @@ export function launchWriter(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
+    ...(ipc && { ipc }),
   });
   const stderr = new Response(child.stderr).text();
   const line = Promise.withResolvers<string>();
@@ -130,6 +132,7 @@ export async function startFirstSendFixture({
   root = productRoot,
   point,
   recording,
+  ipc,
 }: {
   stateDir: string;
   projectDirectory: string;
@@ -137,11 +140,12 @@ export async function startFirstSendFixture({
   root?: string;
   point?: Fault;
   recording?: string;
+  ipc?: (message: unknown) => void;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
   await configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
-  const launcher = launchWriter(stateDir, root, point, recording);
+  const launcher = launchWriter(stateDir, root, point, recording, ipc);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");

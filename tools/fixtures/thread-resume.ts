@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import * as v from "valibot";
 import { ThreadReplica, type ThreadCacheStore } from "../../packages/client-runtime/src";
 import { SqliteThreadCache } from "../../packages/cli-client/src/thread-cache";
@@ -233,12 +232,19 @@ async function setup(dir: string, root: string) {
     requests: [["thread.view", "thread.send"]],
   });
   const stateDir = join(pairing.stateDir, "host");
+  const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   const f = await startFirstSendFixture({
     stateDir,
     projectDirectory: join(dir, "work"),
     adapter: "replay",
     root,
     point: "resume",
+    ipc(message) {
+      const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
+      const waiter = pending.get(reply.id);
+      if (reply.error === null) waiter?.resolve();
+      else waiter?.reject(Error(reply.error));
+    },
   }).catch(async (e) => {
     await pairing.close();
     throw e;
@@ -247,18 +253,22 @@ async function setup(dir: string, root: string) {
   if (!tablet) throw Error("Missing paired device");
   const caches = new Map<string, SqliteThreadCache>();
   const live = new Set<Awaited<ReturnType<typeof connectReplica>>>();
-  async function control(command: unknown) {
-    const id = crypto.randomUUID(),
-      path = join(stateDir, "sync-command.json"),
-      out = join(stateDir, "sync-result.json");
-    writeFileSync(path + ".tmp", JSON.stringify({ id, ...(command as object) }));
-    renameSync(path + ".tmp", path);
-    await until(
-      () => existsSync(out) && JSON.parse(readFileSync(out, "utf8")).id === id,
-      "writer barrier",
-    );
-    const result = JSON.parse(readFileSync(out, "utf8"));
-    if (result.error) throw Error(result.error);
+  let exit: Error | undefined;
+  void f.child.exited.then((code) => {
+    exit = Error(`Seed writer exited (${f.child.signalCode ?? code})`);
+    for (const waiter of pending.values()) waiter.reject(exit);
+  });
+  async function control(command: object) {
+    if (exit) throw exit;
+    const id = crypto.randomUUID();
+    const waiter = Promise.withResolvers<void>();
+    pending.set(id, waiter);
+    try {
+      f.child.send({ id, command });
+      await waiter.promise;
+    } finally {
+      pending.delete(id);
+    }
   }
   const threadId = v.parse(ThreadIdSchema, "thread-notes");
   return {

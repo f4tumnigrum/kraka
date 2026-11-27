@@ -146,7 +146,7 @@ const writer = await startWriter(
       barrier("locked");
     },
     opened(store) {
-      if (point === "resume") serveSeed(store, state);
+      if (point === "resume") serveSeed(store);
       openedStore = store;
       store.beforeCommit = (method) => {
         const marker = join(state, "auto-row");
