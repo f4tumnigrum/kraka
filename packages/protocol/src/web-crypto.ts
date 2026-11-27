@@ -14,7 +14,15 @@ export async function verifyP256(
 ): Promise<boolean> {
   try {
     const raw = bytes(publicKey);
-    if (raw.length !== 65 || raw[0] !== 4) return false;
+    const sig = bytes(signature);
+    if (
+      raw.length !== 65 ||
+      raw[0] !== 4 ||
+      base64url(raw) !== publicKey ||
+      sig.length !== 64 ||
+      base64url(sig) !== signature
+    )
+      return false;
     const key = await crypto.subtle.importKey(
       "raw",
       raw,
@@ -22,12 +30,7 @@ export async function verifyP256(
       false,
       ["verify"],
     );
-    return await crypto.subtle.verify(
-      algorithm,
-      key,
-      bytes(signature),
-      new TextEncoder().encode(message),
-    );
+    return await crypto.subtle.verify(algorithm, key, sig, new TextEncoder().encode(message));
   } catch {
     return false;
   }

@@ -1,6 +1,13 @@
+import { Database } from "bun:sqlite";
+import { AccessStore } from "./access-store";
 import { expect, test } from "bun:test";
 import * as v from "valibot";
 import {
+  EnvironmentIdentitySchema,
+  DeviceKeyIdSchema,
+  DeviceIdSchema,
+  ProjectIdSchema,
+  base64url,
   PairingPendingSchema,
   PairingExchangeSchema,
   PairingChallengeSchema,
@@ -52,7 +59,7 @@ const approver = {
   principalId: v.parse(PrincipalIdSchema, "owner-device-principal"),
 };
 const rights = [{ permission: "thread.view", ceiling: "open" }] as const;
-const approval: PairingEvent = {
+const approval: Extract<PairingEvent, { kind: "approve" }> = {
   kind: "approve",
   confirmationCode: pending.confirmationCode,
   selection: {
@@ -128,6 +135,12 @@ test("recovery after invite expiry requires the original live key and a fresh ch
     exchange: { ...exchange, challengeId: fresh.challengeId, challenge: fresh.challenge },
   };
   expect(step(state, recovery, now)).toBe(state);
+  if (state.completed.deviceKey.state.kind !== "usable") throw Error("Missing usable registration");
+  const expiry = state.completed.deviceKey.state.expiresAt;
+  expect(transitionPairing(state, { ...recovery, issuedAt: expiry }, expiry)).toMatchObject({
+    kind: "rejected",
+    reason: "expired",
+  });
   expect(transitionPairing(state, { ...recovery, currentKey: null }, now).kind).toBe("rejected");
   expect(
     transitionPairing(
@@ -137,4 +150,89 @@ test("recovery after invite expiry requires the original live key and a fresh ch
     ).kind,
   ).toBe("rejected");
   expect(transitionPairing(state, { ...recovery, exchange, challenge }, now).kind).toBe("rejected");
+});
+
+test("the SQLite writer commits the winning cancellation or exchange once, including audit rows", async () => {
+  const db = new Database(":memory:");
+  const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ]);
+  const publicKey = base64url(new Uint8Array(await crypto.subtle.exportKey("raw", keys.publicKey)));
+  const identity = v.parse(EnvironmentIdentitySchema, { id: "env", keyVersion: 1, publicKey });
+  const confirmed = { present: async () => true, approve: async () => true };
+  const ownerId = v.parse(DeviceIdSchema, "owner-device"),
+    keyId = v.parse(DeviceKeyIdSchema, "owner-key");
+  const counts = () =>
+    db
+      .query<{ devices: number; grants: number; changes: number }, []>(
+        "SELECT (SELECT count(*) FROM devices) AS devices,(SELECT count(*) FROM grants) AS grants,(SELECT count(*) FROM changes) AS changes",
+      )
+      .get();
+  const store = new AccessStore(db, identity, () => 2);
+  try {
+    await store.confirm(
+      { kind: "bootstrap", environment: identity, publicKey, deviceId: ownerId, keyId },
+      confirmed,
+    );
+    const owner = store.device(ownerId);
+    if (!owner) throw Error("Owner not registered");
+    const actor = { kind: "device" as const, deviceId: ownerId, principalId: owner.principal.id };
+    store.provisionProject(v.parse(ProjectIdSchema, "project"));
+    const { authority: _authority, currentKey: _currentKey, ...intent } = consume;
+    async function prepare(id: string) {
+      const app = v.parse(PairingPendingSchema, { ...pending, inviteId: id, requestId: id });
+      const invite = createPairingInvite(identity.id, app.inviteId, app.target, 0);
+      expect(await store.create(invite)).toBe("created");
+      expect(await store.create(invite)).toBe("alreadyExists");
+      await store.apply(app.inviteId, { kind: "apply", pending: app }, 2);
+      await store.apply(
+        app.inviteId,
+        {
+          ...approval,
+          selection: {
+            ...approval.selection,
+            approvedBy: actor,
+            ownerId: actor.principalId,
+            requestId: app.requestId,
+          },
+        },
+        2,
+      );
+      return {
+        id: app.inviteId,
+        exchange: {
+          ...intent,
+          challenge: { ...challenge, requestId: app.requestId },
+          exchange: { ...exchange, requestId: app.requestId, inviteId: app.inviteId },
+        },
+      };
+    }
+    const cancelFirst = await prepare("cancel-wins");
+    const [, lost] = await Promise.all([
+      store.apply(cancelFirst.id, { kind: "cancel" }, 2),
+      store.apply(cancelFirst.id, cancelFirst.exchange, 2),
+    ]);
+    expect(lost).toMatchObject({ kind: "rejected", reason: "cancelled" });
+    expect(counts()).toEqual({ devices: 1, grants: 9, changes: 9 });
+    const exchangeFirst = await prepare("exchange-wins");
+    db.exec(
+      "CREATE TRIGGER stop_grant BEFORE INSERT ON grants BEGIN SELECT RAISE(ABORT,'unavailable'); END",
+    );
+    await expect(store.apply(exchangeFirst.id, exchangeFirst.exchange, 2)).rejects.toThrow(
+      "unavailable",
+    );
+    expect((await store.read(exchangeFirst.id))?.kind).toBe("selected");
+    expect(counts()).toEqual({ devices: 1, grants: 9, changes: 9 });
+    db.exec("DROP TRIGGER stop_grant");
+    const [won, cancelled] = await Promise.all([
+      store.apply(exchangeFirst.id, exchangeFirst.exchange, 2),
+      store.apply(exchangeFirst.id, { kind: "cancel" }, 2),
+    ]);
+    expect(won?.state.kind).toBe("consumed");
+    expect(cancelled).toMatchObject({ kind: "rejected", reason: "alreadyExchanged" });
+    expect(counts()).toEqual({ devices: 2, grants: 10, changes: 10 });
+  } finally {
+    db.close();
+  }
 });
