@@ -2,6 +2,7 @@ import * as v from "valibot";
 import { CaptureIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
+  bindTodoSession,
   readThread,
   readRound,
   readMessage,
@@ -76,6 +77,13 @@ export async function dispatchCodex(
   });
   if (opened.kind === "rejected") return failed(opened.reason, opened.message);
   const session = opened.value;
+  const todos = bindTodoSession(
+    store.todos,
+    initial,
+    session,
+    adapter,
+    selection.probe.declaration,
+  );
   let closing: ReturnType<typeof adapter.close> | undefined;
   const release = () => {
     closing ??= adapter.close(session, "shutdown");
@@ -125,6 +133,10 @@ export async function dispatchCodex(
     while (!next.done) {
       const event = next.value,
         p = event.payload;
+      if (todos.event(event)) {
+        next = await events.next();
+        continue;
+      }
       if (
         !matchesAdapterEvent(binding, event) ||
         !("attemptId" in p) ||
@@ -237,6 +249,7 @@ export async function dispatchCodex(
   } catch {
     failed("unsafeToRetry", "Codex delivery outcome could not be confirmed");
   } finally {
+    todos.close();
     signal.removeEventListener("abort", release);
     await (closing ?? adapter.close(session, "finished"));
   }

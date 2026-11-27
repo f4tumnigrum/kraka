@@ -10,6 +10,9 @@ import {
   wireBytes,
   ClientAuthenticationSchema,
   SignedRequestSchema,
+  PrivateSecretRequestSchema,
+  type PrivateSecretRequest,
+  type CommandId,
   SubscriptionIdSchema,
   ThreadIdSchema,
   type SubscriptionPage,
@@ -29,6 +32,7 @@ type Options = {
   received?: (kind: string, message: unknown, at: number) => void;
   pageStaged?: (p: SubscriptionPage) => Promise<void> | void;
   store?: ThreadCacheStore;
+  commandId?: (method: string) => string;
   acknowledged?: (head: SyncCursor) => void;
   installed?: (head: SyncCursor) => void;
 };
@@ -44,6 +48,9 @@ export async function connectReplica(
   socket.binaryType = "arraybuffer";
   const ready = Promise.withResolvers<ThreadReplica>(),
     closed = Promise.withResolvers<void>();
+  let secret:
+    | ((payload: PrivateSecretRequest["payload"], id: CommandId) => Promise<PrivateSecretRequest>)
+    | undefined;
   let replica: ThreadReplica | undefined,
     seq = 0,
     bytes = 0,
@@ -104,6 +111,20 @@ export async function connectReplica(
         features,
         sequence: ++seq,
       };
+      secret = async (payload, id) => {
+        const req = {
+          ...envelope,
+          method: "todo.submitSecret",
+          payload,
+          kind: "signedRequest",
+          commandId: id,
+          sequence: ++seq,
+        };
+        return v.parse(PrivateSecretRequestSchema, {
+          ...req,
+          signature: await device.device.sign(canonicalJson(req)),
+        });
+      };
       const r = new ThreadReplica(
         frame.message,
         {
@@ -148,7 +169,7 @@ export async function connectReplica(
               method,
               payload,
               kind: "signedRequest",
-              commandId: crypto.randomUUID(),
+              commandId: opts.commandId?.(method) ?? crypto.randomUUID(),
               sequence: ++seq,
             };
             return v.parse(SignedRequestSchema, {
@@ -186,6 +207,11 @@ export async function connectReplica(
     const client = await within(ready.promise, 5000, "Configured thread connection");
     return {
       client,
+      submitSecret(payload: PrivateSecretRequest["payload"], id: CommandId) {
+        if (!secret) throw Error("Private session unavailable");
+        const sign = secret;
+        return client.submitSecret(() => sign(payload, id));
+      },
       principal: device.principal.id,
       heads,
       messages,

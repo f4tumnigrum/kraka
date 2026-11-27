@@ -1,3 +1,5 @@
+import { bindTodoSession } from "./todo-session";
+import type { TodoLedger } from "./todo-ledger";
 import {
   AttemptIdSchema,
   CaptureIdSchema,
@@ -73,6 +75,7 @@ export async function runReplayTurn<Handle extends object>({
   workingDirectory: string;
   signal: AbortSignal;
   persisted?: {
+    todos?: TodoLedger;
     thread: Thread;
     round: Round;
     messageVersion: ObjectVersion;
@@ -196,6 +199,8 @@ export async function runReplayTurn<Handle extends object>({
   };
   signal.addEventListener("abort", cancel, { once: true });
   let reason: CloseReason = "shutdown";
+  const todos =
+    persisted?.todos && bindTodoSession(persisted.todos, persisted.round, session, adapter, c);
   let iterator: AsyncIterator<AdapterEventEnvelope<"replay">> | undefined;
   try {
     signal.throwIfAborted();
@@ -311,6 +316,7 @@ export async function runReplayTurn<Handle extends object>({
     };
     const consume = (event: AdapterEventEnvelope<"replay">) => {
       const p = event.payload;
+      if (todos?.event(event)) return;
       if (p.kind === "deliveryReceived" && p.attemptId !== attemptId && persisted) {
         persisted.previousReceipt?.(event);
         return;
@@ -470,6 +476,7 @@ export async function runReplayTurn<Handle extends object>({
     if (updates.at(-1)?.kind !== "round.ended") throw new Error("Incomplete replay");
     reason = "finished";
   } finally {
+    todos?.close();
     signal.removeEventListener("abort", cancel);
     try {
       await release(reason);

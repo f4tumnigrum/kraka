@@ -277,6 +277,25 @@ export const TodoDecisionSchema = v.variant("kind", [
   v.strictObject({ kind: v.literal("secret"), receiptCommandId: CommandIdSchema }),
 ]);
 
+export const TodoReplyContentSchema = v.variant("kind", [
+  v.strictObject({
+    kind: v.literal("question"),
+    answers: v.tupleWithRest([QuestionAnswerSchema], QuestionAnswerSchema),
+  }),
+  TodoDecisionSchema.options[0],
+]);
+export type TodoReplyContent = v.InferOutput<typeof TodoReplyContentSchema>;
+export const TodoReplyRecordSchema = v.strictObject({
+  kind: v.literal("todoAnswerRead"),
+  todoRequestId: TodoRequestIdSchema,
+  messageId: MessageIdSchema,
+  authorId: PrincipalIdSchema,
+  deviceId: DeviceIdSchema,
+  at: unixMilliseconds,
+  content: TodoReplyContentSchema,
+});
+export type TodoReplyRecord = v.InferOutput<typeof TodoReplyRecordSchema>;
+
 export const MethodTargetSchema = v.picklist([
   "environment",
   "project",
@@ -781,6 +800,12 @@ export const REQUEST_METHODS = {
     "thread",
     RoundTargetPayloadSchema,
   ),
+  readAnswer: defineRequestMethod(
+    "todo.readAnswer",
+    "thread.view",
+    "thread",
+    TodoTargetPayloadSchema,
+  ),
   answerTodo: defineRequestMethod(
     "todo.answer",
     "thread.reply",
@@ -1137,6 +1162,7 @@ export const RequestResultSchema = v.variant("kind", [
     kind: v.literal("actionAccepted"),
     supportedFields: v.optional(v.array(v.string())),
   }),
+  TodoReplyRecordSchema,
   v.strictObject({ kind: v.literal("todoAnswerStored"), todoRequestId: TodoRequestIdSchema }),
   v.strictObject({ kind: v.literal("accessChanged"), grantId: AccessGrantIdSchema }),
   v.strictObject({

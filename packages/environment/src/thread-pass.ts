@@ -154,6 +154,14 @@ function threadWindow(threadId: ThreadId, rows: readonly ReadRow[], requested: r
     )
       add(item);
   }
+  for (const item of rows) {
+    const row = item.row;
+    if (row.objectType !== "todoRequest" || row.value.state.kind !== "answered") continue;
+    const content = row.value.state.answer.content;
+    const link =
+      content.kind === "message" ? ["message", content.messageId] : ["round", row.value.roundId];
+    if (selected.has(JSON.stringify(link))) add(item);
+  }
   return selected;
 }
 function replacement(row: HistoryRow): ObjectChange {
