@@ -375,6 +375,19 @@ export async function runBudget({
         }
       } else if (
         durable &&
+        role === "baseline" &&
+        (metric === "P1" || metric === "P2") &&
+        !(await Bun.file(join(root, "packages/daemon/src/codex-instances.ts")).exists())
+      ) {
+        const daemon = await Bun.file(join(root, "packages/daemon/src/index.ts")).text();
+        if (!daemon.includes("createReplayAdapter") || daemon.includes("createCodexAdapter"))
+          throw new Error("Unrecognized daemon adapter selection");
+        report = unavailable(
+          base,
+          "Parent first-send writer only supports the replay adapter; missing Codex stdio profile",
+        );
+      } else if (
+        durable &&
         (metric === "P1" || metric === "P2" || metric === "P7" || metric === "P9")
       ) {
         const { measureFirstSend } = await import("./measure-first-send");

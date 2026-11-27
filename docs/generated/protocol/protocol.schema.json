@@ -3462,6 +3462,391 @@
             "result": {
               "oneOf": [
                 {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "executorRefreshed"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "configurationVersion": {
+                      "$ref": "#/$defs/ObjectVersion"
+                    },
+                    "snapshot": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/ExecutorInstanceSnapshot"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "readiness": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "enum": [
+                                "yes",
+                                "no",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "verifiedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "verifiedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "installed": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "enum": [
+                                "yes",
+                                "no",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "verifiedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "verifiedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "authenticated": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "enum": [
+                                "yes",
+                                "no",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "verifiedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "verifiedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "model": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "enum": [
+                                "yes",
+                                "no",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "verifiedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "verifiedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "operation": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "enum": [
+                                "yes",
+                                "no",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "verifiedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "verifiedAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "configured",
+                        "installed",
+                        "authenticated",
+                        "model",
+                        "operation"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "models": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "checkedAt": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "models": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "slug": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "displayName": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "isDefault": {
+                                    "type": "boolean"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "const": "enum"
+                                            },
+                                            "values": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "values"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "enum": [
+                                                "boolean",
+                                                "number",
+                                                "string"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "unavailableReason": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "slug",
+                                  "displayName",
+                                  "isDefault",
+                                  "options"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "checkedAt",
+                            "models"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "binaryVersion": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "variables": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "kind": {
+                            "enum": [
+                              "secret",
+                              "literal"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "compatibilityAdvisory": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "broken",
+                            "unsupported"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "versionAdvisory": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "instanceId",
+                    "configurationVersion",
+                    "snapshot",
+                    "readiness",
+                    "models",
+                    "binaryVersion",
+                    "variables",
+                    "compatibilityAdvisory",
+                    "versionAdvisory"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "executorConfigured"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "version": {
+                      "$ref": "#/$defs/ObjectVersion"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "instanceId",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                },
+                {
                   "$ref": "#/$defs/ContextOperationReceipt"
                 },
                 {
@@ -7274,6 +7659,282 @@
         "redactedSummary"
       ],
       "additionalProperties": false
+    },
+    "ExecutorTurnUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "round.started"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "nativeRootTurnId": {
+              "$ref": "#/$defs/NativeRootTurnId"
+            },
+            "nativeSessionId": {
+              "$ref": "#/$defs/NativeSessionId"
+            },
+            "startedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "selectedMode": {
+              "const": "ask"
+            },
+            "effectiveMode": {
+              "const": "ask"
+            },
+            "supportedModes": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "ask"
+                }
+              ],
+              "minItems": 1,
+              "items": false
+            },
+            "enforcement": {
+              "const": "native"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "nativeRootTurnId",
+            "nativeSessionId",
+            "startedAt",
+            "selectedMode",
+            "effectiveMode",
+            "supportedModes",
+            "enforcement"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tool.started"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "callId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "command": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "callId",
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tool.output"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "callId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "callId",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tool.ended"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "callId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "exitCode": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "callId",
+            "output",
+            "exitCode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "assistant.delta",
+                "assistant.final"
+              ],
+              "type": "string"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "itemId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "itemId",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "round.ended"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "nativeRootTurnId": {
+              "$ref": "#/$defs/NativeRootTurnId"
+            },
+            "endedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "endTimeEvidence": {
+              "$ref": "#/$defs/RoundEndTimeEvidence"
+            },
+            "outcome": {
+              "enum": [
+                "completed",
+                "stopped",
+                "failed",
+                "unknown",
+                "superseded"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "nativeRootTurnId",
+            "endedAt",
+            "endTimeEvidence",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor.failed"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "reason",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "FileChange": {
       "type": "object",
@@ -18433,6 +19094,12 @@
           "$ref": "#/$defs/attention.read"
         },
         {
+          "$ref": "#/$defs/executor.configure"
+        },
+        {
+          "$ref": "#/$defs/executor.refresh"
+        },
+        {
           "$ref": "#/$defs/project.register"
         },
         {
@@ -24942,6 +25609,465 @@
       "additionalProperties": false,
       "description": "Requires environment.upgrade on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
+    "executor.configure": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "executor.configure"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "expectedVersion": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "registration": {
+              "type": "object",
+              "properties": {
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "driver": {
+                  "type": "object",
+                  "properties": {
+                    "executable": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "endpoint": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "configurationRoot": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "historyRoot": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "variables": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "const": "literal"
+                              },
+                              "value": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "const": "secret"
+                              },
+                              "binding": {
+                                "type": "object",
+                                "properties": {
+                                  "ownerId": {
+                                    "$ref": "#/$defs/PrincipalId"
+                                  },
+                                  "namespace": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "key": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "version": {
+                                    "$ref": "#/$defs/ObjectVersion"
+                                  }
+                                },
+                                "required": [
+                                  "ownerId",
+                                  "namespace",
+                                  "key",
+                                  "version"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "binding"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "executable",
+                    "endpoint",
+                    "configurationRoot",
+                    "historyRoot",
+                    "variables"
+                  ],
+                  "additionalProperties": false
+                },
+                "credential": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ownerId": {
+                          "$ref": "#/$defs/PrincipalId"
+                        },
+                        "namespace": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "key": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "version": {
+                          "$ref": "#/$defs/ObjectVersion"
+                        }
+                      },
+                      "required": [
+                        "ownerId",
+                        "namespace",
+                        "key",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "model": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "options": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "boolean"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "options"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "family",
+                "instanceId",
+                "displayName",
+                "enabled",
+                "driver",
+                "credential",
+                "model",
+                "permission"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "expectedVersion",
+            "registration"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires settings.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
+    "executor.refresh": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "executor.refresh"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "projectId": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "instanceId": {
+              "$ref": "#/$defs/ExecutorInstanceId"
+            }
+          },
+          "required": [
+            "projectId",
+            "instanceId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on project. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
     "forge.fileReading": {
       "type": "object",
       "properties": {
@@ -30349,6 +31475,42 @@
                   "type": "null"
                 }
               ]
+            },
+            "instanceId": {
+              "$ref": "#/$defs/ExecutorInstanceId"
+            },
+            "model": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "options": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "options"
+              ],
+              "additionalProperties": false
             },
             "content": {
               "type": "object",

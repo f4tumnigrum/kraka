@@ -154,14 +154,21 @@ if (import.meta.main && process.argv.length > 2) {
         options: { "state-dir": { type: "string" }, recording: { type: "string" } },
         strict: true,
       });
-      if (!values["state-dir"] || !values.recording)
-        throw new Error("Expected start --state-dir DIR --recording FILE");
-      const recording = parseReplayRecording(await Bun.file(values.recording).text());
-      const writer = await startWriter(values["state-dir"], {
-        adapter: createReplayAdapter(recording),
-        modelId: recording.modelId,
-        expectedText: recording.expectedText,
-      });
+      if (!values["state-dir"])
+        throw new Error("Expected start --state-dir DIR [--recording FILE]");
+      const recording = values.recording
+        ? parseReplayRecording(await Bun.file(values.recording).text())
+        : null;
+      const writer = await startWriter(
+        values["state-dir"],
+        recording
+          ? {
+              adapter: createReplayAdapter(recording),
+              modelId: recording.modelId,
+              expectedText: recording.expectedText,
+            }
+          : null,
+      );
       if (writer.kind === "unconfirmed") throw new Error(writer.reason);
       if (writer.kind === "ready") {
         process.once("SIGTERM", writer.close);

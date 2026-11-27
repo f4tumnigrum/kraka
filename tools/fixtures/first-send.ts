@@ -19,7 +19,10 @@ import { entry, fixture, sampleRequest, terminate, within } from "./replay-proce
 
 export const productRoot = resolve(import.meta.dir, "../..");
 export type Fault = "locked" | "beforeCommit" | "afterCommit" | "externalWrite" | "peer";
-export function configureLocalOwner(stateDir: string) {
+export function configureLocalOwner(
+  stateDir: string,
+  permissions = ["workspace.change", "thread.send"],
+) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const privatePath = join(stateDir, "fixture-private.pem");
   if (existsSync(privatePath)) return;
@@ -35,15 +38,31 @@ export function configureLocalOwner(stateDir: string) {
       publicKey,
       signer: fixtureSigner,
       principalId: fixtureActor,
-      permissions: ["workspace.change", "thread.send"],
+      permissions,
     }),
     { mode: 0o600, flag: "wx" },
   );
 }
-export function launchWriter(stateDir: string, root: string, point?: Fault) {
-  const args = point
-    ? [join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, point]
-    : [join(root, entry), "start", "--state-dir", stateDir, "--recording", join(root, fixture)];
+export function launchWriter(
+  stateDir: string,
+  root: string,
+  point?: Fault | "codex" | "codex-cli",
+) {
+  const args =
+    point === "codex-cli"
+      ? [join(root, entry), "start", "--state-dir", stateDir]
+      : point === "codex"
+        ? [join(root, "tools/fixtures/codex-writer.ts"), stateDir]
+        : point
+          ? [join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, point]
+          : [
+              join(root, entry),
+              "start",
+              "--state-dir",
+              stateDir,
+              "--recording",
+              join(root, fixture),
+            ];
   const started = performance.now();
   const child = Bun.spawn([process.execPath, ...args], {
     cwd: root,
