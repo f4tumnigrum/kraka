@@ -5,7 +5,15 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { entry, withState } from "./fixtures/replay-process";
 import { command, identity, replayCounts, sampleReplay } from "./measure-replay";
-import { catalog, metricIds, type Metric, type ProbeSpec, type Unit } from "./perf-catalog";
+import {
+  budgetValue,
+  exceedsBudget,
+  catalog,
+  metricIds,
+  type Metric,
+  type ProbeSpec,
+  type Unit,
+} from "./perf-catalog";
 import { productionClosure, type DependencyObservation } from "./perf-dependencies";
 
 type Role = "baseline" | "candidate";
@@ -88,8 +96,7 @@ function measured(base: ReportBase, seriesCounts: Counts, observationOnly = fals
   const breach = base.thresholds.some((t, i) => {
     const s = summary[i];
     if (!s) throw new Error(`Missing summary for ${t.series}`);
-    const value = t.statistic === "each" ? (t.direction === "min" ? s.min : s.max) : s[t.statistic];
-    return t.direction === "min" ? value < t.limit : value > t.limit;
+    return exceedsBudget(t, budgetValue(t, s));
   });
   return {
     ...base,
@@ -273,6 +280,7 @@ export function parseSelection(args: string[]) {
   const { values, positionals } = parseArgs({
     args,
     options: {
+      "report-only": { type: "boolean" },
       root: { type: "string", multiple: true },
       "baseline-root": { type: "string", multiple: true },
     },
@@ -285,6 +293,7 @@ export function parseSelection(args: string[]) {
   for (const id of positionals)
     if (!Object.hasOwn(catalog, id)) throw new Error(`Unknown metric ${id}`);
   return {
+    ...(values["report-only"] ? { reportOnly: true } : {}),
     metrics: metricIds.filter((id) => !positionals.length || positionals.includes(id)),
     root: resolve(roots[0] ?? "."),
     role: values["baseline-root"] ? ("baseline" as const) : ("candidate" as const),
@@ -294,11 +303,13 @@ export async function runBudget({
   metrics,
   root,
   role,
+  reportOnly = false,
   writeReport,
 }: {
   metrics: readonly Metric[];
   root: string;
   role: Role;
+  reportOnly?: boolean;
   writeReport: (r: ProbeReport) => void;
 }): Promise<number> {
   for (const id of metrics)
@@ -454,7 +465,10 @@ export async function runBudget({
       report = { ...base, status: "failed", error: String(error) };
     }
     writeReport(report);
-    if (report.status === "failed" || (report.status === "measured" && report.result === "breach"))
+    if (
+      report.status === "failed" ||
+      (!reportOnly && report.status === "measured" && report.result === "breach")
+    )
       exit = 1;
   }
   return exit;
