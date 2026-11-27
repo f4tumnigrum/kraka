@@ -198,7 +198,8 @@ export function parseInstalledCommand(
     return { kind: "writer", stateDir, recording: values.recording ?? null };
   return { kind: "foreground", stateDir, action: values["open-browser"] ? "open" : "print" };
 }
-if (import.meta.main) {
+declare const KRAKA_DAEMON_ENTRY: boolean;
+if ((typeof KRAKA_DAEMON_ENTRY !== "undefined" && KRAKA_DAEMON_ENTRY) || import.meta.main) {
   try {
     const [command, ...args] = process.argv.slice(2);
     if (command === worktreeWorkerCommand) await runWorktreeWorker(args[0]);

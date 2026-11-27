@@ -12,6 +12,7 @@ export async function compileDaemon(
     entrypoints: [join(import.meta.dir, "src/index.ts")],
     compile: { outfile, ...(target && { target }) },
     define: {
+      KRAKA_DAEMON_ENTRY: "true",
       KRAKA_BROWSER_JS: JSON.stringify(asset),
       KRAKA_RELEASE_VERSION: JSON.stringify(version),
     },

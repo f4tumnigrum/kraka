@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
+import { existsSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -104,7 +105,7 @@ export function startInstalled(site: Installation, mode?: string) {
     if (result.done) {
       const code = await child.exited;
       throw Error(
-        `Daemon exited before record (exit ${code}, signal ${child.signalCode ?? "none"}): ${await errors}`,
+        `Daemon exited before record (exit ${code}, signal ${child.signalCode ?? "none"}, state directory ${existsSync(site.state) ? "present" : "absent"}): ${await errors}`,
       );
     }
     return v.parse(schema, JSON.parse(result.value));
