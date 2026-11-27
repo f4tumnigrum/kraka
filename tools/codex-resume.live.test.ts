@@ -107,7 +107,14 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     accepted(stop.receipt, "actionAccepted");
     const hit = await s.event("interrupt-received");
     expect(hit.root).toBe(first.turn.root);
-    s.action(hit.handle, "publish");
+    const payload = { threadId: first.threadId, stopCommandId: "stop-original" };
+    expect(
+      accepted((await s.client.send("round.readStop", payload)).receipt, "stopResult"),
+    ).toMatchObject({
+      disposition: "pending",
+      reachedAt: null,
+    });
+    s.action(hit.handle, "publish-before-interrupt-reply");
     const ended = await s.updates.until((e) => e.kind === "round.ended");
     expect(ended).toMatchObject({
       outcome: "completed",
@@ -118,8 +125,12 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
         environmentObservedAt: expect.any(Number),
       },
     });
-    const payload = { threadId: first.threadId, stopCommandId: "stop-original" };
-    const before = accepted((await s.client.send("round.readStop", payload)).receipt, "stopResult");
+    expect(await s.event("interrupt-replied")).toMatchObject({
+      handle: hit.handle,
+      id: hit.id,
+      root: hit.root,
+    });
+    const before = await s.acknowledgedStop(first.threadId, payload.stopCommandId);
     expect(before).toMatchObject({
       disposition: "alreadyEnded",
       roundId: first.roundId,
@@ -157,6 +168,12 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     );
     const interrupt = await s.event("interrupt-received");
     s.action(interrupt.handle, "interrupt-reply");
+    const pending = await s.acknowledgedStop(r.threadId, "stop-native");
+    expect(pending).toMatchObject({
+      disposition: "pending",
+      attemptId: r.attemptId,
+      rootId: interrupt.root,
+    });
     s.action(interrupt.handle, "stop");
     expect(await s.updates.until((e) => e.kind === "round.ended")).toMatchObject({
       outcome: "stopped",
@@ -171,7 +188,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
         ).receipt,
         "stopResult",
       ),
-    ).toMatchObject({ disposition: "stopped", reachedAt: expect.any(Number), timedOutAt: null });
+    ).toMatchObject({ disposition: "stopped", reachedAt: pending.reachedAt, timedOutAt: null });
   });
   await run("ask", async (s) => {
     const r = await s.start("unavailable");

@@ -150,6 +150,15 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
       );
       return { ...ids, turn };
     }
+    async function acknowledgedStop(threadId: ThreadId, stopCommandId: string) {
+      const deadline = performance.now() + 5000;
+      do {
+        const reply = await client.send("round.readStop", { threadId, stopCommandId });
+        const record = accepted(reply.receipt, "stopResult");
+        if (record.reachedAt !== null) return record;
+      } while (performance.now() < deadline);
+      throw Error(`No committed interrupt acknowledgement for ${stopCommandId}`);
+    }
     async function restart(abrupt = false) {
       client.close();
       if (abrupt) await f.kill();
@@ -170,6 +179,7 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
       event,
       start,
       replica,
+      acknowledgedStop,
       close,
       restart,
       get client() {

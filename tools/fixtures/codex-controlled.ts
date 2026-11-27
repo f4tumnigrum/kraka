@@ -32,7 +32,8 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
     scenario = "",
     denied = false,
     callbackId: number | string = 4001,
-    interrupt: number | null = null;
+    interrupt: number | null = null,
+    replyOnInputClose = false;
   const note = (event: string, details: object = {}) =>
     ws?.send(JSON.stringify({ event, handle: process.pid, epoch, session, root, ...details }));
   function bound(name: string, seq: number) {
@@ -65,6 +66,12 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
     if (publish) write({ method: "turn/completed", params: { threadId: session, turn } });
     note("root-ended", { outcome, published: publish });
   }
+  function replyToInterrupt() {
+    if (interrupt === null) throw Error("Missing interrupt");
+    write({ ...bound("interrupt", 7), id: interrupt });
+    note("interrupt-replied", { id: interrupt });
+    interrupt = null;
+  }
   function control(action: string) {
     if (action === "exit") {
       process.exit(19);
@@ -73,16 +80,15 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
       end("completed", false);
       return;
     }
-    if (action === "publish") {
+    if (action === "publish-before-interrupt-reply") {
       const turn = saved().turns.find((t) => t.id === root);
-      if (!turn) throw Error("No terminal");
+      if (!turn || interrupt === null) throw Error("Expected saved terminal and pending interrupt");
+      replyOnInputClose = true;
       write({ method: "turn/completed", params: { threadId: session, turn } });
-      if (interrupt !== null) write({ ...bound("interrupt", 7), id: interrupt });
       return;
     }
     if (action === "interrupt-reply") {
-      if (interrupt === null) throw Error("Missing interrupt");
-      write({ ...bound("interrupt", 7), id: interrupt });
+      replyToInterrupt();
       return;
     }
     if (action === "stop") {
@@ -215,6 +221,8 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
       });
     },
     close() {
+      // The daemon closes this handle's stdin after it commits the natural root end.
+      if (replyOnInputClose) replyToInterrupt();
       ws?.close();
     },
   };
