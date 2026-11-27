@@ -24,10 +24,18 @@ export async function settingsHost(dir: string, name: string, devices?: Devices)
   });
   const state = join(pair.stateDir, "host");
   const events = new Journal<v.InferOutput<typeof observation>>();
-  const resources: (() => void | Promise<void>)[] = [pair.close];
-  async function close() {
+  const connections: (() => Promise<void>)[] = [];
+  const caches: SqliteThreadCache[] = [];
+  let stopWriter: (() => Promise<void>) | undefined;
+  async function closeWriter() {
     const errors: unknown[] = [];
-    for (const dispose of resources.splice(0).reverse()) {
+    const cleanup = [
+      ...connections.splice(0),
+      ...(stopWriter ? [stopWriter] : []),
+      ...caches.splice(0).map((cache) => () => cache.close()),
+    ];
+    stopWriter = undefined;
+    for (const dispose of cleanup) {
       try {
         await dispose();
       } catch (error) {
@@ -35,6 +43,13 @@ export async function settingsHost(dir: string, name: string, devices?: Devices)
       }
     }
     if (errors.length) throw new AggregateError(errors, "Settings fixture cleanup failed");
+  }
+  async function close() {
+    try {
+      await closeWriter();
+    } finally {
+      await pair.close();
+    }
   }
   try {
     const target = { kind: "environment" as const, environmentId: pair.identity.id };
@@ -75,14 +90,14 @@ export async function settingsHost(dir: string, name: string, devices?: Devices)
         },
       });
     let writer = await launch();
-    resources.push(() => writer.close());
+    stopWriter = writer.close;
     async function connect(c: Client) {
       const cache = new SqliteThreadCache(join(pair.stateDir, "views.sqlite"), c.principal.id);
-      resources.push(() => cache.close());
+      caches.push(cache);
       const connection = await connectReplica(writer.endpoint, pair.identity, c, cache, {
         minor: 2,
       });
-      resources.push(() => connection.close());
+      connections.push(connection.close);
       return connection.client;
     }
     const owner = await connect(pair.owner);
@@ -113,8 +128,9 @@ export async function settingsHost(dir: string, name: string, devices?: Devices)
       startCheckout,
       devices: { owner: pair.owner.device, applicants: [tablet.device] },
       async restart() {
-        await writer.close();
+        await closeWriter();
         writer = await launch();
+        stopWriter = writer.close;
         return connect(pair.owner);
       },
       close,

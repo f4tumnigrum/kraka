@@ -69,9 +69,13 @@ async function hostGroup(
     if (errors.length) throw new AggregateError(errors, "Settings group failed");
   });
 }
-function withStorage<T>(path: string, run: (s: SqliteSettingsStorage) => Promise<T>) {
+async function withStorage<T>(path: string, run: (s: SqliteSettingsStorage) => Promise<T>) {
   const store = new SqliteSettingsStorage(path);
-  return run(store).finally(() => store.close());
+  try {
+    return await run(store);
+  } finally {
+    store.close();
+  }
 }
 const putMode = (members: { target: RemoteSettingTarget; baseVersion?: typeof zero }[]) => ({
   members,

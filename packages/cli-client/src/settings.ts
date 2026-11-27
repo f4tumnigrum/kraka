@@ -5,9 +5,14 @@ export class SqliteSettingsStorage implements SettingsStorage {
   readonly update: SettingsStorage["update"];
   constructor(path: string) {
     this.db = new Database(path, { create: true, strict: true });
-    this.update = sqliteSettingsStorage(this.db).update;
+    try {
+      this.update = sqliteSettingsStorage(this.db).update;
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
   close() {
-    this.db.close();
+    this.db.close(true);
   }
 }

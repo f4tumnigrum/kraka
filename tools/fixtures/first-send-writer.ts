@@ -223,6 +223,7 @@ const writer = await startWriter(
 );
 if (writer.kind === "unconfirmed") throw new Error(writer.reason);
 if (writer.kind === "ready") {
+  if (point === "settings" && process.connected) process.once("disconnect", writer.close);
   process.once("SIGTERM", writer.close);
   process.once("SIGINT", writer.close);
 }

@@ -122,7 +122,7 @@ export function launchWriter(
     started,
     ready,
     async stop() {
-      await terminate(child);
+      await terminate(child, point === "settings" && ipc ? () => child.disconnect() : undefined);
       await Promise.all([drained, stderr]);
     },
     async kill() {
