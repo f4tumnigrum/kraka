@@ -15,7 +15,7 @@
     "lint": "biome lint . && bun run check:boundaries",
     "typecheck": "bun check && bun check --project packages/client-runtime/tsconfig.json && bun check --project packages/browser-host/tsconfig.json",
     "test": "bun test",
-    "build": "bun run --filter '*' build",
+    "build": "bun -e \"require('node:fs').mkdirSync('.build/packages', { recursive: true })\" && bun run --filter '*' build",
     "protocol:reference": "bun tools/protocol-reference.ts",
     "protocol:reference:check": "bun tools/protocol-reference.ts --check",
     "check:boundaries": "bun tools/check-boundaries.ts"
