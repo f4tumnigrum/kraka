@@ -34,7 +34,7 @@ jobs:
       - run: bun test --path-ignore-patterns "**/reference-conformance.live.test.ts"
       - run: bun run build
       - run: bun run protocol:reference:check
-      - name: Measure PR baseline
+      - name: Measure budgets on the PR base
         if: runner.os == 'macOS' && github.event_name == 'pull_request'
         shell: bash
         env:
@@ -45,7 +45,22 @@ jobs:
           trap 'rm -rf "$BASE_ROOT"' EXIT
           git archive "$BASE_SHA" | tar -xf - -C "$BASE_ROOT"
           (cd "$BASE_ROOT" && bun install --frozen-lockfile)
-          bun tools/measure-replay.ts --baseline-root "$BASE_ROOT"
-      - name: Measure replay startup and idle footprint
-        if: runner.os == 'macOS'
-        run: bun tools/measure-replay.ts --root .
+          bun run perf --baseline-root "$BASE_ROOT" | tee "$RUNNER_TEMP/budget-baseline.jsonl"
+      - name: Measure candidate budgets
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run perf --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
+      - name: Compare budget observations
+        if: ${{ !cancelled() && runner.os == 'macOS' && github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun tools/perf-compare.ts "$RUNNER_TEMP/budget-baseline.jsonl" "$RUNNER_TEMP/budget-candidate.jsonl" | tee "$RUNNER_TEMP/budget-comparison.jsonl"
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'macOS'
+        with:
+          name: daemon-budget-reports
+          path: ${{ runner.temp }}/budget-*.jsonl
+          if-no-files-found: error

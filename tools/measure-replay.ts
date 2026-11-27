@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { entry, launch, sampleRequest, withState } from "./fixtures/replay-process";
 import { driveReplay } from "./replay-client";
 
-function command(argv: string[], cwd?: string) {
+export function command(argv: string[], cwd?: string) {
   const result = Bun.spawnSync(argv, {
     cwd: cwd ?? process.cwd(),
     stdout: "pipe",
@@ -36,7 +36,7 @@ async function digest(root: string) {
   await visit("");
   return `source-sha256:${hash.digest("hex")}`;
 }
-async function identity(root: string, baseline: boolean) {
+export async function identity(root: string, baseline: boolean) {
   const git = await lstat(join(root, ".git")).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;
     return null;
@@ -70,6 +70,13 @@ function median(values: number[], unit: string, limit: number) {
   if (!Number.isFinite(value) || value > limit) throw new Error(`${unit} median exceeds budget`);
 }
 function noChildren(pid: number) {
+  if (process.platform === "win32") {
+    const children = powershell(
+      `@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}').Count`,
+    );
+    if (children !== "0") throw new Error(`Cannot confirm zero children for ${pid}: ${children}`);
+    return;
+  }
   const res = Bun.spawnSync(["pgrep", "-P", String(pid)], {
     stdout: "pipe",
     stderr: "pipe",
@@ -80,7 +87,39 @@ function noChildren(pid: number) {
       `Cannot confirm zero children for ${pid}: ${res.exitCode} ${res.stdout} ${res.stderr}`,
     );
 }
-function currentFootprint(pid: number) {
+function powershell(expression: string) {
+  return command([
+    "powershell.exe",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `$ErrorActionPreference='Stop'; ${expression}`,
+  ]).trim();
+}
+async function currentFootprint(pid: number) {
+  if (process.platform === "linux" || process.platform === "win32") {
+    const linux = process.platform === "linux";
+    const reading = linux
+      ? (await readFile(`/proc/${pid}/smaps_rollup`, "utf8")).match(/^Pss:\s+(\d+) kB$/gm)
+      : [
+          powershell(
+            `Get-CimInstance Win32_PerfRawData_PerfProc_Process -Filter 'IDProcess=${pid}' | ForEach-Object { $_.WorkingSetPrivate }`,
+          ),
+        ];
+    const raw =
+      reading?.length === 1
+        ? Number(/^(?:Pss:\s+)?(\d+)(?: kB)?$/.exec(reading[0] ?? "")?.[1])
+        : NaN;
+    if (!Number.isSafeInteger(raw) || raw <= 0)
+      throw new Error(`Invalid current memory for ${pid}: ${reading}`);
+    return {
+      source: linux ? "linux/pss" : "windows/private-working-set",
+      raw,
+      unit: linux ? "kB" : "bytes",
+      mib: raw / (linux ? 1024 : 1048576),
+    };
+  }
+  if (process.platform !== "darwin") throw new Error("No current process memory counter");
   try {
     const raw = command(["footprint", "--noCategories", "-f", "bytes", "-p", String(pid)]);
     const ids = [...raw.matchAll(/^.*?\[(\d+)\]:.*?Footprint:/gm)];
@@ -114,6 +153,106 @@ function currentFootprint(pid: number) {
     throw new Error(`Invalid vmmap reading: ${raw}`);
   return { source: "vmmap current Physical footprint", raw: value, unit, mib: value * multiplier };
 }
+export function replayCounts() {
+  return { launches: 0, accepted: 0, started: 0, ended: 0, normalCloses: 0, joined: 0 };
+}
+type Counts = ReturnType<typeof replayCounts>;
+export async function sampleReplay(
+  root: string,
+  dir: string,
+  kind: "empty" | "reused" | "idle",
+  allowStub: boolean,
+  counts: Counts,
+) {
+  const daemon = launch(root, dir);
+  counts.launches++;
+  const readSample = async () => {
+    const ready = await daemon.ready();
+    if (ready.kind === "exit") {
+      const source = (await readFile(join(root, entry), "utf8")).replace(/\s/g, "");
+      if (
+        allowStub &&
+        counts.launches === 1 &&
+        counts.accepted === 0 &&
+        source === 'import"@kraka/cli-client";import"@kraka/environment";' &&
+        ready.code === 0 &&
+        ready.signal === null &&
+        ready.stdout === "" &&
+        ready.stderr === ""
+      ) {
+        return { kind: "stub" } as const;
+      }
+      throw new Error(`Unexpected daemon exit ${JSON.stringify(ready)}`);
+    }
+    let at = 0;
+    await driveReplay(ready.url, sampleRequest, (message) => {
+      if (message.kind === "accepted") {
+        at = performance.now();
+        counts.accepted++;
+      }
+      if (message.kind === "round.started") {
+        if (
+          message.nativeSessionId !== "019b76da-a800-7000-8000-000000010001" ||
+          message.nativeRootTurnId !== "019b76da-abe8-7000-8000-000000010001"
+        )
+          throw new Error("Wrong native session or running round for basic-turn");
+        counts.started++;
+      }
+      if (message.kind === "round.ended") counts.ended++;
+    });
+    counts.normalCloses++;
+    if (
+      !at ||
+      [counts.accepted, counts.started, counts.ended, counts.normalCloses].some(
+        (n) => n !== counts.launches,
+      )
+    )
+      throw new Error("Incomplete measured work");
+    const { child } = daemon,
+      pid = child.pid;
+    function alive() {
+      if (child.pid !== pid || child.exitCode !== null || child.signalCode !== null)
+        throw new Error("Daemon exited before sampling");
+      process.kill(pid, 0);
+    }
+    alive();
+    if (process.platform === "darwin") {
+      const listener = command([
+        "lsof",
+        "-nP",
+        "-a",
+        "-p",
+        String(pid),
+        "-iTCP",
+        "-sTCP:LISTEN",
+        "-Fn",
+      ]);
+      if (!listener.split("\n").includes(`n127.0.0.1:${new URL(ready.url).port}`))
+        throw new Error(`Ready listener PID mismatch: ${listener}`);
+    }
+    if (kind === "idle") {
+      await Bun.sleep(Math.max(0, Math.ceil(at + 60000 - performance.now())));
+      alive();
+      noChildren(pid);
+      const elapsedMs = performance.now() - at;
+      const memory = await currentFootprint(pid);
+      noChildren(pid);
+      alive();
+      return { kind, pid, elapsedMs, ...memory } as const;
+    }
+    return { kind, pid, elapsedMs: at - daemon.started } as const;
+  };
+  const result = await readSample().finally(async () => {
+    await daemon.stop();
+    counts.joined++;
+  });
+  if (
+    daemon.child.exitCode !== 0 &&
+    !(process.platform === "win32" && daemon.child.signalCode === "SIGTERM")
+  )
+    throw new Error(`Daemon exited ${daemon.child.exitCode} ${daemon.child.signalCode ?? ""}`);
+  return result;
+}
 async function measure(root: string, baseline: boolean) {
   const revision = await identity(root, baseline);
   const role = baseline ? "baseline" : "candidate";
@@ -136,101 +275,19 @@ async function measure(root: string, baseline: boolean) {
     reused: [],
     idle: [],
   };
-  let launches = 0,
-    accepted = 0,
-    ended = 0,
-    normalCloses = 0;
+  const counts = replayCounts();
   async function sample(dir: string, kind: keyof typeof samples) {
-    const daemon = launch(root, dir);
-    launches++;
-    try {
-      const ready = await daemon.ready();
-      if (ready.kind === "exit") {
-        const source = (await readFile(join(root, entry), "utf8")).replace(/\s/g, "");
-        if (
-          baseline &&
-          launches === 1 &&
-          accepted === 0 &&
-          source === 'import"@kraka/cli-client";import"@kraka/environment";' &&
-          ready.code === 0 &&
-          ready.signal === null &&
-          ready.stdout === "" &&
-          ready.stderr === ""
-        ) {
-          console.log(
-            "baseline=unavailable exit=0 ready=none accepted=0 launches=1 revision=" +
-              revision.revision,
-          );
-          return false;
-        }
-        throw new Error(`Unexpected daemon exit ${JSON.stringify(ready)}`);
-      }
-      let at = 0;
-      await driveReplay(ready.url, sampleRequest, (message) => {
-        if (message.kind === "accepted") {
-          at = performance.now();
-          accepted++;
-        }
-        if (message.kind === "round.ended") ended++;
-      });
-      normalCloses++;
-      if (!at || accepted !== launches || ended !== launches || normalCloses !== launches)
-        throw new Error("Incomplete measured work");
-      const { child } = daemon,
-        pid = child.pid;
-      function alive() {
-        if (child.pid !== pid || child.exitCode !== null || child.signalCode !== null)
-          throw new Error("Daemon exited before sampling");
-        process.kill(pid, 0);
-      }
-      alive();
-      if (process.platform === "darwin") {
-        const listener = command([
-          "lsof",
-          "-nP",
-          "-a",
-          "-p",
-          String(pid),
-          "-iTCP",
-          "-sTCP:LISTEN",
-          "-Fn",
-        ]);
-        if (!listener.split("\n").includes(`n127.0.0.1:${new URL(ready.url).port}`))
-          throw new Error(`Ready listener PID mismatch: ${listener}`);
-      }
-      if (kind === "idle") {
-        await Bun.sleep(Math.max(0, Math.ceil(at + 60000 - performance.now())));
-        alive();
-        noChildren(pid);
-        const elapsedMs = performance.now() - at;
-        const memory = currentFootprint(pid);
-        noChildren(pid);
-        alive();
-        console.log(
-          JSON.stringify({
-            role,
-            kind,
-            launches,
-            pid,
-            elapsedMs,
-            ...memory,
-            accepted,
-            ended,
-            normalCloses,
-          }),
-        );
-        samples.idle.push(memory.mib);
-      } else {
-        const elapsedMs = at - daemon.started;
-        console.log(
-          JSON.stringify({ role, kind, launches, pid, elapsedMs, accepted, ended, normalCloses }),
-        );
-        samples[kind].push(elapsedMs);
-      }
-      return true;
-    } finally {
-      await daemon.stop();
+    const result = await sampleReplay(root, dir, kind, baseline, counts);
+    if (result.kind === "stub") {
+      console.log(
+        "baseline=unavailable exit=0 ready=none accepted=0 launches=1 revision=" +
+          revision.revision,
+      );
+      return false;
     }
+    samples[kind].push(result.kind === "idle" ? result.mib : result.elapsedMs);
+    console.log(JSON.stringify({ role, ...result, ...counts }));
+    return true;
   }
   try {
     for (let pair = 0; pair < 10; pair++) {
@@ -246,7 +303,7 @@ async function measure(root: string, baseline: boolean) {
       median(samples.idle, "idle MiB", 150);
     } else console.log("P2=macOS-only");
   } finally {
-    console.log(JSON.stringify({ role, launches, accepted, ended, normalCloses }));
+    console.log(JSON.stringify({ role, ...counts }));
   }
 }
 if (import.meta.main) {
