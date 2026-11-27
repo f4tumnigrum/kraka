@@ -38,7 +38,7 @@ function hostInfo() {
         : "host observation; historical reference machine unavailable",
   };
 }
-interface ReportBase extends ProbeSpec {
+export interface ReportBase extends ProbeSpec {
   metric: Metric;
   role: Role;
   platform: ReturnType<typeof hostInfo>;
@@ -236,24 +236,27 @@ async function measureClosure(base: ReportBase, root: string) {
   );
   return measured(base, { external: 1, native: 1 });
 }
-async function checkReplayOnly(root: string) {
-  // S01 has a single command. Verify its explicit rejection at this root before declaring missing endpoints.
+async function checkCommandSurface(root: string) {
+  // Probe the executable in the selected root before declaring an endpoint unavailable.
   return withState(async (dir) => {
-    const r = Bun.spawnSync([process.execPath, join(root, entry), "start", "--state-dir", dir], {
-      cwd: root,
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10000,
-    });
+    const r = Bun.spawnSync(
+      [process.execPath, join(root, entry), "probe-unknown-command", "--state-dir", dir],
+      {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 10000,
+      },
+    );
     if (
       r.exitCode !== 1 ||
       r.signalCode ||
       r.stdout.length ||
-      r.stderr.toString().trim() !== "Unknown command, expected replay"
+      !["Unknown command, expected replay", "Unknown command, expected replay or start"].includes(
+        r.stderr.toString().trim(),
+      )
     )
-      throw new Error(
-        `Cannot confirm replay-only command surface (exit ${r.exitCode}): ${r.stderr}`,
-      );
+      throw new Error(`Cannot confirm command surface (exit ${r.exitCode}): ${r.stderr}`);
   });
 }
 export function parseSelection(args: string[]) {
@@ -306,6 +309,7 @@ export async function runBudget({
     stub = false,
     replayAttempted = false;
   let capability: Promise<void> | undefined;
+  const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
   for (const metric of metricIds.filter((m) => !metrics.length || metrics.includes(m))) {
     const base: ReportBase = {
       metric,
@@ -325,7 +329,14 @@ export async function runBudget({
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (metric === "P1" || metric === "P2") {
+      else if (
+        durable &&
+        (metric === "P1" || metric === "P2" || metric === "P7" || metric === "P9")
+      ) {
+        const { measureFirstSend } = await import("./measure-first-send");
+        const series = await measureFirstSend(base, root, metric);
+        report = measured(base, series, metric === "P2" && process.platform !== "darwin");
+      } else if (metric === "P1" || metric === "P2") {
         if (stub) {
           base.actual = replayCounts();
           base.expected = Object.fromEntries(Object.keys(base.actual).map((key) => [key, 10]));
@@ -347,7 +358,7 @@ export async function runBudget({
           )
             throw new Error("Cannot confirm absence of the daemon release packager");
         } else if (!stub) {
-          capability ??= checkReplayOnly(root);
+          capability ??= checkCommandSurface(root);
           await capability;
         }
         base.actual.capabilityChecks = 1;

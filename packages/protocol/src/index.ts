@@ -33,3 +33,4 @@ export * from "./route-diagnostics";
 export * from "./device-registration";
 export * from "./replay";
 export { validateReplayUpdate } from "./replay-sequence";
+export { canonicalJson } from "./canonical-json";
