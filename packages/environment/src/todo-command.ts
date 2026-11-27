@@ -1,6 +1,8 @@
 import * as v from "valibot";
 import {
   canonicalJson,
+  REQUEST_METHODS,
+  PRIVATE_SECRET_METHOD,
   TodoReplyRecordSchema,
   AttemptIdSchema,
   DeliveryIdSchema,
@@ -24,7 +26,7 @@ import {
   type AuthorizationTarget,
 } from "@kraka/protocol";
 import { type FirstSendStore, readReceipt, readThread } from "./first-send-store";
-import type { LocalActor } from "./first-send";
+import { checkCommand, type LocalActor } from "./command-receipts";
 import { advanceQueue, fileInputRound, loadQueue } from "./input-store";
 import { transitionTodo } from "./todo";
 type TodoCommand =
@@ -168,11 +170,7 @@ export function acceptTodoReply({
           ? accepted({ kind: "secretReceipt", receipt })
           : fail("notFound");
       }
-      const intent = canonicalJson({
-        method: cmd.method,
-        target,
-        payload: privateRequest ? cmd.payload.target : cmd.payload,
-      });
+      const payload = privateRequest ? cmd.payload.target : cmd.payload;
       const prior = readReceipt(writer.db, actor.id, commandId);
       if (prior) {
         if (!may("thread.view")) return denied("thread.view");
@@ -181,7 +179,8 @@ export function acceptTodoReply({
           if (binding.approval && !may(binding.approval.permission))
             return denied(binding.approval.permission);
         }
-        if (prior.intent !== intent) return fail("idConflict");
+        if (prior.intent !== canonicalJson({ method: cmd.method, target, payload }))
+          return fail("idConflict");
         if (privateRequest && prior.receipt.kind === "accepted") {
           const saved = writer.db
             .query<{ choice: string }, [string]>(
@@ -192,7 +191,18 @@ export function acceptTodoReply({
         }
         return prior.receipt;
       }
-      if (!may(permission)) return denied(permission);
+      const operation = privateRequest
+        ? PRIVATE_SECRET_METHOD
+        : cmd.method === "todo.answer"
+          ? REQUEST_METHODS.answerTodo
+          : REQUEST_METHODS.decideTodo;
+      const checked = checkCommand(
+        { actor, commandId, transaction: writer },
+        operation,
+        payload,
+        target,
+      );
+      if (checked.receipt) return checked.receipt;
       if (
         (cmd.method === "todo.answer") !== (todo.body.kind === "question") ||
         (cmd.method === "todo.decide" && cmd.payload.decision.kind !== todo.body.kind) ||
@@ -209,7 +219,7 @@ export function acceptTodoReply({
         writer.db.run("INSERT INTO receipts(actor,command,intent,data) VALUES(?,?,?,?)", [
           actor.id,
           commandId,
-          intent,
+          checked.intent,
           JSON.stringify(receipt),
         ]);
         writer.beforeCommit?.(cmd.method);
