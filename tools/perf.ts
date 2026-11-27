@@ -171,7 +171,7 @@ async function measureSuite(base: ReportBase, root: string) {
     new Response(child.stderr).text(),
     child.exited.then((exit) => ({ exit, elapsed: performance.now() - start })),
   ]);
-  const log = `${out}\n${err}`;
+  const log = `${out}\n${err}`.replace(/^::group::/gm, "");
   const count = (name: string) => {
     const hits = [...log.matchAll(new RegExp(`^\\s*(\\d+) ${name}\\s*$`, "gm"))];
     return hits.length === 1 ? Number(hits[0]?.[1]) : undefined;
