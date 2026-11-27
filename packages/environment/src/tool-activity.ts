@@ -18,7 +18,7 @@ import {
 import type { AdapterEventEnvelope } from "./adapter-contract";
 import { matchesAdapterEvent } from "./adapter-contract";
 import type { ThreadSessionBinding } from "./executor-records";
-import { promoteSessionObservation } from "./session-observations";
+
 import { TOOL_ACTIVITY_DETAIL_MINOR, ToolActivityHistoryItemSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import type { ThreadJournal } from "./thread-journal";
@@ -35,6 +35,7 @@ export type ToolActivityEvent = {
   attemptId: string;
   nativeRootTurnId: string;
   relationship?: NativeObservationRelationship;
+  observation?: { sourceId: string; eventId: string };
   truncated?: boolean;
   reportedStatus?: "completed" | "failed";
   phase: "started" | "progress" | "ended";
@@ -321,25 +322,6 @@ export function recordAdapterActivity(
     (relationship.kind === "root" && root && relationship.nativeRootTurnId !== root)
   )
     throw Error("Missing or conflicting native activity relationship");
-  if (p.observation) {
-    const source = {
-      instanceId: event.instanceId,
-      nativeSessionId: event.sessionId,
-      epoch: event.epoch,
-      ...p.observation,
-    };
-    journal.saveObservation(binding.threadId, source, (prior) => {
-      if (!prior) throw Error("Unknown observation source");
-      const linked = promoteSessionObservation(prior, {
-        kind: "attempt",
-        attemptId: p.attemptId,
-        source,
-        relationship,
-      });
-      if (linked.kind !== "ok") throw Error(linked.reason);
-      return linked.value;
-    });
-  }
   const out = v.safeParse(
     v.object({
       text: v.optional(v.nullable(v.string())),
@@ -362,6 +344,7 @@ export function recordAdapterActivity(
     callId: p.callId,
     nativeRootTurnId: root ?? "",
     relationship,
+    ...(p.observation ? { observation: p.observation } : {}),
     phase: p.phase,
     inputJson: p.input === null ? null : JSON.stringify(p.input),
     outputText:

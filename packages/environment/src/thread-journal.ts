@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { promoteSessionObservation } from "./session-observations";
+import { AttemptIdSchema, ExecutorInstanceIdSchema, NativeSessionIdSchema } from "@kraka/protocol";
 import { createHash } from "node:crypto";
 import * as v from "valibot";
 import {
@@ -147,7 +149,8 @@ export class ThreadJournal {
         return true;
       })
       .immediate();
-    if (updated) this.notify();
+    if (updated && !this.db.inTransaction) this.notify();
+    return updated;
   }
   subscribe(wake: () => void) {
     this.listeners.add(wake);
@@ -237,6 +240,27 @@ export class ThreadJournal {
           );
         if (priorEvent) return priorEvent.payload === eventPayload ? "unchanged" : "conflict";
 
+        if (event.observation) {
+          const source = {
+            instanceId: v.parse(ExecutorInstanceIdSchema, event.instanceId),
+            nativeSessionId: v.parse(NativeSessionIdSchema, event.nativeSessionId),
+            epoch: event.epoch,
+            ...event.observation,
+          };
+          const relationship = event.relationship;
+          if (!relationship) throw Error("Missing native observation relationship");
+          changed = this.saveObservation(event.threadId, source, (prior) => {
+            if (!prior) throw Error("Unknown observation source");
+            const linked = promoteSessionObservation(prior, {
+              kind: "attempt",
+              source,
+              relationship,
+              attemptId: v.parse(AttemptIdSchema, event.attemptId),
+            });
+            if (linked.kind !== "ok") throw Error(linked.reason);
+            return linked.value;
+          });
+        }
         const source = this.db
           .query<{ item_id: string }, [string, string, string, number, string, string]>(
             "SELECT item_id FROM tool_activity_sources WHERE thread_id=? AND instance_id=? AND session_id=? AND epoch=? AND call_id=? AND attempt_id=?",

@@ -371,6 +371,18 @@ test("session evidence promotes in place and a parent end cannot invent the tool
       recordAdapterActivity(f.journal, binding, roundId, { ...tool, epoch: 2 }, root),
     ).toThrow("Foreign");
     recordAdapterActivity(f.journal, binding, roundId, tool, root);
+    expect(
+      recordAdapterActivity(
+        f.journal,
+        binding,
+        roundId,
+        {
+          ...tool,
+          payload: { ...tool.payload, observation: { sourceId: "wrong", eventId: "other" } },
+        },
+        root,
+      ),
+    ).toBe("conflict");
     expect(rows().find((r) => r.kind === "executorObservation")).toMatchObject({
       id: prior.id,
       createdPosition: prior.createdPosition,
