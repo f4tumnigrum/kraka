@@ -6,7 +6,7 @@ import { join } from "node:path";
 import dropScenario from "../fixtures/scenarios/dropping-an-unknown-input-keeps-its-late-receipt.json";
 import heldScenario from "../fixtures/scenarios/human-queue-waits-for-release-after-restart.json";
 import { accepted } from "./fixtures/first-send";
-import { eventually, withInputPeer } from "./fixtures/input-recovery";
+import { withInputPeer } from "./fixtures/input-recovery";
 
 function scenarioPhase(fixture: unknown, after: string, id: string) {
   const match = v
@@ -53,8 +53,8 @@ test(
         expect((await f.client.send("input.releaseQueue", { threadId })).receipt).toMatchObject({
           failure: { kind: "queueHeld" },
         });
-        expect(f.ledger().filter((e) => e.step === "afterWrite")).toHaveLength(1);
-        f.release("afterWrite");
+        expect((await f.ledger()).filter((e) => e.step === "afterWrite")).toHaveLength(1);
+        await f.release("afterWrite");
         const decide = () =>
           f.client.send("input.resendUnknown", { threadId, attemptId }, "resend");
         const a = (await decide()).receipt,
@@ -71,7 +71,7 @@ test(
           [attemptId, deliveryId, "initial"],
           [next.attemptId, next.deliveryId, "userResend"],
         ]);
-        expect(f.ledger().filter((e) => e.step === "afterWrite")).toHaveLength(2);
+        expect((await f.ledger()).filter((e) => e.step === "afterWrite")).toHaveLength(2);
       },
       ["afterWrite"],
     ),
@@ -111,18 +111,15 @@ test("2 S-STATE-024/051 two reboots hold the original human queue including its 
             "B",
             ...(!mixed ? ["C"] : []),
           ]);
-          expect(f.ledger()).toEqual([]);
+          expect(await f.ledger()).toEqual([]);
         }
-        f.release("claim");
+        await f.release("claim");
         expect(
           (await f.client.send("input.releaseQueue", { threadId: a.threadId })).receipt.kind,
         ).toBe("accepted");
         await f.seen("start", a.deliveryId);
         expect(
-          f
-            .ledger()
-            .filter((e) => e.step === "start")
-            .map((e) => e.messageId),
+          (await f.ledger()).filter((e) => e.step === "start").map((e) => e.messageId),
         ).toEqual([a.messageId]);
         expect(
           (await f.client.readInputHistory(a.threadId, b.roundId)).rounds[0]?.attempt.phase,
@@ -144,17 +141,13 @@ test(
         expect((await f.client.send("input.dropUnknown", payload, "drop")).receipt.kind).toBe(
           "accepted",
         );
-        f.release("receipt");
+        await f.release("receipt");
         await f.seen("start", b.deliveryId);
         const before = await f.client.readInputHistory(a.threadId, b.roundId);
-        writeFileSync(join(f.stateDir, "inject-late"), JSON.stringify(proof));
-        f.release("start");
-        const h = await eventually(
-          () => f.client.readInputHistory(a.threadId, a.roundId),
-          (h) =>
-            h.rounds[0]?.attempt.phase.kind === "notDelivered" &&
-            !!h.rounds[0].attempt.phase.lateReceipt,
-        );
+        await f.late(b.attemptId, proof);
+        await f.release("start");
+        await f.seen("lateApplied", a.deliveryId);
+        const h = await f.client.readInputHistory(a.threadId, a.roundId);
         const target = h.rounds[0]!;
         expect(
           (await f.client.subscribedRounds(a.threadId)).find((r) => r.id === a.roundId),
@@ -200,10 +193,12 @@ test(
         expect((await read()).rounds[0]?.steering).toEqual([
           { attemptId: a.attemptId, messageId: m.messageId, state: "pending" },
         ]);
-        f.release("steer");
-        await eventually(read, (h) => h.rounds[0]?.steering?.[0]?.state === "completed");
-        f.release("turn");
-        await eventually(read, (h) => h.rounds[0]?.attempt.phase.kind === "closing");
+        await f.release("steer");
+        await f.seen("steerApplied", m.deliveryId);
+        expect((await read()).rounds[0]?.steering?.[0]?.state).toBe("completed");
+        await f.release("turn");
+        await f.seen("ended", a.deliveryId);
+        expect((await read()).rounds[0]?.attempt.phase.kind).toBe("closing");
         expect((await f.client.send("input.steer", payload, key)).receipt).toEqual(
           original.receipt,
         );
@@ -240,7 +235,9 @@ test(
       expect(h.rounds.map((r) => r.id)).toEqual([input.roundId]);
       expect(h.rounds[0]?.attempts).toHaveLength(1);
       expect(
-        f.ledger().filter((e) => e.step === "afterWrite" && e.deliveryId === input.deliveryId),
+        (await f.ledger()).filter(
+          (e) => e.step === "afterWrite" && e.deliveryId === input.deliveryId,
+        ),
       ).toHaveLength(1);
     }),
   20000,
