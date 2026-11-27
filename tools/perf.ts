@@ -1,3 +1,4 @@
+import { missingOwnerLaunch, sampleOwnerPair } from "./measure-owner-launch";
 import { readdir } from "node:fs/promises";
 import { arch, cpus, hostname, platform, release, totalmem } from "node:os";
 import { join, resolve } from "node:path";
@@ -236,8 +237,8 @@ async function measureClosure(base: ReportBase, root: string) {
   );
   return measured(base, { external: 1, native: 1 });
 }
-async function checkReplayOnly(root: string) {
-  // S01 has a single command. Verify its explicit rejection at this root before declaring missing endpoints.
+async function checkCommandSurface(root: string) {
+  // Verify the known command surface at the measured root before reporting missing workloads.
   return withState(async (dir) => {
     const r = Bun.spawnSync([process.execPath, join(root, entry), "start", "--state-dir", dir], {
       cwd: root,
@@ -249,11 +250,11 @@ async function checkReplayOnly(root: string) {
       r.exitCode !== 1 ||
       r.signalCode ||
       r.stdout.length ||
-      r.stderr.toString().trim() !== "Unknown command, expected replay"
+      !["Unknown command, expected replay", "Unknown command, expected replay or access"].includes(
+        r.stderr.toString().trim(),
+      )
     )
-      throw new Error(
-        `Cannot confirm replay-only command surface (exit ${r.exitCode}): ${r.stderr}`,
-      );
+      throw new Error(`Cannot confirm command surface (exit ${r.exitCode}): ${r.stderr}`);
   });
 }
 export function parseSelection(args: string[]) {
@@ -325,7 +326,31 @@ export async function runBudget({
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (metric === "P1" || metric === "P2") {
+      else if (metric === "P1") {
+        base.expected = { launches: 20, accepted: 20, joined: 20 };
+        base.actual = { launches: 0, accepted: 0, joined: 0 };
+        if (role === "baseline" && (await missingOwnerLaunch(root)))
+          report = unavailable(
+            base,
+            "Parent has no protected owner enrollment and signed access.listSessions launch",
+          );
+        else {
+          for (let i = 0; i < 10; i++)
+            await withState((dir) =>
+              sampleOwnerPair(root, dir, base.actual, (series, value, commandId) => {
+                base.samples.push({ series, value, unit: "ms" });
+                base.observations.push({
+                  pair: i + 1,
+                  series,
+                  commandId,
+                  method: "access.listSessions",
+                  elapsedMs: value,
+                });
+              }),
+            );
+          report = measured(base, { fresh: 10, reused: 10 });
+        }
+      } else if (metric === "P2") {
         if (stub) {
           base.actual = replayCounts();
           base.expected = Object.fromEntries(Object.keys(base.actual).map((key) => [key, 10]));
@@ -347,7 +372,7 @@ export async function runBudget({
           )
             throw new Error("Cannot confirm absence of the daemon release packager");
         } else if (!stub) {
-          capability ??= checkReplayOnly(root);
+          capability ??= checkCommandSurface(root);
           await capability;
         }
         base.actual.capabilityChecks = 1;

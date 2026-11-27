@@ -50,8 +50,8 @@ const each = (series: string, unit: Unit, limit: number): Threshold => ({
 export const catalog: Record<Metric, ProbeSpec> = {
   P1: {
     workload:
-      "Ten independent fresh/reused directory pairs, spawn to validated basic-turn acceptance, existing OS cache",
-    endpoint: "replay.run",
+      "Ten provisioned fresh/reused directory pairs, daemon spawn through first signed access.listSessions acceptance, existing OS cache",
+    endpoint: "access serve with a registered device",
     thresholds: [median("fresh", "ms", 500), median("reused", "ms", 300)],
   },
   P2: {

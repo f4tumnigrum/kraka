@@ -69,13 +69,13 @@ test("a wrong receipt invalidates a fast run and preserves its real counts", asy
       await Bun.write(process.argv[process.argv.indexOf("--state-dir")+1]+"/replay-endpoint.json",ready);
       process.on("SIGTERM",()=>server.stop(true));process.stdout.write(ready);`,
     );
-    const { exit, reports } = await run(dir, "P1");
+    const { exit, reports } = await run(dir, "P2");
     expect(exit).toBe(1);
     expect(reports[0]).toMatchObject({
       status: "failed",
       error: expect.stringContaining("Unexpected command receipt"),
       samples: [],
-      expected: { launches: 20 },
+      expected: { launches: 10 },
       actual: { launches: 1, accepted: 0, ended: 0, normalCloses: 0, joined: 1 },
     });
   });

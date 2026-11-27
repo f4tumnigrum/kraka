@@ -37,3 +37,4 @@ export * from "./listener";
 
 export * from "./forge-recovery";
 export { runReplayTurn } from "./replay-turn";
+export * from "./access-store";

@@ -1,3 +1,4 @@
+import { accessCli } from "./access";
 import "@kraka/cli-client";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
@@ -145,8 +146,9 @@ export async function listenReplay<H extends object>({
 }
 if (import.meta.main && process.argv.length > 2) {
   try {
-    if (process.argv[2] !== "replay") throw new Error("Unknown command, expected replay");
-    await replay(process.argv.slice(3));
+    if (process.argv[2] === "access") await accessCli(process.argv.slice(3));
+    else if (process.argv[2] === "replay") await replay(process.argv.slice(3));
+    else throw new Error("Unknown command, expected replay or access");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
