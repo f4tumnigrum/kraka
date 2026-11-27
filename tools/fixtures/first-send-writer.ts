@@ -4,6 +4,11 @@ import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay
 import { startWriter } from "../../packages/daemon/src/first-send";
 import * as v from "valibot";
 import { fixture } from "./replay-process";
+import { runWorktreeWorker, worktreeWorkerCommand } from "@kraka/environment";
+if (process.argv[2] === worktreeWorkerCommand) {
+  await runWorktreeWorker(process.argv[3]);
+  process.exit(0);
+}
 const [stateDir, root, point] = process.argv.slice(2);
 if (!stateDir || !root) throw new Error("Expected state and product roots");
 const state = stateDir;

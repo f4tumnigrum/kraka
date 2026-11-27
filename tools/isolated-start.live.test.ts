@@ -4,9 +4,10 @@ import { CommandIdSchema, GitObjectIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import { join } from "node:path";
 import { rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { accepted, waitFile } from "./fixtures/first-send";
+import { accepted, waitFile, productRoot, startFirstSendFixture } from "./fixtures/first-send";
 import { withState } from "./fixtures/replay-process";
 import {
+  seedGit,
   git,
   isolatedFixture,
   idle,
@@ -416,3 +417,48 @@ test("restart at claim, Git registration and setup boundaries preserves the othe
     });
   done(4);
 }, 180000);
+
+test(
+  "the standalone daemon re-executes itself for Git and setup",
+  () =>
+    withState(async (dir) => {
+      const repo = seedGit(dir);
+      const executable = join(dir, process.platform === "win32" ? "kraka.exe" : "kraka");
+      const build = Bun.spawnSync(
+        [
+          process.execPath,
+          "build",
+          "--compile",
+          join(productRoot, "packages/daemon/src/index.ts"),
+          "--outfile",
+          executable,
+        ],
+        { cwd: dir, timeout: 60000 },
+      );
+      if (build.exitCode !== 0) throw Error(build.stderr.toString());
+      const stateDir = join(dir, "state");
+      const writer = await startFirstSendFixture({
+        stateDir,
+        projectDirectory: repo.path,
+        adapter: "replay",
+        executable,
+      });
+      try {
+        setupPolicy(writer, ["git", "config", "--file", "setup.cfg", "kraka.setup", "completed"]);
+        const task = await cli(writer, "standalone", isolated);
+        const id = task.request.payload.worktreeId;
+        if (!id) throw Error("Expected standalone checkout");
+        await idle(writer);
+        const m = readClaim(stateDir, id);
+        expect(managedView(m).availability).toBe("usable");
+        expect(
+          git(m.directory.realPath, "config", "--file", "setup.cfg", "--get", "kraka.setup"),
+        ).toBe("completed");
+        expect(git(m.directory.realPath, "rev-parse", "HEAD")).toBe(repo.base);
+        expect(roundInfo(stateDir, m).round?.attempt.phase.kind).toBe("closing");
+      } finally {
+        await writer.close();
+      }
+    }),
+  90000,
+);

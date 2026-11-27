@@ -50,12 +50,19 @@ export function configureLocalOwner(stateDir: string) {
     { mode: 0o600, flag: "wx" },
   );
 }
-export function launchWriter(stateDir: string, root: string, point?: Fault) {
-  const args = point
-    ? [join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, point]
-    : [join(root, entry), "start", "--state-dir", stateDir, "--recording", join(root, fixture)];
+export function launchWriter(
+  stateDir: string,
+  root: string,
+  mode?: Fault | { executable: string },
+) {
+  const program =
+    mode && typeof mode === "object" ? [mode.executable] : [process.execPath, join(root, entry)];
+  const args =
+    typeof mode === "string"
+      ? [process.execPath, join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, mode]
+      : [...program, "start", "--state-dir", stateDir, "--recording", join(root, fixture)];
   const started = performance.now();
-  const child = Bun.spawn([process.execPath, ...args], {
+  const child = Bun.spawn(args, {
     cwd: root,
     stdin: "ignore",
     stdout: "pipe",
@@ -123,17 +130,19 @@ export async function startFirstSendFixture({
   adapter,
   root = productRoot,
   point,
+  executable,
 }: {
   stateDir: string;
   projectDirectory: string;
   adapter: "replay";
   root?: string;
   point?: Fault;
+  executable?: string;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
   configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
-  const launcher = launchWriter(stateDir, root, point);
+  const launcher = launchWriter(stateDir, root, executable ? { executable } : point);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");

@@ -46,3 +46,4 @@ export { managedView } from "./worktree-git";
 export * from "./isolated-start";
 export * from "./worktree-storage";
 export * from "./worktree-prepare";
+export { worktreeWorkerCommand, runWorktreeWorker } from "./worktree-worker";

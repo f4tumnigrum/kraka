@@ -3,10 +3,9 @@ import { join } from "node:path";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import * as v from "valibot";
 import { ProcessIdentitySchema, type ProcessIdentity } from "@kraka/protocol";
-import worker from "./worktree-worker.py" with { type: "text" };
+import { worktreeWorkerCommand, writerStart } from "./worktree-worker";
 import type { Managed } from "./worktree-storage";
 import { exists } from "./worktree-git";
-const python = process.platform === "win32" ? "python" : "python3";
 const exitRecord = v.strictObject({
   ...ProcessIdentitySchema.entries,
   token: v.string(),
@@ -48,15 +47,8 @@ export function forgetOutcome(state: string, token: string) {
 export async function waitForOriginal(state: string, active: Active) {
   const deadline = performance.now() + (active.kind === "git" ? 300000 : 900000) + 4000;
   while (outcome(state, active) === null) {
-    const started = Bun.spawnSync(
-      [python, "-I", "-c", worker, "probe", String(active.process.pid)],
-      { timeout: 5000, stderr: "ignore" },
-    );
-    if (
-      started.exitCode !== 0 ||
-      Number(started.stdout.toString().trim()) !== active.process.startedAt ||
-      performance.now() >= deadline
-    )
+    const started = await writerStart(active.process.pid).catch(() => null);
+    if (started !== active.process.startedAt || performance.now() >= deadline)
       return outcome(state, active);
     await Bun.sleep(50);
   }
@@ -82,11 +74,16 @@ export async function runWriter(
     argv,
     seconds: kind === "git" ? 300 : 900,
   };
-  const child = Bun.spawn([python, "-I", "-c", worker, JSON.stringify(task)], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const entry = Bun.isStandaloneExecutable ? [] : [Bun.main];
+  const child = Bun.spawn(
+    [process.execPath, ...entry, worktreeWorkerCommand, JSON.stringify(task)],
+    {
+      detached: process.platform !== "win32",
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const errors = new Response(child.stderr).text();
   try {
     const stream = child.stdout.getReader(),
@@ -101,7 +98,7 @@ export async function runWriter(
     if (identity.pid !== child.pid) throw Error("Wrong writer");
     const active = { token, kind, process: identity };
     register(active);
-    child.stdin.write(`${token}\n${input.toString("hex")}\n`);
+    child.stdin.write(JSON.stringify({ token, input: input.toString("base64") }));
     await child.stdin.end();
     const status = await child.exited;
     if (status !== 0) throw Error(`Unconfirmed writer exit: ${await errors}`);
