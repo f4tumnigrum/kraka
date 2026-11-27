@@ -5,7 +5,7 @@ import Ajv2020, { type SchemaObject } from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import { validateReplayUpdate } from "../packages/protocol/src/replay-sequence";
 
-function referenceCompiler(document: SchemaObject) {
+export function referenceCompiler(document: SchemaObject) {
   const ajv = new Ajv2020({
     strict: true,
     // HistoryCoverage has one required prefix item followed by any number of missing sources.
