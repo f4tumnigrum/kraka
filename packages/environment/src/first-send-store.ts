@@ -24,6 +24,8 @@ import { DatabaseHeaderSchema, type DirectoryWriter, inspectDatabase } from "./m
 import { physicalDirectory } from "./project-directory";
 import { directoryForThread } from "./worktrees";
 
+import { worktreeTables, readManaged } from "./worktree-storage";
+import { managedView } from "./worktree-git";
 const step = v.parse(DatabaseHeaderSchema.entries.ledger.item, {
   id: "input-attempts",
   from: 1,
@@ -94,6 +96,7 @@ export function openStore(writer: DirectoryWriter, recovery?: RecoveryScope) {
         ]);
         db.run("PRAGMA user_version=2");
       })();
+    db.exec(worktreeTables);
     const store = new FirstSendStore(db, writer);
     recoverQueues(store, recovery);
     return store;
@@ -177,6 +180,12 @@ export class FirstSendStore {
   }
   directory(thread: Thread) {
     const project = readProject(this.db, thread.projectId);
+    if (thread.worktreeId && project) {
+      const managed = readManaged(this.db, thread.worktreeId);
+      return managed
+        ? directoryForThread(thread, project, managed.directory, managedView(managed))
+        : null;
+    }
     const saved = this.db
       .query<{ identity: string; directory: string }, [string]>(
         "SELECT identity,directory FROM projects WHERE id=?",
@@ -189,6 +198,18 @@ export class FirstSendStore {
     return physical?.identity === saved.identity && physical.realPath === path ? path : null;
   }
   setPhase(round: Round, phase: RoundPhase) {
+    if (phase.kind === "filed" && phase.gate === "eligible") {
+      const thread = readThread(this.db, round.threadId);
+      if (thread?.worktreeId) {
+        const managed = readManaged(this.db, thread.worktreeId);
+        if (
+          !managed ||
+          (managed.roundId === round.id && managed.claim.operationId !== managed.firstCommand) ||
+          !this.directory(thread)
+        )
+          phase = { kind: "filed", gate: "held" };
+      }
+    }
     const updated = {
       ...round,
       version: String(BigInt(round.version) + 1n),
@@ -202,6 +223,8 @@ export class FirstSendStore {
     this.db.transaction(() => {
       this.sync.record([{ objectType: "round", value: saved }]);
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(saved), round.id]);
+      if (phase.kind !== "filed" || phase.gate !== "eligible")
+        this.db.run("DELETE FROM ready_dispatch WHERE round=?", [round.id]);
       const pending =
         phase.kind === "armed" ||
         phase.kind === "handed" ||

@@ -47,6 +47,7 @@ jobs:
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/first-answer.log"; done
       - run: bun test ./tools/thread-resume.live.test.ts
       - run: bun test ./tools/first-send.live.test.ts
+      - run: bun test ./tools/isolated-start.live.test.ts
       - name: Test workspace and require all three short socket cases
         shell: bash
         env:
@@ -61,6 +62,7 @@ jobs:
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
             --path-ignore-patterns "**/first-answer.live.test.ts" \
             --path-ignore-patterns "**/thread-resume.live.test.ts" \
+            --path-ignore-patterns "**/isolated-start.live.test.ts" \
             --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done
       - run: bun run build

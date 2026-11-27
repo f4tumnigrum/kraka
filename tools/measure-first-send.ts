@@ -1,3 +1,5 @@
+import { isolatedFixture, readClaim, setupPolicy, idle } from "./fixtures/isolated-start";
+import { managedView } from "@kraka/environment";
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -263,6 +265,74 @@ async function restart(base: ReportBase, root: string, nextBlock: () => Promise<
     await nextBlock();
   }
   return { large: 10, medianDifference: 1, recovery: 5 };
+}
+export async function measureClaimRecovery(
+  base: ReportBase,
+  root: string,
+  nextBlock: () => Promise<void>,
+) {
+  base.expected = { claimRecoveries: 5 };
+  base.actual = { claimRecoveries: 0 };
+  for (let i = 0; i < 5; i++) {
+    await withState(async (dir) => {
+      const { f, opts, restart, repo } = await isolatedFixture(dir, "beforeSetup", root);
+      try {
+        setupPolicy(f, [process.execPath, "-e", "process.exit(0)"]);
+        const id = crypto.randomUUID(),
+          start = performance.now();
+        const { receipt } = await f.client.send("thread.start", { ...f.payload, worktreeId: id });
+        const acceptedAt = performance.now();
+        const ids = accepted(receipt, "threadStarted");
+        verifyObservation(
+          Bun.deepEquals(f.receipt(receipt.commandId)?.receipt, receipt),
+          "Missing original isolated receipt",
+        );
+        await waitFile(join(opts.stateDir, "entered-beforeSetup"));
+        const preparedAt = performance.now(),
+          before = readClaim(opts.stateDir, id);
+        verifyObservation(
+          before.claim.phase.kind === "preparing" && before.claim.phase.script.kind === "started",
+          "Preparation barrier missed",
+        );
+        await f.kill();
+        const next = await restart();
+        try {
+          await idle(next);
+          const after = readClaim(opts.stateDir, id),
+            view = managedView(after);
+          const elapsed = performance.now() - next.started;
+          verifyObservation(
+            after.claim.threadId === ids.threadId &&
+              after.claim.generation === before.claim.generation &&
+              view.availability === "needsInspection" &&
+              after.claim.phase.kind === "preparing" &&
+              after.claim.phase.script.kind === "unknown" &&
+              after.claim.phase.script.attemptId === before.claim.phase.script.attemptId,
+            "Wrong interrupted claim disposition",
+          );
+          sample(base, "claimRecovery", elapsed);
+          sample(base, "isolatedReceipt", acceptedAt - start);
+          sample(base, "gitPreparation", preparedAt - acceptedAt);
+          base.actual.claimRecoveries = (base.actual.claimRecoveries ?? 0) + 1;
+          base.observations.push({
+            worktree: id,
+            view,
+            git: repo.version,
+            receiptMs: acceptedAt - start,
+            preparationMs: preparedAt - acceptedAt,
+            elapsedMs: elapsed,
+          });
+        } finally {
+          await next.close();
+        }
+      } finally {
+        writeFileSync(join(opts.stateDir, "release-beforeSetup"), "go");
+        await f.close();
+      }
+    });
+    await nextBlock();
+  }
+  return { claimRecovery: 5 };
 }
 async function rename(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
   base.expected = { single: 1250, eight: 4000, warmups: 250, reopened: 5500 };

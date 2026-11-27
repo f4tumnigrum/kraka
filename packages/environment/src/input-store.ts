@@ -232,7 +232,26 @@ export function recoverQueues(store: FirstSendStore, scope?: RecoveryScope) {
         ]),
       );
       const next = transitionInputQueue(queue, { kind: "restart", capabilities });
-      if (next.kind === "ok") persistQueue(store, queue, next.value);
+      if (next.kind === "ok") {
+        const ready = store.db
+          .query<{ round: string }, [string]>(
+            "SELECT r.id AS round FROM ready_dispatch d JOIN rounds r ON r.id=d.round WHERE json_extract(r.data,'$.threadId')=?",
+          )
+          .get(thread);
+        if (ready) {
+          const original = queue.rows.find((r) => r.id === ready.round);
+          if (
+            original &&
+            original.attempt.phase.kind === "filed" &&
+            original.attempt.phase.gate === "eligible"
+          ) {
+            const rows = next.value.rows.map((r) => (r.id === original.id ? original : r));
+            persistQueue(store, queue, { ...next.value, rows });
+            continue;
+          }
+        }
+        persistQueue(store, queue, next.value);
+      }
     }
   })();
 }

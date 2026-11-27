@@ -20,8 +20,8 @@ import {
   type CommandId,
 } from "@kraka/protocol";
 import {
-  applyInputCommand,
   acceptTodoReply,
+  type LocalActor,
   readThread,
   renameThread,
   type FirstSendStore,
@@ -40,6 +40,10 @@ export async function threadConnection(
   host: Access,
   nonce: string,
   schedule: (threadId: ThreadId, commandId: CommandId) => void,
+  sendInput: (
+    actor: LocalActor,
+    command: Extract<SignedRequest, { method: "input.send" }>,
+  ) => Promise<CommandReceipt>,
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   beforeTodo?: (id: CommandId, proceed: () => void) => void,
@@ -274,18 +278,36 @@ export async function threadConnection(
           if (!result && m.method === "input.send") {
             const permitted = allows(m.payload.threadId, "thread.send");
             const injected = permitted ? fixtureCommand?.(m, store) : null;
-            result =
-              injected ??
-              applyInputCommand({
-                actor: {
+            if (injected) result = injected;
+            else {
+              void sendInput(
+                {
                   id: actor.principal.id,
                   environmentId: host.identity.id,
-                  allows: () => permitted,
+                  allows: () => allows(m.payload.threadId, "thread.send"),
                 },
-                transaction: store,
-                command: m,
-              });
-            if (!injected && result.kind === "accepted") schedule(m.payload.threadId, m.commandId);
+                m,
+              ).then(
+                (receipt) => {
+                  if (receipt.kind === "accepted") schedule(m.payload.threadId, m.commandId);
+                  if (session) {
+                    peer.control(receipt);
+                    wake();
+                  }
+                },
+                () => {
+                  if (session) {
+                    peer.control({
+                      kind: "programError",
+                      commandId: m.commandId,
+                      code: "internalError",
+                    });
+                    wake();
+                  }
+                },
+              );
+              return;
+            }
           }
           peer.control(
             result ?? {
@@ -337,6 +359,7 @@ export async function threadConnection(
           uploads.drop(id);
         },
         close() {
+          session = null;
           clearInterval(timer);
           subs?.close();
         },
