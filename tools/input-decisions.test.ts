@@ -13,7 +13,7 @@ test(
           b = await f.send(a.threadId, "B"),
           c = await f.send(a.threadId, "C");
         await f.seen("beforeWrite", a.deliveryId);
-        f.hold("claim");
+        await f.hold("claim");
         await f.restart();
         const other = await connectFirstSend(f.stateDir, f.writer.instance);
         try {
@@ -74,7 +74,7 @@ test(
             content: f.writer.payload.content,
           });
         const changing = edit();
-        f.release("claim");
+        await f.release("claim");
         const result = await changing;
         await f.seen("beforeWrite", a.deliveryId);
         expect((await edit()).receipt).toMatchObject({
@@ -82,7 +82,10 @@ test(
         });
         const h = await f.client.readInputHistory(a.threadId);
         expect(String(h.messages[0]?.version)).toBe(result.receipt.kind === "accepted" ? "2" : "1");
-        expect(f.ledger()[0]?.data).toMatchObject({ id: a.messageId, text: h.messages[0]?.text });
+        expect((await f.ledger())[0]?.data).toMatchObject({
+          id: a.messageId,
+          text: h.messages[0]?.text,
+        });
       },
       ["claim", "beforeWrite"],
     ),
@@ -120,7 +123,7 @@ test(
           join(f.stateDir, "seed-handoff"),
           JSON.stringify({ roundId: a.roundId, handoff }),
         );
-        f.release("claim");
+        await f.release("claim");
         await f.seen("afterWrite", a.deliveryId);
         await f.restart();
         const h = await f.client.readInputHistory(a.threadId);
@@ -131,22 +134,18 @@ test(
         });
         await f.client.send("thread.rename", { threadId: a.threadId, title: "changed parent" });
         await f.send(a.threadId, "new message after the write");
-        f.release("afterWrite");
+        await f.release("afterWrite");
         expect(
           (await f.client.send("input.releaseQueue", { threadId: a.threadId })).receipt.kind,
         ).toBe("accepted");
         await f.seen("start", a.deliveryId);
-        expect(
-          f.ledger().filter((e) => e.step === "externalEffect" && e.deliveryId === a.deliveryId),
-        ).toHaveLength(1);
-        const calls = f.ledger().filter((e) => e.step === "handoff");
-        expect(calls.map((c) => [c.attemptId, c.deliveryId, JSON.stringify(c.data)])).toEqual(
-          [calls[0], calls[0]].map((c) => [a.attemptId, a.deliveryId, JSON.stringify(c!.data)]),
-        );
-        expect(calls[0]?.data).toEqual({ kind: "handoff", ...handoff });
-        expect(
-          f.ledger().filter((e) => e.step === "afterWrite" && e.deliveryId === a.deliveryId),
-        ).toHaveLength(2);
+        const delivery = (await f.ledger()).filter((row) => row.deliveryId === a.deliveryId);
+        expect(delivery.filter((row) => row.step === "externalEffect")).toHaveLength(1);
+        expect(delivery.filter((row) => row.step === "afterWrite")).toHaveLength(2);
+        const handoffs = delivery.filter((row) => row.step === "handoff");
+        expect(handoffs.map((row) => row.attemptId)).toEqual([a.attemptId, a.attemptId]);
+        expect(handoffs[0]?.data).toEqual({ kind: "handoff", ...handoff });
+        expect(JSON.stringify(handoffs[1]?.data)).toBe(JSON.stringify(handoffs[0]?.data));
       },
       ["claim", "afterWrite"],
     ),
