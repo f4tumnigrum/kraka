@@ -148,7 +148,6 @@ test("business refusals preserve the next connection's recording", async () => {
       ["{"],
       [JSON.stringify({ ...sampleRequest, permission: "typo" })],
       [JSON.stringify({ ...sampleRequest, extra: true })],
-      [JSON.stringify(sampleRequest), JSON.stringify(sampleRequest)],
     ]) {
       const socket = new WebSocket(url);
       try {

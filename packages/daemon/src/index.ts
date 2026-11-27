@@ -3,7 +3,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
-import { runReplayTurn } from "@kraka/environment";
+import { runReplayTurn, type ProviderAdapter } from "@kraka/environment";
 import { ReplayRunRequestSchema } from "@kraka/protocol";
 import * as v from "valibot";
 
@@ -29,7 +29,31 @@ async function replay(args: string[]) {
     throw new Error("Expected replay --state-dir DIR --recording FILE --port 0..65535");
   const workingDirectory = resolve(values["state-dir"]);
   const recording = parseReplayRecording(await Bun.file(resolve(values.recording)).text());
-  const adapter = createReplayAdapter(recording);
+  const { shutdown, ready } = await listenReplay({
+    workingDirectory,
+    port: Number(values.port),
+    expectedText: recording.expectedText,
+    modelId: recording.modelId,
+    adapter: createReplayAdapter(recording),
+  });
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+  process.stdout.write(ready);
+}
+
+export async function listenReplay<H extends object>({
+  workingDirectory,
+  port,
+  expectedText,
+  modelId,
+  adapter,
+}: {
+  workingDirectory: string;
+  port: number;
+  expectedText: string;
+  modelId: string;
+  adapter: ProviderAdapter<"replay", H>;
+}) {
   await mkdir(workingDirectory, { recursive: true });
   const sockets = new Set<Bun.ServerWebSocket<SocketState>>();
   const runs = new Set<Promise<void>>();
@@ -41,7 +65,7 @@ async function replay(args: string[]) {
   }
   const server = Bun.serve({
     hostname: "127.0.0.1",
-    port: Number(values.port),
+    port,
     fetch(req, srv) {
       if (
         new URL(req.url).pathname === "/replay" &&
@@ -77,8 +101,8 @@ async function replay(args: string[]) {
             runReplayTurn({
               request,
               adapter,
-              expectedText: recording.expectedText,
-              modelId: recording.modelId,
+              expectedText,
+              modelId,
               workingDirectory,
               signal: ws.data.controller.signal,
               emit(message) {
@@ -101,12 +125,12 @@ async function replay(args: string[]) {
       },
     },
   });
-  const ready = `${JSON.stringify({ kind: "ready", url: `ws://127.0.0.1:${server.port}/replay` })}\n`;
+  const url = `ws://127.0.0.1:${server.port}/replay`;
+  const ready = `${JSON.stringify({ kind: "ready", url })}\n`;
   const temp = join(workingDirectory, `.replay-${crypto.randomUUID()}.tmp`);
   try {
     await writeFile(temp, ready, { flag: "wx" });
     await rename(temp, join(workingDirectory, "replay-endpoint.json"));
-    process.stdout.write(ready);
   } catch (error) {
     await server.stop(true);
     await rm(temp, { force: true });
@@ -117,8 +141,7 @@ async function replay(args: string[]) {
     await server.stop(true);
     await Promise.allSettled(runs);
   }
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  return { shutdown, ready, url };
 }
 if (import.meta.main && process.argv.length > 2) {
   try {
