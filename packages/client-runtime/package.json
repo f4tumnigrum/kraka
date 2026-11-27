@@ -18,6 +18,7 @@
     "build": "bun build src/index.ts --outfile ../../.build/packages/client-runtime.js"
   },
   "dependencies": {
-    "@kraka/protocol": "workspace:*"
+    "@kraka/protocol": "workspace:*",
+    "valibot": "1.5.0"
   }
 }

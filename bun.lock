@@ -95,6 +95,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@kraka/protocol": "workspace:*",
+        "valibot": "1.5.0",
       },
     },
     "packages/daemon": {
