@@ -1,17 +1,20 @@
+import { SubscriptionPageSchema, type SubscriptionPage } from "@kraka/protocol";
 import { createPrivateKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import * as v from "valibot";
+import { type InstancePublication, InstancePublicationSchema } from "@kraka/environment";
 import {
-  canonicalJson,
-  CommandReceiptSchema,
   ExecutorTurnUpdateSchema,
   type ExecutorTurnUpdate,
   CommandIdSchema,
-  ConnectionChallengeSchema,
   type CommandReceipt,
+  CommandReceiptSchema,
+  ConnectionChallengeSchema,
+  canonicalJson,
+  type HistoryPage,
+  HistoryPageSchema,
 } from "@kraka/protocol";
-import { InstancePublicationSchema, type InstancePublication } from "@kraka/environment";
+import * as v from "valibot";
 import { within } from "./replay-process";
 
 export const fixtureSigner = {
@@ -38,10 +41,16 @@ export async function connectFirstSend(
   let hello: v.InferOutput<typeof helloSchema> | undefined;
   let sequence = 0;
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<CommandReceipt>>>();
+  const pages = new Map<string, ReturnType<typeof Promise.withResolvers<HistoryPage>>>();
+  const snapshots = new Map<string, ReturnType<typeof Promise.withResolvers<SubscriptionPage>>>();
   function fail(reason: Error) {
     ready.reject(reason);
     for (const request of pending.values()) request.reject(reason);
     pending.clear();
+    for (const waiter of pages.values()) waiter.reject(reason);
+    pages.clear();
+    for (const waiter of snapshots.values()) waiter.reject(reason);
+    snapshots.clear();
   }
   socket.onerror = () => fail(new Error("Writer connection failed"));
   socket.onclose = () => fail(new Error("Writer connection closed"));
@@ -58,6 +67,22 @@ export async function connectFirstSend(
         return;
       }
       const raw = JSON.parse(String(data));
+      if (raw.kind === "subscription.page") {
+        const page = v.parse(SubscriptionPageSchema, raw);
+        const waiter = snapshots.get(page.subscriptionId);
+        if (!waiter) throw Error("Unexpected subscription page");
+        waiter.resolve(page);
+        return;
+      }
+      if (["subscription.begin", "subscription.seal", "subscription.ended"].includes(raw.kind))
+        return;
+      if (raw.kind === "history.page") {
+        const page = v.parse(HistoryPageSchema, raw);
+        const waiter = pages.get(page.threadId);
+        if (!waiter) throw Error("Unexpected history page");
+        waiter.resolve(page);
+        return;
+      }
       if (onUpdate && raw.kind !== "accepted" && raw.kind !== "rejected") {
         onUpdate(v.parse(ExecutorTurnUpdateSchema, raw));
         return;
@@ -82,12 +107,65 @@ export async function connectFirstSend(
     close() {
       socket.terminate();
     },
-    async send(method: string, payload: unknown, id: string = crypto.randomUUID()) {
+    async subscribedRounds(threadId: string) {
+      const subscriptionId = crypto.randomUUID(),
+        waiter = Promise.withResolvers<SubscriptionPage>();
+      snapshots.set(subscriptionId, waiter);
+      void waiter.promise.catch(() => {});
+      try {
+        const { receipt } = await this.send(
+          "subscription.openThread",
+          { subscriptionId, streamId: 2, threadId, knownWindow: [], after: null, recheckTodos: [] },
+          crypto.randomUUID(),
+          1,
+        );
+        if (receipt.kind !== "accepted") throw Error("Input subscription rejected");
+        const page = await within(waiter.promise, 5000, "Input subscription");
+        await this.send("subscription.close", { subscriptionId });
+        return page.changes.flatMap((change) =>
+          change.kind === "object.replace" && change.object.objectType === "round"
+            ? [change.object.value]
+            : [],
+        );
+      } finally {
+        snapshots.delete(subscriptionId);
+      }
+    },
+    async readInputHistory(threadId: string, roundId?: string) {
+      if (pages.has(threadId)) throw Error("History read outstanding");
+      const waiter = Promise.withResolvers<HistoryPage>();
+      pages.set(threadId, waiter);
+      void waiter.promise.catch(() => {});
+      try {
+        const { receipt } = await this.send(
+          "thread.readHistory",
+          { threadId, anchor: null, streamId: 1 },
+          crypto.randomUUID(),
+          1,
+        );
+        if (receipt.kind !== "accepted") throw Error(JSON.stringify(receipt));
+        const page = await within(waiter.promise, 5000, "Input history");
+        return {
+          version: page.verifiedAt.through,
+          rounds: page.rows.flatMap((r) =>
+            r.objectType === "round" && (!roundId || r.value.id === roundId) ? [r.value] : [],
+          ),
+          messages: page.rows.flatMap((r) =>
+            r.objectType === "message" && (!roundId || r.value.roundId === roundId)
+              ? [r.value]
+              : [],
+          ),
+        };
+      } finally {
+        pages.delete(threadId);
+      }
+    },
+    async send(method: string, payload: unknown, id: string = crypto.randomUUID(), minor = 0) {
       if (!hello) throw new Error("Missing writer hello");
       const commandId = v.parse(CommandIdSchema, id);
       const body = {
         kind: "signedRequest",
-        protocolVersion: { major: 1, minor: 0 },
+        protocolVersion: { major: 1, minor },
         environmentId: instance.environmentId,
         connectionId: hello.connectionId,
         challengeId: hello.challengeId,

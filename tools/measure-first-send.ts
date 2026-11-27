@@ -1,18 +1,21 @@
+import { Database } from "bun:sqlite";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CommandIdSchema, PrincipalIdSchema, type CommandReceipt } from "@kraka/protocol";
 import {
   confirmWriter,
   openReceiptReader,
+  readMessage,
   readReceipt,
   readRound,
   readThread,
 } from "@kraka/environment";
+import { CommandIdSchema, type CommandReceipt, PrincipalIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
-import type { ReportBase } from "./perf";
-import { currentFootprint, noChildren } from "./measure-replay";
-import { startFirstSendFixture, accepted, waitFile } from "./fixtures/first-send";
+import { accepted, startFirstSendFixture, waitFile } from "./fixtures/first-send";
 import { connectFirstSend, fixtureActor } from "./fixtures/first-send-client";
-import { withState } from "./fixtures/replay-process";
+import { fixture, withState } from "./fixtures/replay-process";
+import { currentFootprint, noChildren } from "./measure-replay";
+import type { ReportBase } from "./perf";
 import { buildPeer, codexFixture } from "./fixtures/codex-turn";
 import type { Unit } from "./perf-catalog";
 
@@ -230,7 +233,12 @@ async function restart(base: ReportBase, root: string, nextBlock: () => Promise<
       try {
         const db = openReceiptReader(opts.stateDir);
         try {
-          const round = readRound(db, ids.roundId),
+          const supportsPublicHistory = await Bun.file(
+            join(root, "packages/environment/src/input-command.ts"),
+          ).exists();
+          const round = supportsPublicHistory
+              ? (await next.client.readInputHistory(ids.threadId, ids.roundId)).rounds[0]
+              : readRound(db, ids.roundId),
             elapsed = performance.now() - next.started;
           verifyObservation(
             round?.attempt.attemptId === ids.attemptId &&
@@ -342,10 +350,140 @@ async function rename(base: ReportBase, root: string, nextBlock: () => Promise<v
   });
   return { single: 1250, eight: 4000 };
 }
+async function growth(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
+  const input = "I".repeat(28),
+    answer = "A".repeat(34),
+    tool = "x".repeat(140),
+    output = "o".repeat(96);
+  const counts = { databases: 0, turns: 0, workRecords: 0, checkpoints: 0 };
+  base.actual = counts;
+  base.expected = { databases: 3, turns: 60, workRecords: 180, checkpoints: 6 };
+  for (let trial = 0; trial < 3; trial++)
+    await withState(async (dir) => {
+      const opts = options(dir, root),
+        recording = join(dir, "budget-turn.jsonl");
+      const template = readFileSync(join(root, fixture), "utf8");
+      const strings = new Map([
+        ["Print the word amber and report what appeared.", input],
+        ["The marker was amber.", answer],
+        ["The marker was ", answer.slice(0, 17)],
+        ["amber.", answer.slice(17)],
+        ["amber\n", output],
+        ["printf 'amber\\n'", tool],
+      ]);
+      const content =
+        template
+          .trim()
+          .split("\n")
+          .map((row) =>
+            JSON.stringify(
+              JSON.parse(row, (_key, value) =>
+                typeof value === "string" ? (strings.get(value) ?? value) : value,
+              ),
+            ),
+          )
+          .join("\n") + "\n";
+      writeFileSync(recording, content);
+      const f = await startFirstSendFixture({ ...opts, recording });
+      const dbFile = join(opts.stateDir, "environment.sqlite"),
+        db = new Database(dbFile, { strict: true });
+      let threadId = "",
+        first = 0,
+        last = 0;
+      try {
+        const seen = new Set<string>();
+        for (let turn = 1; turn <= 20; turn++) {
+          const content = { text: input, references: [], attachments: [] };
+          const response =
+            turn === 1
+              ? await f.client.send("thread.start", { ...f.payload, content })
+              : await f.client.send("input.send", { threadId, content });
+          const ids =
+            turn === 1
+              ? accepted(response.receipt, "threadStarted")
+              : accepted(response.receipt, "inputScheduled");
+          if ("threadId" in ids) threadId = ids.threadId;
+          const saved = f.receipt(response.receipt.commandId);
+          verifyObservation(
+            saved && Bun.deepEquals(saved.receipt, response.receipt),
+            "Missing durable P10 receipt",
+          );
+          await waitIdle(f);
+          const round = readRound(db, ids.roundId),
+            message = readMessage(db, ids.messageId);
+          verifyObservation(
+            round?.attempt.phase.kind === "closing" &&
+              round.threadId === threadId &&
+              round.attempt.attemptId === ids.attemptId &&
+              round.messageId === ids.messageId &&
+              message?.text === input &&
+              message.roundId === ids.roundId &&
+              !seen.has(ids.roundId),
+            "Missing P10 turn",
+          );
+          seen.add(ids.roundId);
+          const updates = db
+            .query<{ data: string }, [string]>(
+              "SELECT data FROM turn_work WHERE round=? AND kind!='capture'",
+            )
+            .all(ids.roundId)
+            .map((r) => JSON.parse(r.data));
+          const start = updates.find((r) => r.kind === "tool.started"),
+            end = updates.find((r) => r.kind === "tool.ended"),
+            final = updates.find((r) => r.kind === "assistant.final");
+          verifyObservation(
+            updates.length === 3 &&
+              updates.every((r) => r.roundId === ids.roundId && r.attemptId === ids.attemptId) &&
+              start?.command === tool &&
+              end?.callId === start.callId &&
+              end?.output === output &&
+              end.exitCode === 0 &&
+              final?.text === answer,
+            "P10 input/tool/output mismatch",
+          );
+          counts.workRecords += updates.length;
+          counts.turns++;
+          if (turn === 1 || turn === 20) {
+            const checkpoint = db
+              .query<{ busy: number; log: number; checkpointed: number }, []>(
+                "PRAGMA wal_checkpoint(TRUNCATE)",
+              )
+              .get();
+            verifyObservation(
+              checkpoint?.busy === 0 && checkpoint.log === 0 && checkpoint.checkpointed === 0,
+              "P10 WAL did not settle",
+            );
+            const wal = existsSync(dbFile + "-wal") ? statSync(dbFile + "-wal").size : 0;
+            const bytes = statSync(dbFile).size + wal;
+            if (turn === 1) first = bytes;
+            else last = bytes;
+            counts.checkpoints++;
+          }
+        }
+        const bytesPerTurn = (last - first) / 19;
+        base.observations.push({
+          trial,
+          threadId,
+          first,
+          last,
+          bytesPerTurn,
+          turns: seen.size,
+          checkpointObjectBytes: 0,
+        });
+        sample(base, "growth", bytesPerTurn, "B/turn");
+        counts.databases++;
+      } finally {
+        db.close();
+        await f.close();
+      }
+    }),
+      await nextBlock();
+  return { growth: 3 };
+}
 export async function measureFirstSend(
   base: ReportBase,
   root: string,
-  id: "P1" | "P2" | "P7" | "P9",
+  id: "P1" | "P2" | "P7" | "P9" | "P10",
   nextBlock: () => Promise<void>,
 ): Promise<Record<string, number>> {
   switch (id) {
@@ -354,6 +492,8 @@ export async function measureFirstSend(
       return startup(base, root, id === "P2", nextBlock);
     case "P7":
       return restart(base, root, nextBlock);
+    case "P10":
+      return growth(base, root, nextBlock);
     case "P9":
       return rename(base, root, nextBlock);
   }

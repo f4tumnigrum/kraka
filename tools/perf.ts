@@ -9,12 +9,12 @@ import {
   budgetValue,
   exceedsBudget,
   catalog,
-  metricIds,
   type Metric,
+  metricIds,
   type ProbeSpec,
   type Unit,
 } from "./perf-catalog";
-import { productionClosure, type DependencyObservation } from "./perf-dependencies";
+import { type DependencyObservation, productionClosure } from "./perf-dependencies";
 
 type Role = "baseline" | "candidate";
 type Counts = Record<string, number>;
@@ -332,6 +332,9 @@ export async function prepareBudget(root: string, role: Role) {
   }
   let stub = false,
     replayAttempted = false;
+  const inputEndpoint = await Bun.file(
+    join(root, "packages/environment/src/input-command.ts"),
+  ).exists();
   let capability: Promise<string> | undefined;
   const commandSurface = () => (capability ??= checkCommandSurface(root));
   const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
@@ -406,7 +409,11 @@ export async function prepareBudget(root: string, role: Role) {
         );
       } else if (
         durable &&
-        (metric === "P1" || metric === "P2" || metric === "P7" || metric === "P9")
+        (metric === "P1" ||
+          metric === "P2" ||
+          metric === "P7" ||
+          metric === "P9" ||
+          (metric === "P10" && inputEndpoint))
       ) {
         const { measureFirstSend } = await import("./measure-first-send");
         const series = await measureFirstSend(base, root, metric, nextBlock);

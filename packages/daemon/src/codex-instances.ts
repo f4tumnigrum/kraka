@@ -1,3 +1,4 @@
+import * as v from "valibot";
 import {
   createCodexAdapter,
   probeCodex,
@@ -16,6 +17,9 @@ import {
 } from "@kraka/environment";
 import {
   REQUEST_METHODS,
+  ChildModelSchema,
+  ExecutorInstanceIdSchema,
+  type ThreadId,
   type CommandReceipt,
   type ExecutorInstanceId,
   type ExecutorInstanceSnapshot,
@@ -39,6 +43,24 @@ export class CodexInstances {
   readonly active = new Set<Promise<unknown>>();
   constructor(private store: FirstSendStore) {
     this.registry = new WriterExecutorRegistry(store);
+  }
+  forThread(threadId: ThreadId) {
+    return this.store.db
+      .query<{ instance: string; version: string; model: string }, [string]>(
+        "SELECT instance,version,model FROM round_executors WHERE round=(SELECT id FROM rounds WHERE json_extract(data,'$.threadId')=? ORDER BY rowid LIMIT 1)",
+      )
+      .get(threadId);
+  }
+  async resolve(
+    saved: NonNullable<ReturnType<CodexInstances["forThread"]>>,
+    actor: PrincipalId,
+    projectId: ProjectId,
+  ) {
+    const id = v.parse(ExecutorInstanceIdSchema, saved.instance);
+    if (this.registry.current(id)?.version !== saved.version) return null;
+    const entry = await this.lookup(id, actor, projectId);
+    if (entry?.reg.version !== saved.version) return null;
+    return this.select(entry, v.parse(ChildModelSchema, JSON.parse(saved.model)));
   }
   async close() {
     this.closed = true;

@@ -9,6 +9,7 @@ export { transitionContextOperation } from "./context-operations";
 export { promoteSessionObservation } from "./session-observations";
 export { prepareChildResultTransfer, transitionChildResultReturn } from "./child-results";
 export {
+  firstPending,
   transitionInputQueue,
   planQueuedChange,
   type EditableQueue,
@@ -41,4 +42,7 @@ export * from "./access-store";
 export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
+
+export * from "./input-command";
+export * from "./input-store";
 export * from "./executor-registry";
