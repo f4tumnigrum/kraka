@@ -1,5 +1,6 @@
 import * as v from "valibot";
 import {
+  TextReturnedEventSchema,
   HistoryPageSchema,
   type HistoryRow,
   type SignedRequest,
@@ -12,6 +13,7 @@ import {
   RoundIdSchema,
   ToolActivityFileChangeSchema,
 } from "@kraka/protocol";
+import { seedRound, round as requestRound, todoFor, choices, native } from "./todo";
 import { type FirstSendStore, readRound } from "@kraka/environment";
 const schema = HistoryPageSchema.entries.rows.item;
 function persist(store: FirstSendStore, rows: HistoryRow[]) {
@@ -127,11 +129,20 @@ const seedCommand = v.union([
   v.strictObject({ rows: v.array(schema) }),
   v.strictObject({ floor: SyncPositionSchema }),
   v.strictObject({ phase: RoundPhaseSchema }),
+  v.strictObject({ requests: v.literal("prepare") }),
+  v.strictObject({ offer: v.picklist(["approval", "question"]) }),
+  v.strictObject({ lose: v.picklist(["approval", "question"]) }),
+  v.strictObject({
+    round: v.string(),
+    quota: v.nullable(v.object({ resetAt: v.nullable(v.number()) })),
+  }),
+  v.strictObject({ returned: TextReturnedEventSchema }),
 ]);
 
 export function serveSeed(store: FirstSendStore) {
   if (!process.send) throw Error("Seed writer requires a private IPC channel");
   const reply = process.send.bind(process);
+  const callbacks = new Map<string, ReturnType<typeof store.todos.open>>();
   process.on("message", (message: unknown) => {
     const { id, command } = v.parse(v.object({ id: v.string(), command: v.unknown() }), message);
     let error: string | null = null;
@@ -149,7 +160,35 @@ export function serveSeed(store: FirstSendStore) {
         for (const rows of op.transactions) persist(store, rows);
       } else if ("rows" in op) persist(store, op.rows);
       else if ("floor" in op) store.db.run("UPDATE sync_meta SET floor=?", [op.floor]);
-      else {
+      else if ("requests" in op) {
+        seedRound(store);
+        store.setPhase(requestRound, { kind: "filed", gate: "eligible" });
+      } else if ("offer" in op) {
+        const round = readRound(store.db, requestRound.id);
+        if (!round) throw Error("Missing request source");
+        if (round.attempt.phase.kind === "filed") store.setPhase(round, requestRound.attempt.phase);
+        callbacks.set(
+          op.offer,
+          store.todos.open(todoFor(op.offer), {
+            ...native,
+            attemptId: round.attempt.attemptId,
+            ...(op.offer === "approval"
+              ? { approval: { permission: "term.input" as const, choices } }
+              : {}),
+            async send(answer) {
+              return answer.deliveryId;
+            },
+          }),
+        );
+      } else if ("lose" in op) callbacks.get(op.lose)?.close();
+      else if ("quota" in op) {
+        const round = readRound(store.db, op.round);
+        if (!round) throw Error("Missing quota attempt");
+        store.sync.observeQuota(round, op.quota);
+      } else if ("returned" in op) {
+        store.db.transaction(() => store.sync.record([], { returns: [op.returned] }))();
+        store.sync.notify();
+      } else {
         const round = readRound(store.db, "round-heading");
         if (!round) throw Error("Missing test round");
         store.setPhase(round, op.phase);

@@ -1,3 +1,6 @@
+import { ListIndex } from "./list-index";
+import type { ListScope } from "./list-pass";
+import type { PrincipalId, TodoRequest, Round, SyncPosition } from "@kraka/protocol";
 import type { Database } from "bun:sqlite";
 import { promoteSessionObservation } from "./session-observations";
 import { AttemptIdSchema, ExecutorInstanceIdSchema, NativeSessionIdSchema } from "@kraka/protocol";
@@ -81,19 +84,22 @@ function orderBounded(item: ReadRow, edge: Bound) {
 }
 export class ThreadJournal {
   private readonly activities: ToolActivityStorage;
+  readonly list: ListIndex;
   private readonly listeners = new Set<() => void>();
   constructor(
     readonly db: Database,
     readonly environmentId: EnvironmentId,
   ) {
-    this.activities = db.transaction(() => {
+    ({activities: this.activities, list: this.list} = db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1),generation TEXT NOT NULL,head TEXT NOT NULL,floor TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
      CREATE TABLE IF NOT EXISTS tool_activity_scoped_changes(thread_id TEXT NOT NULL,event_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread_id,event_id));`);
-      const activities = new ToolActivityStorage(db);
-      if (this.meta()) return activities;
+      return { activities: new ToolActivityStorage(db), list: new ListIndex(db) };
+    })());
+    db.transaction(() => {
+      if (this.meta()) return;
       db.run("INSERT INTO sync_meta VALUES(1,?,'0','0')", [crypto.randomUUID()]);
       const rows: HistoryRow[] = [];
       for (const [table, objectType] of [
@@ -107,7 +113,6 @@ export class ThreadJournal {
           rows.push(v.parse(rowSchema, { objectType, value: JSON.parse(data) }));
       }
       if (rows.length) this.record(rows);
-      return activities;
     })();
   }
   private meta() {
@@ -158,6 +163,46 @@ export class ThreadJournal {
   notify() {
     for (const wake of this.listeners) wake();
   }
+  private advanceClock() {
+    const meta = this.meta();
+    if (!meta) throw Error("Missing sync clock");
+    const position = String(BigInt(meta.head) + 1n);
+    this.db.run("UPDATE sync_meta SET head=? WHERE id=1", [position]);
+    return position;
+  }
+  markRead(actor: PrincipalId, thread: ThreadId, through: SyncPosition) {
+    const changed = this.db.transaction(() => {
+      const current = this.db
+        .query<{ position: string }, [string, string]>(
+          "SELECT position FROM list_watermarks WHERE owner=? AND source=?",
+        )
+        .get(actor, thread);
+      if (current && BigInt(current.position) >= BigInt(through)) return false;
+      this.db
+        .query(
+          "INSERT INTO list_watermarks VALUES(?,?,?) ON CONFLICT(owner,source) DO UPDATE SET position=excluded.position",
+        )
+        .run(actor, thread, through);
+      this.advanceClock();
+      return true;
+    })();
+    if (changed) this.notify();
+  }
+  observeQuota(
+    round: Pick<Round, "id" | "threadId" | "attempt">,
+    quota: { resetAt: number | null } | null,
+  ) {
+    const changed = this.db.transaction(() => {
+      const sql = this.db.query(`UPDATE list_attempts SET data=json_set(data,'$.quota',json(?))
+        WHERE source=? AND round=? AND attempt=? AND terminal=0 AND json_extract(data,'$.quota') IS NOT json_extract(?,'$')`);
+      const value = JSON.stringify(quota);
+      if (!sql.run(value, round.threadId, round.id, round.attempt.attemptId, value).changes)
+        return false;
+      this.advanceClock();
+      return true;
+    })();
+    if (changed) this.notify();
+  }
   record(
     rows: readonly HistoryRow[],
     extras: {
@@ -169,14 +214,13 @@ export class ThreadJournal {
     if (!this.db.inTransaction) throw Error("Sync index must share the object write transaction");
     if (!extras.activity && !rows.length && !extras.removed?.length && !extras.returns?.length)
       return;
-    const meta = this.meta();
-    if (!meta) throw Error("Missing sync clock");
-    const position = String(BigInt(meta.head) + 1n);
-    this.db.run("UPDATE sync_meta SET head=? WHERE id=1", [position]);
+    const position = this.advanceClock();
     const put =
       this.db.query(`INSERT INTO sync_rows(source,key,round,created,changed,version,payload) VALUES(?,?,?,?,?,?,?)
    ON CONFLICT(source,key) DO UPDATE SET changed=excluded.changed,version=excluded.version,payload=excluded.payload,round=excluded.round`);
+    const now = Date.now();
     for (const row of rows) {
+      this.list.record(row, position, now);
       const source =
         row.objectType === "thread"
           ? row.value.id
@@ -213,6 +257,7 @@ export class ThreadJournal {
       );
     }
     for (const item of extras.removed ?? []) {
+      this.list.remove(item.source, item.key.objectType, item.key.id, position, now);
       const prior = this.db
         .query<{ version: string }, [string, string]>(
           "SELECT version FROM sync_rows WHERE source=? AND key=?",
@@ -334,6 +379,34 @@ export class ThreadJournal {
   activityBody(stored: StoredToolActivityVersion) {
     const bytes = stored.read(0, stored.reference.byteLength);
     return v.parse(ToolActivityBodySchema, JSON.parse(Buffer.from(bytes).toString("utf8")).body);
+  }
+  readList(
+    scope: ListScope,
+    visibility: string,
+    actor: PrincipalId,
+    canRead: (id: ThreadId) => boolean,
+    canAnswer: (todo: TodoRequest) => boolean,
+  ) {
+    return this.db.transaction(() => {
+      const meta = this.meta();
+      if (!meta) throw Error("Missing sync clock");
+      const head = v.parse(SyncCursorSchema, {
+        environmentId: this.environmentId,
+        databaseGeneration: meta.generation,
+        visibilityGeneration: visibility,
+        scope,
+        shapeVersion: 2,
+        through: meta.head,
+      });
+      return this.list.read(
+        head,
+        v.parse(SyncPositionSchema, meta.floor),
+        scope,
+        actor,
+        canRead,
+        canAnswer,
+      );
+    })();
   }
   read(scope: AuthorizedScope, visibility: string): ThreadReadView {
     return this.db.transaction((): ThreadReadView => {

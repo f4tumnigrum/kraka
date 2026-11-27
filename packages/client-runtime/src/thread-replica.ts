@@ -1,6 +1,8 @@
 import * as v from "valibot";
 import {
   sameRange,
+  type ProjectId,
+  type ThreadId,
   FlowPeer,
   matchesAuthorizedConfiguration,
   sendLogicalRequest,
@@ -28,6 +30,8 @@ import {
   TOOL_ACTIVITY_DETAIL_MINOR,
   type ToolActivityDetailFrame,
 } from "@kraka/protocol";
+import { installEarlierPage } from "./thread-list";
+import type { EarlierSettledRequest } from "@kraka/protocol";
 import { ThreadInstallation } from "./thread-installation";
 import {
   reflectInputReceipt,
@@ -73,6 +77,7 @@ type Host = {
     commandId?: CommandId,
   ) => SignedRequest | Promise<SignedRequest>;
   id: () => SubscriptionId;
+  opened?: (sub: ThreadInstallation) => void;
   receipt?: () => void;
   textReturned?: (commandId: CommandId, result: TextReturnResult) => void;
   pageStaged?: (page: SubscriptionPage) => void | Promise<void>;
@@ -210,15 +215,24 @@ export class ThreadReplica {
       return this.request(await signed);
     });
   }
-  private async invalidate(cursor: SyncCursor | null) {
+  private async invalidate(cursor: SyncCursor | null, listShapeChanged = false) {
     if (!cursor) return;
     await this.host.store.transact((old) => {
-      const current = old.scopes[scopeKey(cursor)]?.cursor;
-      return {
-        next: current && sameRange(current, cursor) ? emptyThreadCache() : old,
-        result: undefined,
-      };
+      const key = scopeKey(cursor),
+        current = old.scopes[key]?.cursor;
+      if (!current || !sameRange(current, cursor)) return { next: old, result: undefined };
+      if (listShapeChanged && cursor.scope.kind === "list") {
+        const scopes = { ...old.scopes };
+        delete scopes[key];
+        return { next: { ...old, scopes }, result: undefined };
+      }
+      return { next: emptyThreadCache(), result: undefined };
     });
+  }
+  openList(projectId: ProjectId | null, cached: SyncCursor | null, cold = false, mayReset = true) {
+    return this.orderStream(() =>
+      this.openScope({ kind: "list", projectId }, cached, cold, mayReset),
+    );
   }
   async open(
     threadId: Open["payload"]["threadId"],
@@ -226,10 +240,12 @@ export class ThreadReplica {
     cold = false,
     mayReset = true,
   ) {
-    return this.orderStream(() => this.openThread(threadId, cached, cold, mayReset));
+    return this.orderStream(() =>
+      this.openScope({ kind: "thread", threadId }, cached, cold, mayReset),
+    );
   }
-  private async openThread(
-    threadId: Open["payload"]["threadId"],
+  private async openScope(
+    scope: { kind: "list"; projectId: ProjectId | null } | { kind: "thread"; threadId: ThreadId },
     cached: SyncCursor | null,
     cold = false,
     mayReset = true,
@@ -244,26 +260,58 @@ export class ThreadReplica {
     const recheckTodos = after
       ? Object.values(cache.rows).flatMap(({ row }) =>
           row?.objectType === "todoRequest" &&
-          row.value.threadId === threadId &&
+          (scope.kind === "list" || row.value.threadId === scope.threadId) &&
           row.value.state.kind === "open"
             ? [row.value.id]
             : [],
         )
       : [];
     const streamId = ++this.lastId;
-    const req = await this.sign("subscription.openThread", {
-      threadId,
-      streamId,
-      subscriptionId: this.host.id(),
-      after,
-      knownWindow,
-      recheckTodos,
-    });
-    if (req.method !== "subscription.openThread") throw Error("Unexpected signed intent");
+    const membership = after && cache.scopes[scopeKey(after)];
+    const req =
+      scope.kind === "list"
+        ? await this.sign("subscription.openList", {
+            projectId: scope.projectId,
+            streamId,
+            subscriptionId: this.host.id(),
+            after,
+            windowShapeVersion: 2,
+            knownThreads: membership
+              ? Object.values(membership.listRows ?? {}).map(({ threadId, version }) => ({
+                  threadId,
+                  version,
+                }))
+              : [],
+            recheckTodos: [
+              ...new Set([
+                ...recheckTodos,
+                ...(membership
+                  ? Object.values(membership.facts ?? {}).flatMap((f) =>
+                      [f.root, ...f.descendants].flatMap((s) =>
+                        s.requests
+                          .filter((r) => r.request.state.kind === "open")
+                          .map((r) => r.request.id),
+                      ),
+                    )
+                  : []),
+              ]),
+            ],
+          })
+        : await this.sign("subscription.openThread", {
+            threadId: scope.threadId,
+            streamId,
+            subscriptionId: this.host.id(),
+            after,
+            knownWindow,
+            recheckTodos,
+          });
+    if (req.method !== "subscription.openThread" && req.method !== "subscription.openList")
+      throw Error("Unexpected signed intent");
     const sub = new ThreadInstallation(
       req,
       {
         store: this.host.store,
+        owner: this.expected.principal.id,
         ack: (a) => {
           void this.rpc(a.method, a.payload)
             .then((receipt) => {
@@ -286,9 +334,13 @@ export class ThreadReplica {
             reason === "databaseGenerationChanged" ||
             reason === "shapeChanged";
           const restart = async () => {
-            if (incompatible) await this.invalidate(cached);
+            if (incompatible) await this.invalidate(cached, reason === "shapeChanged");
             if (mayReset && !this.closed)
-              await (await this.open(threadId, incompatible ? null : cached, true, false)).receipt;
+              await (
+                await this.orderStream(() =>
+                  this.openScope(scope, incompatible ? null : cached, true, false),
+                )
+              ).receipt;
           };
           void restart().catch(() => this.close());
         },
@@ -296,8 +348,25 @@ export class ThreadReplica {
       cached,
     );
     this.streams.set(streamId, sub);
+    this.host.opened?.(sub);
     this.peer.receive.open(streamId);
     return { sub, receipt: this.request(req), streamId };
+  }
+  async earlier(head: SyncCursor, after: EarlierSettledRequest["after"] = null) {
+    if (head.scope.kind !== "list" || head.environmentId !== this.hello.identity.id)
+      throw Error("Expected authorized list");
+    const target =
+      head.scope.projectId === null
+        ? { kind: "environment", environmentId: head.environmentId }
+        : { kind: "project", projectId: head.scope.projectId };
+    const receipt = await this.orderStream(() =>
+      this.rpc("thread.readEarlierSettled", { target, after }),
+    );
+    if (receipt.kind !== "accepted" || receipt.result.kind !== "earlierSettled")
+      throw Error(receipt.kind === "rejected" ? receipt.failure.kind : "Earlier page unavailable");
+    const page = receipt.result.page;
+    await installEarlierPage(this.host.store, head, after, page);
+    return page;
   }
   async history(
     head: SyncCursor,
@@ -559,7 +628,10 @@ export class ThreadReplica {
         for (const listener of this.settingListeners) void listener(m).catch(() => this.close());
         return;
       }
-      if (pending.request.method === "subscription.openThread")
+      if (
+        pending.request.method === "subscription.openThread" ||
+        pending.request.method === "subscription.openList"
+      )
         this.streams
           .get(pending.request.payload.streamId)
           ?.frame({ epoch: this.peer.epoch, streamId: 0, message: m });

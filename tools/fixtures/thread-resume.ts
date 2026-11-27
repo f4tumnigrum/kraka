@@ -32,6 +32,8 @@ type Options = {
     data: import("@kraka/protocol").WireMessage,
     send: (data: import("@kraka/protocol").WireMessage) => void,
   ) => void;
+  holdSeal?: (head: SyncCursor) => Promise<void>;
+  captureReply?: (wire: import("@kraka/protocol").WireMessage) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
@@ -59,6 +61,7 @@ export async function connectReplica(
   let replica: ThreadReplica | undefined,
     seq = 0,
     bytes = 0,
+    replyBytes = 0,
     arrival = 0;
   const messages: Observation[] = [],
     heads: SyncCursor[] = [];
@@ -77,13 +80,25 @@ export async function connectReplica(
     ready.reject(Error("Replica socket closed"));
     closed.resolve();
   };
+  let held: Promise<void> | null = null;
   socket.onmessage = async (e) => {
     arrival = performance.now();
     try {
       const wire = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
       bytes += wireBytes(wire, utf8);
+      replyBytes += wireBytes(wire, utf8);
+      opts.captureReply?.(wire);
       if (replica) {
         opts.wire?.(wire);
+        if (held) await held;
+        if (opts.holdSeal && typeof wire === "string") {
+          const frame = decodeFrame(wire, utf8);
+          if (frame.lane === "control" && frame.message.kind === "subscription.seal") {
+            held = opts.holdSeal(frame.message.cursor);
+            await held;
+            held = null;
+          }
+        }
         replica.peer.input(wire);
         replica.peer.pump();
         return;
@@ -224,6 +239,7 @@ export async function connectReplica(
       messages,
       cache,
       bytes: () => bytes,
+      replyBytes: () => replyBytes,
       async at(position: string) {
         await until(() => heads.some((h) => h.through === position), "installed " + position);
         return heads.find((h) => h.through === position)!;
@@ -266,7 +282,7 @@ async function setup(dir: string, root: string, recordSentBytes: boolean, onStag
   const pairing = await startPairedProject({
     stateDir: dir,
     projectId: "project-notes",
-    requests: [["thread.view", "thread.send"]],
+    requests: [["thread.view", "thread.send", "thread.reply", "owner.decide", "term.input"]],
   });
   const stateDir = join(pairing.stateDir, "host");
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
@@ -322,6 +338,7 @@ async function setup(dir: string, root: string, recordSentBytes: boolean, onStag
       f = await launch();
       exit = undefined;
     },
+    pairing,
     dir,
     stateDir,
     threadId,

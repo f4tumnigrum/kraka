@@ -39,6 +39,7 @@ import {
   resolveDiffDirectory,
   settingCommand,
   watchSettingFile,
+  applyThreadChange,
   type FirstSendStore,
 } from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
@@ -150,6 +151,12 @@ export async function threadConnection(
         }
         return !!host.store.ceiling(session.principal.id, target, permission);
       };
+      function visibility() {
+        const n = host.store.db
+          .query<{ n: string }, []>("SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes")
+          .get()?.n;
+        return JSON.stringify([session?.principal.id, n]);
+      }
       const allows = (threadId: ThreadId, permission: PermissionItem) =>
         allowsTarget({ kind: "thread", threadId }, permission);
       const allowsWorkspace = (target: WorkspaceTarget) =>
@@ -276,13 +283,40 @@ export async function threadConnection(
             store,
             {
               principal: actor.principal.id,
-              visibility: () => {
-                const n = host.store.db
-                  .query<{ n: string }, []>(
-                    "SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes",
-                  )
-                  .get()?.n;
-                return JSON.stringify([actor.principal.id, n]);
+              visibility,
+              canList: (projectId) => {
+                if (!session || !usable(session.signer)) return false;
+                if (
+                  projectId &&
+                  !host.store.db
+                    .query("SELECT 1 FROM objects WHERE kind='project' AND id=?")
+                    .get(projectId)
+                ) {
+                  if (!store.db.query("SELECT 1 FROM projects WHERE id=?").get(projectId))
+                    return false;
+                  host.store.provisionProject(projectId);
+                }
+                const target = projectId
+                  ? { kind: "project" as const, projectId }
+                  : { kind: "environment" as const, environmentId: host.identity.id };
+                return !!host.store.ceiling(actor.principal.id, target, "thread.view");
+              },
+              canAnswer: (todo) => {
+                if (
+                  todo.state.kind !== "open" ||
+                  (todo.state.route.kind === "live" && !store.todos.isLive(todo))
+                )
+                  return false;
+                if (todo.body.kind === "approval") {
+                  const right = store.todos.get(todo.id)?.binding.approval?.permission;
+                  return (
+                    !!right && allows(todo.threadId, right) && allows(todo.threadId, "owner.decide")
+                  );
+                }
+                return allows(
+                  todo.threadId,
+                  todo.body.kind === "question" ? "thread.reply" : "owner.decide",
+                );
               },
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
@@ -398,7 +432,7 @@ export async function threadConnection(
           let result = gitStatus?.handle(m) ?? null;
           if (
             !result &&
-            m.method === "subscription.openThread" &&
+            (m.method === "subscription.openThread" || m.method === "subscription.openList" || m.method === "tool.readActivity") &&
             gitStatus?.has(m.payload.subscriptionId)
           )
             result = {
@@ -424,6 +458,32 @@ export async function threadConnection(
               (m.method === "input.steer"
                 ? steerCommand?.(principal, m)
                 : stopCommand?.(principal, m)) ?? null;
+          }
+          if (!result && m.method === "thread.changeLifecycle") {
+            result = applyThreadChange(
+              {
+                actor: {
+                  id: actor.principal.id,
+                  environmentId: host.identity.id,
+                  allows: (right, target) =>
+                    target.kind === "thread" && allows(target.threadId, right),
+                },
+                commandId: m.commandId,
+                transaction: store,
+              },
+              m.payload,
+              visibility(),
+            );
+          }
+          if (
+            result?.kind === "accepted" &&
+            (result.result.kind === "earlierSettled" || result.result.kind === "threadChanged")
+          ) {
+            const authorizedAt = visibility();
+            const stream = sendLogicalRequest(peer, result);
+            disclosures.set(m.commandId, { stream, allowed: () => authorizedAt === visibility() });
+            wake();
+            return;
           }
           if (!result && m.method === "thread.rename")
             result = renameThread({

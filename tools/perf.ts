@@ -496,6 +496,12 @@ export async function prepareBudget(root: string, role: Role) {
           }
           report = measured(base, { fresh: 10, reused: 10 });
         }
+      } else if (
+        metric === "P5" &&
+        (await Bun.file(join(root, "packages/environment/src/list-pass.ts")).exists())
+      ) {
+        const { measureThreadList } = await import("./measure-thread-list");
+        report = measured(base, await measureThreadList(base, root, nextBlock));
       } else if ((metric === "P3" || metric === "P4") && subscriptions) {
         const { measureThreadResume } = await import("./measure-thread-resume");
         const series = await measureThreadResume(base, root, metric, nextBlock);

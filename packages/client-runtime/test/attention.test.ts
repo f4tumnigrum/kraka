@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import * as v from "valibot";
 import {
   AttentionFactsSchema,
+  SubscriptionPageSchema,
+  SyncCursorSchema,
+  subscriptionWirePage,
   SyncPositionSchema,
   AttentionOccurrenceSchema,
   AttentionReadSchema,
@@ -12,6 +15,10 @@ import {
 } from "@kraka/protocol";
 import {
   currentReminders,
+  installThreadPass,
+  installedList,
+  emptyThreadCache,
+  type ThreadCacheStore,
   reminderForOccurrence,
   claimReminder,
   interpretAttention,
@@ -240,4 +247,140 @@ test("enabling reminders includes older open requests while keeping prior comple
     "question",
     "roundCompleted",
   ]);
+});
+
+test("list defaults round-trip raw facts and a missing fact set cannot certify a ready row", async () => {
+  const through = v.parse(SyncCursorSchema, {
+    environmentId: "env",
+    databaseGeneration: "era",
+    visibilityGeneration: "v",
+    scope: { kind: "list", projectId: null },
+    shapeVersion: 2,
+    through: "100",
+  });
+  const open = { kind: "window.enter", key: { objectType: "thread", id: "root" } };
+  const summary = {
+    kind: "thread.summary",
+    summary: {
+      threadId: "root",
+      projectId: "project",
+      parentThreadId: null,
+      version: "9",
+      title: "Root",
+      createdAt: 22,
+      lastActivityAt: 22,
+      lifecycle: {
+        archivedAt: null,
+        state: {
+          kind: "active",
+          pinnedAt: null,
+          pinPosition: null,
+          manualPosition: null,
+          snoozedUntil: null,
+        },
+      },
+      openTodos: 0,
+      activeRounds: 0,
+    },
+  };
+  const page = v.parse(SubscriptionPageSchema, {
+    kind: "subscription.page",
+    subscriptionId: "sub",
+    passId: "pass",
+    through,
+    pageNumber: 0,
+    pageCount: 1,
+    changes: [
+      summary,
+      open,
+      {
+        kind: "list.counts",
+        counts: { active: 1, settled: 0, archived: 0, pinned: 0, snoozed: 0 },
+      },
+    ],
+  });
+  const begin = {
+    kind: "subscription.begin" as const,
+    mode: "replace" as const,
+    through,
+    base: null,
+    subscriptionId: page.subscriptionId,
+    passId: page.passId,
+  };
+  let saved = emptyThreadCache();
+  const store: ThreadCacheStore = {
+    async transact(edit) {
+      const { next, result } = edit(saved);
+      saved = next;
+      return result;
+    },
+  };
+  const install = () =>
+    installThreadPass(store, null, { begin, recheck: new Set(), pages: [page] });
+  await expect(install()).rejects.toThrow("Incomplete list facts");
+  expect(saved).toEqual(emptyThreadCache());
+  const empty = facts({ readThrough: null });
+  page.changes.push({ kind: "attention.facts", facts: empty });
+  const sparse = JSON.parse(JSON.stringify(subscriptionWirePage(page)));
+  expect(sparse.changes[0].summary.lifecycle).toEqual({});
+  expect(sparse.changes[1].key).toEqual({ id: "root" });
+  expect(sparse.changes[3].facts.root).toEqual({ threadId: "root" });
+  expect(v.parse(SubscriptionPageSchema, sparse)).toEqual(page);
+  expect(
+    v.safeParse(SubscriptionPageSchema, { ...sparse, through: { ...through, shapeVersion: 1 } })
+      .success,
+  ).toBe(false);
+  for (const field of ["threadId", "projectId", "lifecycle", "version", "createdAt"]) {
+    const invalid = structuredClone(sparse);
+    delete invalid.changes[0].summary[field];
+    expect(v.safeParse(SubscriptionPageSchema, invalid).success).toBe(false);
+  }
+  expect(await install()).toBe("installed");
+  expect(installedList(saved, { status: "current", installed: through })?.rows[0]?.state).toBe(
+    "ready",
+  );
+  const populated = v.parse(SubscriptionPageSchema, {
+    ...page,
+    changes: [
+      {
+        ...summary,
+        summary: {
+          ...summary.summary,
+          lastActivityAt: 50,
+          lifecycle: { archivedAt: 22, state: { kind: "settled", at: 21, reason: "manual" } },
+        },
+      },
+      {
+        kind: "attention.facts",
+        facts: facts(
+          {
+            grouping: "archived",
+            requests: [request("r", "approval", "11")],
+            rounds: [
+              activity(
+                {
+                  kind: "finished",
+                  root: rootTurn,
+                  receipt: { sessionId: "s", itemId: "receipt" },
+                  endedAt: 2,
+                  captureId: "c",
+                  endTimeEvidence: {
+                    source: "executorReported",
+                    executorEndedAt: 2,
+                    environmentObservedAt: null,
+                  },
+                },
+                { kind: "plan", deferredAtEnd: true },
+                { resetAt: 0 },
+              ),
+            ],
+          },
+          [{ ...root, threadId: "child" }],
+        ),
+      },
+    ],
+  });
+  expect(
+    v.parse(SubscriptionPageSchema, JSON.parse(JSON.stringify(subscriptionWirePage(populated)))),
+  ).toEqual(populated);
 });

@@ -97,3 +97,4 @@ export {
 export type { BrowserHostOptions };
 export { startBrowserPage, pageSession, pagePairing } from "./page";
 export * from "./settings";
+export { openBrowserList } from "./thread-list";

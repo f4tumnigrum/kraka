@@ -6,3 +6,4 @@ export { ownedDirectory } from "./private-directory";
 export * from "./thread-cache";
 export * from "./git-client";
 export * from "./settings";
+export * from "./thread-list";

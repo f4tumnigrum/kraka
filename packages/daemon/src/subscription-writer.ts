@@ -3,6 +3,7 @@ import {
   ContentTransferIdSchema,
   TRANSPORT_LIMITS,
   wireBytes,
+  subscriptionWirePage,
   type ControlMessage,
   type FlowPeer,
   type PullFrame,
@@ -90,13 +91,14 @@ export class SubscriptionWriter {
       message: this.page,
     };
     const utf8 = this.peer.port.utf8;
-    const size = wireBytes(JSON.stringify(frame), utf8);
+    const wirePage = subscriptionWirePage(this.page);
+    const size = wireBytes(JSON.stringify({ ...frame, message: wirePage }), utf8);
     if (size <= TRANSPORT_LIMITS.maxDataChunkBytes) {
       if (size > capacity) return null;
       this.page = null;
       return frame;
     }
-    const bytes = utf8.encode(JSON.stringify(this.page));
+    const bytes = utf8.encode(JSON.stringify(wirePage));
     const transferId = v.parse(ContentTransferIdSchema, `page-${this.id}-${offsetBytes}`);
     this.peer.control({
       kind: "transport.content",

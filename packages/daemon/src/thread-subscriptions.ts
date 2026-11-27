@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import {
   binarySource,
+  listWireChange,
   ContentTransferIdSchema,
   SyncPassIdSchema,
   SubscriptionIdSchema,
@@ -10,6 +11,9 @@ import {
   type CommandReceipt,
   type FlowPeer,
   type HistoryPage,
+  type PrincipalId,
+  type TodoRequest,
+  type ProjectId,
   type SignedRequest,
   type SubscriptionId,
   type SubscriptionPage,
@@ -21,6 +25,9 @@ import {
 import {
   readActivity,
   planThreadPass,
+  planListPass,
+  earlierSettledPage,
+  type ListOpen,
   type FirstSendStore,
   type AuthorizedScope,
   type StoredToolActivityVersion,
@@ -31,10 +38,11 @@ import { SubscriptionWriter } from "./subscription-writer";
 
 type Plan = Extract<ReturnType<typeof planThreadPass>, { kind: "pass" }>;
 type Sub = {
-  open: ThreadOpen;
+  open: ThreadOpen | ListOpen;
   writer: SubscriptionWriter;
   off: () => void;
   dirty: boolean;
+  installed: import("@kraka/protocol").SyncCursor | null;
   flight: { plan: Plan; id: SubscriptionPage["passId"]; count: number } | null;
 };
 type ActivitySub = {
@@ -47,7 +55,9 @@ type ActivitySub = {
   off: () => void;
 };
 type Access = {
-  principal: string;
+  principal: PrincipalId;
+  canList: (id: ProjectId | null) => boolean;
+  canAnswer: (todo: TodoRequest) => boolean;
   visibility: () => string;
   canRead: (thread: ThreadId) => boolean;
   timelineItems: boolean;
@@ -65,7 +75,7 @@ export class ThreadSubscriptions {
     private inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   ) {}
   has(id: SubscriptionId) {
-    return this.subs.has(id);
+    return this.subs.has(id) || this.activities.has(id);
   }
   private scope(threadId: ThreadId): AuthorizedScope {
     const permissions = new Map<ThreadId, boolean>();
@@ -83,10 +93,24 @@ export class ThreadSubscriptions {
       protocolMinor: this.access.protocolMinor,
     };
   }
+  private allowed(open: Sub["open"]) {
+    return "threadId" in open
+      ? this.access.canRead(open.threadId)
+      : this.access.canList(open.projectId);
+  }
+  private list(projectId: ProjectId | null) {
+    return this.store.sync.readList(
+      { kind: "list", projectId },
+      this.access.visibility(),
+      this.access.principal,
+      this.access.canRead,
+      this.access.canAnswer,
+    );
+  }
   recheckAccess() {
     const visibility = this.access.visibility();
     for (const s of this.subs.values()) {
-      if (!this.access.canRead(s.open.threadId)) {
+      if (!this.allowed(s.open)) {
         this.peer.send.withdraw(s.writer.id);
         this.end(s, "authorizationRevoked");
         continue;
@@ -280,15 +304,33 @@ export class ThreadSubscriptions {
     this.wake();
   }
   private advance(s: Sub) {
-    const scope = this.scope(s.open.threadId);
-    if (!scope.canRead(scope.threadId)) {
+    if (!this.allowed(s.open)) {
       this.end(s, "authorizationRevoked");
       return;
     }
     if (s.flight || !s.dirty) return;
     s.dirty = false;
-    const view = this.store.sync.read(scope, this.access.visibility());
-    const plan = planThreadPass({ ...s.open, authorizedScope: scope, readView: view });
+    const open = s.open;
+    if ("windowShapeVersion" in open && open.windowShapeVersion !== 2) {
+      this.peer.control({
+        kind: "subscription.reset",
+        subscriptionId: open.subscriptionId,
+        reason: "shapeChanged",
+      });
+      this.end(s, "clientClosed");
+      return;
+    }
+    const plan =
+      "threadId" in open
+        ? this.threadPlan(open)
+        : planListPass({
+            actor: this.access.principal,
+            scope: { kind: "list", projectId: open.projectId },
+            knownThreads: open.knownThreads,
+            base: open.after,
+            readView: this.list(open.projectId),
+            recheckTodos: open.recheckTodos,
+          });
     if (plan.kind === "reset") {
       this.peer.control({
         kind: "subscription.reset",
@@ -307,7 +349,13 @@ export class ThreadSubscriptions {
     let part: SubscriptionPage["changes"] = [],
       bytes = 0;
     for (const change of plan.changes) {
-      const n = Buffer.byteLength(JSON.stringify(change));
+      const n = Buffer.byteLength(
+        JSON.stringify(
+          plan.through.scope.kind === "list" && plan.through.shapeVersion === 2
+            ? listWireChange(change)
+            : change,
+        ),
+      );
       if (part.length && bytes + n > 16384) {
         parts.push(part);
         part = [];
@@ -350,17 +398,54 @@ export class ThreadSubscriptions {
     )
       this.end(s, "backlogExceeded");
   }
+  private threadPlan(open: ThreadOpen) {
+    const scope = this.scope(open.threadId);
+    return planThreadPass({
+      ...open,
+      authorizedScope: scope,
+      readView: this.store.sync.read(scope, this.access.visibility()),
+    });
+  }
   handle(req: SignedRequest): CommandReceipt | null {
     const commandId = req.commandId;
     const accepted = (
       result: Extract<CommandReceipt, { kind: "accepted" }>["result"],
     ): CommandReceipt => ({ kind: "accepted", commandId, result });
-    const rejected = (kind: "invalidState" | "notFound"): CommandReceipt => ({
+    const rejected = (kind: "invalidState" | "notFound" | "cursorExpired"): CommandReceipt => ({
       kind: "rejected",
       commandId,
       failure: { kind },
     });
     switch (req.method) {
+      case "thread.markRead": {
+        const { subscriptionId, threadId, cursor } = req.payload;
+        const sub = this.subs.get(subscriptionId);
+        if (
+          !sub ||
+          !("threadId" in sub.open) ||
+          sub.open.threadId !== threadId ||
+          !this.access.canRead(threadId)
+        )
+          return rejected("notFound");
+        if (
+          !sub.installed ||
+          !sameHead(sub.installed, cursor) ||
+          cursor.visibilityGeneration !== this.access.visibility()
+        )
+          return rejected("invalidState");
+        this.store.sync.markRead(this.access.principal, threadId, cursor.through);
+        return accepted({ kind: "actionAccepted" });
+      }
+      case "thread.readEarlierSettled": {
+        const { target, after } = req.payload;
+        if (target.kind === "environment" && target.environmentId !== req.environmentId)
+          return rejected("invalidState");
+        const project = target.kind === "project" ? target.projectId : null;
+        if (!this.access.canList(project)) return rejected("notFound");
+        const page = earlierSettledPage(this.list(project), after);
+        return page ? accepted({ kind: "earlierSettled", page }) : rejected("cursorExpired");
+      }
+      case "subscription.openList":
       case "subscription.openThread": {
         const open = req.payload;
         if (
@@ -368,18 +453,13 @@ export class ThreadSubscriptions {
           open.after.environmentId !== req.environmentId
         )
           return rejected("invalidState");
-        if (
-          this.activities.has(open.subscriptionId) ||
-          this.subs.has(open.subscriptionId) ||
-          !this.access.canRead(open.threadId)
-        )
-          return rejected("notFound");
+        if (this.has(open.subscriptionId) || !this.allowed(open)) return rejected("notFound");
         const writer = new SubscriptionWriter(this.peer, open.subscriptionId, this.wake);
         if (writer.id !== open.streamId) {
           writer.end("clientClosed");
           return rejected("invalidState");
         }
-        const s: Sub = { open, writer, off: () => {}, dirty: true, flight: null };
+        const s: Sub = { open, writer, off: () => {}, dirty: true, installed: null, flight: null };
         this.subs.set(open.subscriptionId, s);
         s.off = this.store.sync.subscribe(() => {
           s.dirty = true;
@@ -409,7 +489,7 @@ export class ThreadSubscriptions {
         }
         const sub = this.subs.get(req.payload.subscriptionId);
         if (!sub) return rejected("notFound");
-        if (!this.access.canRead(sub.open.threadId)) {
+        if (!this.allowed(sub.open)) {
           this.end(sub, "authorizationRevoked");
           return rejected("notFound");
         }
@@ -421,12 +501,23 @@ export class ThreadSubscriptions {
         if (!flight || flight.id !== req.payload.passId) return rejected("invalidState");
         if (req.method === "subscription.installed") {
           if (!sameHead(req.payload.cursor, flight.plan.through)) return rejected("invalidState");
-          sub.open = {
-            ...sub.open,
-            after: flight.plan.through,
-            knownWindow: flight.plan.members,
-            recheckTodos: [],
-          };
+          sub.installed = flight.plan.through;
+          sub.open =
+            "knownThreads" in sub.open
+              ? {
+                  ...sub.open,
+                  after: flight.plan.through,
+                  recheckTodos: [],
+                  knownThreads: flight.plan.members.flatMap(({ key, version }) =>
+                    key.objectType === "thread" ? [{ threadId: key.id, version }] : [],
+                  ),
+                }
+              : {
+                  ...sub.open,
+                  after: flight.plan.through,
+                  knownWindow: flight.plan.members,
+                  recheckTodos: [],
+                };
           sub.flight = null;
           if (sub.dirty)
             queueMicrotask(() => {

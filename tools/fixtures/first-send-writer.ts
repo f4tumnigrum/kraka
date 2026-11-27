@@ -114,6 +114,19 @@ const writer = await startWriter(
   {
     ...(point === "resume" || point === "activity-ledger"
       ? {
+          browserFixture(path: string) {
+            if (path !== "/attention" && path !== "/reader.js") return null;
+            const html = path === "/attention";
+            return new Response(
+              Bun.file(join(state, html ? "attention-page.html" : "attention-reader.js")),
+              {
+                headers: {
+                  "Content-Type": html ? "text/html" : "text/javascript",
+                  "Cache-Control": "no-store",
+                },
+              },
+            );
+          },
           threadCommand: scenarioInput,
           ...(point === "activity-ledger" ? { observeFrame: recordFixtureFrame } : {}),
           inspectPage(page: import("@kraka/protocol").SubscriptionPage) {

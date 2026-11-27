@@ -1,3 +1,4 @@
+import { subscriptionWirePage } from "./list-wire";
 import * as v from "valibot";
 import {
   type ContentChunkHeader,
@@ -28,7 +29,11 @@ export function encodeFrame(frame: TransportFrame, utf8: Utf8): WireMessage {
     bytes.set(payload, 4 + json.length);
     return bytes;
   }
-  const text = JSON.stringify(frame);
+  const text = JSON.stringify(
+    frame.lane === "data" && frame.message.kind === "subscription.page"
+      ? { ...frame, message: subscriptionWirePage(frame.message) }
+      : frame,
+  );
   if (wireBytes(text, utf8) > TRANSPORT_LIMITS.maxControlFrameBytes)
     throw new OversizedControlFrame("Oversized encoded frame");
   return text;

@@ -20,6 +20,7 @@ import {
 } from "./terminal";
 import { WorktreeViewSchema } from "./worktrees";
 import * as v from "valibot";
+import { ListValueChangeSchema } from "./list-wire";
 import { AttentionFactsSchema } from "./attention";
 import {
   ConnectionChallengeIdSchema,
@@ -279,7 +280,7 @@ export const ObjectChangeSchema = v.union([
   }),
 ]);
 
-export const SubscriptionPageSchema = v.strictObject({
+const fullPage = v.strictObject({
   kind: v.literal("subscription.page"),
   subscriptionId: SubscriptionIdSchema,
   passId: SyncPassIdSchema,
@@ -288,7 +289,17 @@ export const SubscriptionPageSchema = v.strictObject({
   pageCount,
   changes: v.array(ObjectChangeSchema),
 });
-export type SubscriptionPage = v.InferOutput<typeof SubscriptionPageSchema>;
+const listPage = v.strictObject({
+  ...fullPage.entries,
+  through: v.strictObject({
+    ...SyncCursorSchema.entries,
+    shapeVersion: v.literal(2),
+    scope: SyncCursorSchema.entries.scope.options[0],
+  }),
+  changes: v.array(v.union([ListValueChangeSchema, ObjectChangeSchema])),
+});
+export const SubscriptionPageSchema = v.union([listPage, fullPage]);
+export type SubscriptionPage = v.InferOutput<typeof fullPage>;
 
 export const HistoryPageSchema = v.strictObject({
   kind: v.literal("history.page"),

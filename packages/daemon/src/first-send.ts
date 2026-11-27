@@ -492,7 +492,7 @@ export async function startWriter<H extends object>(
         if (url.pathname === "/ws") {
           const admission = checkBusinessUpgrade(
             url.pathname + url.search,
-            origin ? [origin] : [],
+            origin !== null ? [origin] : [],
             fixture ? [server.url.origin] : [],
             URL,
           );
@@ -522,11 +522,11 @@ export async function startWriter<H extends object>(
           if (server.upgrade(req, { data: { app, flow: null } })) return;
           return new Response(null, { status: 400 });
         }
-        if (origin !== null) return new Response(null, { status: 403 });
-        if (fixture && req.method === "GET") {
+        if (fixture && req.method === "GET" && !url.search && (origin === null || origin === server.url.origin)) {
           const page = fixture(url.pathname);
           if (page) return page;
         }
+        if (origin !== null) return new Response(null, { status: 403 });
         if (/^\/instance\/[0-9a-f]{48}$/.test(url.pathname)) {
           if (url.search === "?idle" && (turns.size || preparing.size))
             return new Response(null, { status: 409 });

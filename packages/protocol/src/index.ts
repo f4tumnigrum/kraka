@@ -44,3 +44,5 @@ export * from "./executor-instance";
 export { ControlStream } from "./control-stream";
 export * from "./sync";
 export * from "./logical-control";
+
+export { subscriptionWirePage, listWireChange } from "./list-wire";
