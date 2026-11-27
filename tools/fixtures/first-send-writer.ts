@@ -75,7 +75,7 @@ if (point === "peer" || point === "externalWrite") {
   }) as typeof invoke;
 }
 let openedStore: FirstSendStore | undefined;
-if (point === "recovery") attachPeer(adapter, state);
+const waitForClaim = point === "recovery" ? attachPeer(adapter, state) : undefined;
 const recover = point === "recovery" && existsSync(join(state, "dedup"));
 const writer = await startWriter(
   state,
@@ -114,7 +114,7 @@ const writer = await startWriter(
         }
       : {}),
     async beforeDispatch() {
-      if (point === "recovery") while (existsSync(join(state, "hold-claim"))) await Bun.sleep(3);
+      if (waitForClaim) await waitForClaim();
       if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {
         const input = JSON.parse(readFileSync(join(state, "seed-handoff"), "utf8"));
         const round = readRound(openedStore.db, input.roundId);
