@@ -350,7 +350,8 @@ export function selectRoute(options: Options) {
         scheduleRetry();
       }
     },
-    async send(command: RouteCommand) {
+    async send(input: RouteCommand) {
+      const command: RouteCommand = JSON.parse(canonicalJson(input));
       const current = sender;
       if (!current) return false;
       async function sendOn(session: Sender) {

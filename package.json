@@ -26,6 +26,7 @@
     "@kraka/adapter-replay": "workspace:*",
     "@kraka/environment": "workspace:*",
     "@kraka/protocol": "workspace:*",
+    "@types/ws": "8.18.2",
     "@valibot/to-json-schema": "1.8.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
