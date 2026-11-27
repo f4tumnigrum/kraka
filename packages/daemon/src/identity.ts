@@ -1,10 +1,20 @@
+import { createServer, type IncomingMessage } from "node:http";
+import { WebSocketServer, type WebSocket } from "ws";
 import * as v from "valibot";
+import { exchangeVerified, type AccessStore } from "@kraka/environment";
 import {
   BUSINESS_CLOSE_CODES,
   checkBusinessUpgrade,
+  canonicalHttpOrigin,
   ClientAuthenticationSchema,
   SignedRequestSchema,
   ControlMessageSchema,
+  PairingRequestSchema,
+  PairingExchangeSchema,
+  ConnectionIdSchema,
+  ConnectionChallengeIdSchema,
+  EnvironmentSessionIdSchema,
+  PairingClaimIdSchema,
   canonicalJson,
   base64url,
   TRANSPORT_LIMITS,
@@ -18,26 +28,41 @@ import {
   type SessionRejected,
   type SessionAuthorized,
   type ClientAuthentication,
+  type PairingPending,
+  type PairingChallenge,
+  type SubscriptionId,
+  type ThreadId,
+  type ControlMessage,
+  type DeviceId,
+  type CommandId,
+  type DevicePairingResult,
 } from "@kraka/protocol";
 import { verifyP256 } from "@kraka/protocol/web-crypto";
-import {
-  ConnectionIdSchema,
-  ConnectionChallengeIdSchema,
-  EnvironmentSessionIdSchema,
-} from "@kraka/protocol";
 
-/** The host supplies its own identity key and resolves registrations locally. */
+type IdentityDevice = Pick<
+  RegisteredDevice,
+  "identity" | "deviceId" | "keyId" | "deviceKey" | "principal" | "publicKey"
+>;
 export interface IdentityPort {
   identity: EnvironmentIdentity;
   sign(message: string): Promise<string>;
-  registration(signer: ClientAuthentication["signer"]): RegisteredDevice | null;
+  registration(signer: ClientAuthentication["signer"]): IdentityDevice | null;
   configuration: Pick<
     SessionConfiguration,
     "version" | "environment" | "executors" | "description"
   >;
-  request(device: RegisteredDevice, request: SignedRequest): Promise<CommandReceipt>;
+  request(device: IdentityDevice, request: SignedRequest): CommandReceipt | Promise<CommandReceipt>;
+  access?: AccessStore;
+  claimListener?: () => () => void;
+  observed?: (event: {
+    kind: "hello" | "proof" | "applied" | "selected" | "exchanged" | "accepted" | "revoked";
+    deviceId?: DeviceId;
+    commandId?: CommandId;
+  }) => void;
+  beforePairingReply?: (result: DevicePairingResult) => Promise<void>;
 }
 type Peer = {
+  socket: WebSocket;
   hello: Omit<ServerHello, "identityProof">;
   issued: number;
   session: SessionAuthorized | null;
@@ -45,187 +70,431 @@ type Peer = {
   closed: boolean;
   pendingBytes: number;
   work: Promise<void>;
+  application: PairingPending | null;
+  challenge: { frame: PairingChallenge; issuedAt: number } | null;
+  subscriptions: Map<SubscriptionId, ThreadId>;
 };
-
+const randomChallenge = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
+function readFrame(text: string): Record<string, unknown> {
+  const raw: unknown = JSON.parse(text);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw Error("Expected control object");
+  const keys: Set<string>[] = [];
+  for (const token of text.matchAll(/"(?:[^"\\]|\\.)*"\s*:?|[{}]/g)) {
+    if (token[0] === "{") keys.push(new Set());
+    else if (token[0] === "}") keys.pop();
+    else if (token[0].endsWith(":")) {
+      const key: string = JSON.parse(token[0].slice(0, -1));
+      const object = keys.at(-1);
+      if (!object || object.has(key)) throw Error("Duplicate JSON property");
+      object.add(key);
+    }
+  }
+  return raw as Record<string, unknown>;
+}
 export function listenIdentity(
   host: IdentityPort,
   port = 0,
   allowedOrigins: readonly string[] = [],
+  publishedOrigin?: string,
 ) {
   if (host.configuration.environment.id !== host.identity.id)
     throw Error("Configuration belongs to a different environment");
-  const close = (ws: Bun.ServerWebSocket<Peer>, code: number) => {
-    ws.data.closed = true;
-    ws.close(code);
-  };
-  function reject(ws: Bun.ServerWebSocket<Peer>, reason: SessionRejected["reason"]) {
-    ws.send(JSON.stringify({ kind: "session.rejected", reason } satisfies SessionRejected));
-    close(ws, BUSINESS_CLOSE_CODES.revoked);
-  }
-  async function handle(ws: Bun.ServerWebSocket<Peer>, text: string) {
-    const p = ws.data;
+  const now = host.access?.now ?? Date.now;
+  const peers = new Set<Peer>();
+  const origins = new Set(
+    [...allowedOrigins, ...(publishedOrigin === undefined ? [] : [publishedOrigin])].map((raw) => {
+      const origin = canonicalHttpOrigin(raw, URL);
+      if (!origin) throw Error("Invalid configured HTTP origin");
+      return origin;
+    }),
+  );
+  const seen = new Map<string, number>();
+  const sockets = new WebSocketServer({
+    noServer: true,
+    maxPayload: TRANSPORT_LIMITS.maxControlFrameBytes,
+  });
+  function close(p: Peer, code: number) {
     if (p.closed) return;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      return close(ws, 1007);
-    }
-    const hello = p.hello;
-    if (p.session) {
-      const parsed = v.safeParse(ControlMessageSchema, raw);
-      if (parsed.success && parsed.output.kind === "transport.probe") {
-        ws.send(JSON.stringify({ kind: "transport.echo", serial: parsed.output.serial }));
-        return;
-      }
-    }
-    const msg = p.session
-      ? v.safeParse(SignedRequestSchema, raw)
-      : v.safeParse(ClientAuthenticationSchema, raw);
-    if (!msg.success) return close(ws, 1007);
-    const { signature, ...fields } = msg.output;
-    if (
-      fields.protocolVersion.major !== hello.protocolVersion.major ||
-      fields.protocolVersion.minor > hello.protocolVersion.minor
-    )
-      return reject(ws, "unsupportedProtocolVersion");
-    if (
-      fields.environmentId !== hello.identity.id ||
-      fields.connectionId !== hello.connectionId ||
-      fields.challenge !== hello.challenge ||
-      fields.challengeId !== hello.challengeId ||
-      (fields.kind === "client.authenticate" &&
-        (fields.clientNonce !== hello.clientNonce ||
-          performance.now() - p.issued >= PAIRING_LIMITS.challengeMs))
-    )
-      return reject(ws, "challengeExpired");
-    const device = host.registration(fields.signer);
+    p.closed = true;
+    p.challenge = null;
+    p.subscriptions.clear();
+    peers.delete(p);
+    p.socket.close(code);
+  }
+  function send(p: Peer, message: unknown) {
+    if (!p.closed) p.socket.send(JSON.stringify(message));
+  }
+  function reject(p: Peer, reason: SessionRejected["reason"]) {
+    send(p, { kind: "session.rejected", reason } satisfies SessionRejected);
+    close(p, reason === "unsupportedProtocolVersion" ? 1002 : BUSINESS_CLOSE_CODES.revoked);
+  }
+  function challenge(p: Peer) {
+    const app = p.application;
+    if (!host.access || !app || p.closed || p.challenge) return;
+    const s = host.access.invitation(app.inviteId);
+    if (!s || (s.kind !== "selected" && s.kind !== "consumed")) return;
+    const frame: PairingChallenge = {
+      kind: "pairing.challenge",
+      requestId: app.requestId,
+      claimId:
+        s.selection.requestId === app.requestId
+          ? s.selection.claimId
+          : v.parse(PairingClaimIdSchema, crypto.randomUUID()),
+      challengeId: v.parse(ConnectionChallengeIdSchema, crypto.randomUUID()),
+      challenge: randomChallenge(),
+    };
+    p.challenge = { frame, issuedAt: now() };
+    send(p, frame);
+  }
+  if (host.access)
+    host.access.live = {
+      sessions: () => [...peers].flatMap((p) => (p.session ? [p.session] : [])),
+      notify(event) {
+        if (event.kind === "selected") host.observed?.({ kind: "selected" });
+        for (const p of peers) {
+          const session = p.session;
+          if (event.kind === "selected" && p.application?.inviteId === event.inviteId) challenge(p);
+          if (
+            event.kind === "revoked" &&
+            ((session?.signer.kind === "device" &&
+              session.signer.deviceId === event.deviceId &&
+              session.signer.keyId === event.keyId) ||
+              p.application?.deviceId === event.deviceId)
+          )
+            close(p, BUSINESS_CLOSE_CODES.revoked);
+          if (event.kind === "grantsChanged" && session)
+            for (const [id, threadId] of p.subscriptions)
+              if (
+                !host.access?.ceiling(
+                  session.principal.id,
+                  { kind: "thread", threadId },
+                  "thread.view",
+                )
+              ) {
+                p.subscriptions.delete(id);
+                send(p, {
+                  kind: "subscription.ended",
+                  subscriptionId: id,
+                  reason: "authorizationRevoked",
+                });
+              }
+        }
+        if (event.kind === "revoked")
+          host.observed?.({ kind: "revoked", deviceId: event.deviceId });
+      },
+    };
+  function refuseProof(p: Peer, why: SessionRejected["reason"], commandId?: CommandId) {
+    if (!commandId) return reject(p, why);
+    if (why !== "revokedKey")
+      send(p, {
+        kind: "rejected",
+        commandId,
+        failure: { kind: why === "keyExpired" ? "expired" : "invalidProof" },
+      } satisfies CommandReceipt);
+    close(p, BUSINESS_CLOSE_CODES.revoked);
+  }
+  function current(p: Peer, signer: ClientAuthentication["signer"], commandId?: CommandId) {
+    const device = host.registration(signer);
     if (
       !device ||
-      fields.signer.kind !== "device" ||
-      fields.signer.deviceId !== device.deviceId ||
-      fields.signer.keyId !== device.keyId ||
-      device.identity.id !== hello.identity.id ||
-      device.identity.publicKey !== hello.identity.publicKey ||
-      device.identity.keyVersion !== hello.identity.keyVersion
-    )
-      return reject(ws, "unknownKey");
-    if (device.deviceKey.state.kind === "revoked") return reject(ws, "revokedKey");
-    if (device.deviceKey.state.expiresAt <= Date.now()) return reject(ws, "keyExpired");
-    if (
-      fields.sequence !== p.sequence + 1 ||
-      !(await verifyP256(device.publicKey, canonicalJson(fields), signature))
-    )
-      return reject(ws, "invalidSignature");
+      signer.kind !== "device" ||
+      signer.deviceId !== device.deviceId ||
+      signer.keyId !== device.keyId ||
+      canonicalJson(device.identity) !== canonicalJson(p.hello.identity)
+    ) {
+      refuseProof(p, "unknownKey", commandId);
+      return null;
+    }
+    if (device.deviceKey.state.kind === "revoked") {
+      refuseProof(p, "revokedKey", commandId);
+      return null;
+    }
+    if (now() >= device.deviceKey.state.expiresAt) {
+      refuseProof(p, "keyExpired", commandId);
+      return null;
+    }
+    return device;
+  }
+  async function handle(p: Peer, text: string) {
     if (p.closed) return;
-    p.sequence = fields.sequence;
-    if (fields.kind === "client.authenticate") {
+    let raw: Record<string, unknown>;
+    try {
+      raw = readFrame(text);
+    } catch {
+      return close(p, 1007);
+    }
+    const hello = p.hello,
+      store = host.access;
+    if (!p.session && store && raw.kind === "pairing.request") {
+      const parsed = v.safeParse(PairingRequestSchema, raw);
+      if (!parsed.success || (p.application && p.application.requestId !== parsed.output.requestId))
+        return close(p, 1007);
+      const result = store.application(parsed.output);
+      if (typeof result === "string") {
+        send(p, { kind: "pairing.rejected", requestId: parsed.output.requestId, reason: result });
+        return;
+      }
+      p.application = result;
+      host.observed?.({ kind: "applied", deviceId: result.deviceId });
+      send(p, result);
+      challenge(p);
+      return;
+    }
+    if (!p.session && store && raw.kind === "pairing.exchange") {
+      const parsed = v.safeParse(PairingExchangeSchema, raw);
+      if (!parsed.success) return close(p, 1007);
+      const x = parsed.output,
+        c = p.challenge,
+        app = p.application;
+      p.challenge = null;
+      let result: DevicePairingResult = {
+        kind: "pairing.rejected",
+        requestId: x.requestId,
+        reason: "invalidProof",
+      };
       if (
-        fields.features.some((f) => !hello.features.includes(f)) ||
-        new Set(fields.features).size !== fields.features.length
+        c &&
+        app &&
+        x.deviceId === app.deviceId &&
+        x.publicKey === app.publicKey &&
+        x.requestId === app.requestId &&
+        x.inviteId === app.inviteId &&
+        x.protocolVersion.major === hello.protocolVersion.major &&
+        x.protocolVersion.minor <= hello.protocolVersion.minor
+      ) {
+        result = await exchangeVerified({
+          exchange: x,
+          challenge: c.frame,
+          issuedAt: c.issuedAt,
+          now,
+          store,
+          active: () => !p.closed,
+        });
+      }
+      if (result.kind === "pairing.completed")
+        host.observed?.({ kind: "exchanged", deviceId: x.deviceId });
+      await host.beforePairingReply?.(result);
+      send(p, result);
+      return;
+    }
+    if (p.session && raw.kind === "transport.probe") {
+      const parsed = v.safeParse(ControlMessageSchema, raw);
+      if (!parsed.success || parsed.output.kind !== "transport.probe") return close(p, 1007);
+      if (current(p, p.session.signer))
+        send(p, { kind: "transport.echo", serial: parsed.output.serial });
+      return;
+    }
+    if (p.application) return close(p, 1007);
+    const parsed = p.session
+      ? v.safeParse(SignedRequestSchema, raw)
+      : v.safeParse(ClientAuthenticationSchema, raw);
+    if (!parsed.success) return close(p, 1007);
+    const m = parsed.output;
+    const commandId = m.kind === "signedRequest" ? m.commandId : undefined;
+    const registered = p.session ? current(p, p.session.signer, commandId) : null;
+    if (p.session && !registered) return;
+    if (
+      m.protocolVersion.major !== hello.protocolVersion.major ||
+      m.protocolVersion.minor > hello.protocolVersion.minor ||
+      (p.session && m.protocolVersion.minor !== p.session.protocolVersion.minor)
+    )
+      return reject(p, "unsupportedProtocolVersion");
+    if (
+      m.environmentId !== hello.identity.id ||
+      m.connectionId !== hello.connectionId ||
+      m.challengeId !== hello.challengeId ||
+      m.challenge !== hello.challenge ||
+      (m.kind === "client.authenticate" &&
+        (m.clientNonce !== hello.clientNonce || now() - p.issued >= PAIRING_LIMITS.challengeMs))
+    )
+      return refuseProof(p, "challengeExpired", commandId);
+    const device = registered ?? current(p, m.signer);
+    if (!device) return;
+    const { signature: _sig, ...fields } = raw;
+    if (
+      (p.session && canonicalJson(m.signer) !== canonicalJson(p.session.signer)) ||
+      !(await verifyP256(device.publicKey, canonicalJson(fields), m.signature))
+    )
+      return refuseProof(p, "invalidSignature", commandId);
+    if (p.closed || !current(p, m.signer, commandId)) return;
+    if (m.sequence !== p.sequence + 1) {
+      if (!commandId) return reject(p, "invalidSignature");
+      send(p, {
+        kind: "rejected",
+        commandId,
+        failure: { kind: "staleSequence" },
+      } satisfies CommandReceipt);
+      return close(p, BUSINESS_CLOSE_CODES.revoked);
+    }
+    p.sequence = m.sequence;
+    host.observed?.({ kind: "proof", deviceId: device.deviceId });
+    if (m.kind === "client.authenticate") {
+      if (now() - p.issued >= PAIRING_LIMITS.challengeMs) return reject(p, "challengeExpired");
+      if (
+        m.features.some((f) => !hello.features.includes(f)) ||
+        new Set(m.features).size !== m.features.length
       )
-        return reject(ws, "unsupportedProtocolVersion");
+        return reject(p, "unsupportedProtocolVersion");
       const session: SessionAuthorized = {
         kind: "session.authorized",
         environmentId: hello.identity.id,
         connectionId: hello.connectionId,
         environmentSessionId: v.parse(EnvironmentSessionIdSchema, crypto.randomUUID()),
         principal: device.principal,
-        signer: fields.signer,
-        authorizedAt: Date.now(),
-        protocolVersion: fields.protocolVersion,
-        features: fields.features,
+        signer: m.signer,
+        authorizedAt: now(),
+        protocolVersion: m.protocolVersion,
+        features: m.features,
       };
       p.session = session;
-      ws.send(JSON.stringify(session));
-      ws.send(
-        JSON.stringify({
-          ...host.configuration,
-          kind: "session.configuration",
-          connectionId: hello.connectionId,
-          environmentSessionId: session.environmentSessionId,
-          transportLimits: TRANSPORT_LIMITS,
-        } satisfies SessionConfiguration),
-      );
-    } else if (msg.output.kind === "signedRequest" && p.session) {
-      if (
-        p.session.signer.kind !== "device" ||
-        p.session.signer.deviceId !== device.deviceId ||
-        p.session.signer.keyId !== device.keyId
-      )
-        return reject(ws, "unknownKey");
-      const receipt = await host.request(device, msg.output);
-      if (!p.closed && receipt.commandId === fields.commandId) ws.send(JSON.stringify(receipt));
+      send(p, session);
+      send(p, {
+        ...host.configuration,
+        kind: "session.configuration",
+        connectionId: hello.connectionId,
+        environmentSessionId: session.environmentSessionId,
+        transportLimits: TRANSPORT_LIMITS,
+      } satisfies SessionConfiguration);
+    } else {
+      const pending = host.request(device, m);
+      const receipt = pending instanceof Promise ? await pending : pending;
+      if (p.closed || !current(p, m.signer) || receipt.commandId !== m.commandId) return;
+      if (receipt.kind === "accepted") {
+        host.observed?.({ kind: "accepted", deviceId: device.deviceId, commandId: m.commandId });
+        if (
+          m.method === "subscription.openThread" &&
+          receipt.result.kind === "subscriptionOpened" &&
+          store?.ceiling(
+            device.principal.id,
+            { kind: "thread", threadId: m.payload.threadId },
+            "thread.view",
+          )
+        )
+          p.subscriptions.set(m.payload.subscriptionId, m.payload.threadId);
+      }
+      send(p, receipt);
     }
   }
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port,
-    fetch(req, srv) {
-      const target = req.url.slice(req.url.indexOf("/", req.url.indexOf("://") + 3));
-      const origin = req.headers.get("origin");
-      const decision = checkBusinessUpgrade(
-        target,
-        origin === null ? [] : [origin],
-        allowedOrigins,
-        URL,
-      );
-      if (decision.kind === "reject") return new Response(null, { status: decision.status });
+  function admission(req: IncomingMessage) {
+    const incoming: string[] = [];
+    for (let i = 0; i < req.rawHeaders.length; i += 2)
+      if (req.rawHeaders[i]?.toLowerCase() === "origin") incoming.push(req.rawHeaders[i + 1] ?? "");
+    return checkBusinessUpgrade(req.url ?? "", incoming, [...origins], URL);
+  }
+  const server = createServer((req, res) => {
+    const d = admission(req);
+    res.writeHead(d.kind === "reject" ? d.status : 400);
+    res.end();
+  });
+  server.on("upgrade", (req, socket, head) => {
+    const d = admission(req);
+    for (const [n, end] of seen) {
+      if (end > now()) break;
+      seen.delete(n);
+    }
+    if (d.kind === "reject" || seen.has(d.nonce)) {
+      const status = d.kind === "reject" ? d.status : 400;
+      socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      return;
+    }
+    seen.set(d.nonce, now() + PAIRING_LIMITS.challengeMs);
+    sockets.handleUpgrade(req, socket, head, (ws) => {
       const hello: Peer["hello"] = {
         kind: "server.hello",
         identity: host.identity,
         connectionId: v.parse(ConnectionIdSchema, crypto.randomUUID()),
         challengeId: v.parse(ConnectionChallengeIdSchema, crypto.randomUUID()),
-        challenge: base64url(crypto.getRandomValues(new Uint8Array(32))),
-        clientNonce: decision.nonce,
+        challenge: randomChallenge(),
+        clientNonce: d.nonce,
         protocolVersion: { major: 1, minor: 0 },
         features: ["strictSchemas", "signedRequests"],
       };
-      if (
-        srv.upgrade(req, {
-          data: {
-            hello,
-            issued: performance.now(),
-            sequence: 0,
-            session: null,
-            closed: false,
-            pendingBytes: 0,
-            work: Promise.resolve(),
-          },
+      const peer: Peer = {
+        socket: ws,
+        issued: now(),
+        hello,
+        session: null,
+        sequence: 0,
+        closed: false,
+        pendingBytes: 0,
+        work: Promise.resolve(),
+        application: null,
+        challenge: null,
+        subscriptions: new Map(),
+      };
+      peers.add(peer);
+      peer.work = host
+        .sign(canonicalJson(hello))
+        .then((identityProof) => {
+          send(peer, { ...hello, identityProof });
+          host.observed?.({ kind: "hello" });
         })
-      )
-        return;
-      return new Response(null, { status: 400 });
-    },
-    websocket: {
-      data: {} as Peer,
-      maxPayloadLength: TRANSPORT_LIMITS.maxControlFrameBytes,
-      open(ws) {
-        const p = ws.data;
-        p.work = host
-          .sign(canonicalJson(p.hello))
-          .then((identityProof) => {
-            if (!p.closed) ws.send(JSON.stringify({ ...p.hello, identityProof }));
-          })
-          .catch(() => close(ws, 1011));
-      },
-      message(ws, frame) {
-        if (typeof frame !== "string") return close(ws, 1007);
-        const size = Buffer.byteLength(frame);
-        const p = ws.data;
-        p.pendingBytes += size;
-        if (p.pendingBytes > TRANSPORT_LIMITS.maxPendingControlBytes) return close(ws, 1009);
-        p.work = p.work
-          .then(() => handle(ws, frame))
-          .catch(() => close(ws, 1011))
+        .catch(() => close(peer, 1011));
+      ws.on("message", (data, binary) => {
+        if (binary) return close(peer, 1007);
+        const text = data.toString();
+        const size = Buffer.byteLength(text);
+        peer.pendingBytes += size;
+        if (peer.pendingBytes > TRANSPORT_LIMITS.maxPendingControlBytes) return close(peer, 1009);
+        peer.work = peer.work
+          .then(() => handle(peer, text))
+          .catch(() => close(peer, 1011))
           .finally(() => {
-            p.pendingBytes -= size;
+            peer.pendingBytes -= size;
           });
-      },
-      close(ws) {
-        ws.data.closed = true;
-      },
-    },
+      });
+      ws.on("close", () => {
+        peer.closed = true;
+        peer.subscriptions.clear();
+        peers.delete(peer);
+      });
+      ws.on("error", () => close(peer, 1011));
+    });
   });
-  return { origin: `http://127.0.0.1:${server.port}`, close: () => server.stop(true) };
+  const release = host.claimListener?.();
+  const address = (() => {
+    try {
+      server.listen(port, "127.0.0.1");
+      const bound = server.address();
+      if (!bound || typeof bound === "string") throw Error("Loopback bind failed");
+      return bound;
+    } catch (e) {
+      release?.();
+      throw e;
+    }
+  })();
+  const origin = `http://127.0.0.1:${address.port}`;
+  if (publishedOrigin === undefined) origins.add(origin);
+  function publish(
+    threadId: ThreadId,
+    frame: Extract<ControlMessage, { kind: "subscription.reset" }>,
+  ) {
+    for (const p of peers) {
+      if (p.subscriptions.get(frame.subscriptionId) !== threadId || !p.session) continue;
+      const device = current(p, p.session.signer);
+      if (
+        device &&
+        host.access?.ceiling(device.principal.id, { kind: "thread", threadId }, "thread.view")
+      )
+        send(p, frame);
+    }
+  }
+  return {
+    origin,
+    publish,
+    async close() {
+      const work = [...peers].map((p) => {
+        p.closed = true;
+        p.socket.terminate();
+        return p.work;
+      });
+      peers.clear();
+      sockets.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((e) => (e ? reject(e) : resolve())),
+      );
+      await Promise.allSettled(work);
+      release?.();
+    },
+  };
 }

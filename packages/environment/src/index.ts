@@ -38,6 +38,7 @@ export * from "./listener";
 
 export * from "./forge-recovery";
 export { runReplayTurn } from "./replay-turn";
+export * from "./access-store";
 export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
