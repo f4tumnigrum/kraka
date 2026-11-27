@@ -25,6 +25,13 @@ export function generateProtocolReference(
     target: "draft-2020-12",
     errorMode: "throw",
     ignoreActions: ["brand"],
+    overrideSchema({ jsonSchema }) {
+      // Draft 2020-12 forbids an empty prefixItems. items still constrains the whole array.
+      if (jsonSchema.prefixItems?.length === 0) {
+        const { prefixItems, ...schema } = jsonSchema;
+        return schema;
+      }
+    },
   });
   const jsonSchema = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
