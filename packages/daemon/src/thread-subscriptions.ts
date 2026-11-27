@@ -14,11 +14,17 @@ import {
   type SubscriptionId,
   type SubscriptionPage,
   type ThreadId,
+  type PullFrame,
+  type ToolActivityDetailFrame,
+  type TimelineItemId,
 } from "@kraka/protocol";
 import {
+  readActivity,
   planThreadPass,
   type FirstSendStore,
   type AuthorizedScope,
+  type StoredToolActivityVersion,
+  type ToolActivityActor,
   type ThreadOpen,
 } from "@kraka/environment";
 import { SubscriptionWriter } from "./subscription-writer";
@@ -31,6 +37,15 @@ type Sub = {
   dirty: boolean;
   flight: { plan: Plan; id: SubscriptionPage["passId"]; count: number } | null;
 };
+type ActivitySub = {
+  threadId: ThreadId;
+  sourceThreadId: ThreadId;
+  itemId: TimelineItemId;
+  subscriptionId: SubscriptionId;
+  streamId: number;
+  visibility: string;
+  off: () => void;
+};
 type Access = {
   principal: string;
   visibility: () => string;
@@ -40,6 +55,7 @@ type Access = {
 };
 export class ThreadSubscriptions {
   private subs = new Map<SubscriptionId, Sub>();
+  private activities = new Map<SubscriptionId, ActivitySub>();
   private histories = new Map<number, HistoryPage>();
   constructor(
     private peer: FlowPeer,
@@ -92,6 +108,159 @@ export class ThreadSubscriptions {
         this.peer.send.end(id, "authorizationRevoked");
         this.histories.delete(id);
       }
+    for (const activity of this.activities.values())
+      if (
+        !this.access.canRead(activity.threadId) ||
+        !this.access.canRead(activity.sourceThreadId) ||
+        activity.visibility !== visibility
+      )
+        this.endActivity(activity, "authorizationRevoked");
+  }
+  private activityActor(): ToolActivityActor {
+    return {
+      environmentId: this.store.writer.environmentId,
+      visibility: this.access.visibility(),
+      timelineItems: this.access.timelineItems,
+      protocolMinor: this.access.protocolMinor,
+      allows: (threadId) => this.access.canRead(threadId),
+    };
+  }
+  private endActivity(activity: ActivitySub, reason: "clientClosed" | "authorizationRevoked") {
+    this.peer.send.withdraw(activity.streamId);
+    this.peer.send.end(activity.streamId, reason);
+    this.wake();
+  }
+  private openActivity(
+    request: Extract<SignedRequest, { method: "tool.readActivity" }>,
+  ): CommandReceipt {
+    const { subscriptionId, streamId, threadId, itemId } = request.payload;
+    const commandId = request.commandId;
+    const denied = (kind: "invalidState" | "notFound"): CommandReceipt => ({
+      kind: "rejected",
+      commandId,
+      failure: { kind },
+    });
+    let sub: ActivitySub | null = null;
+    let pull: PullFrame = () => null;
+    // Both peers consume this ordinal even if the signed open is rejected.
+    const id = this.peer.send.open(
+      subscriptionId,
+      (offset, room) => pull(offset, room),
+      undefined,
+      () => {
+        sub?.off();
+        if (sub) this.activities.delete(subscriptionId);
+      },
+    );
+    const reject = (receipt: CommandReceipt) => {
+      this.peer.send.finish(id);
+      return receipt;
+    };
+    if (id !== streamId || this.activities.has(subscriptionId) || this.subs.has(subscriptionId))
+      return reject(denied("invalidState"));
+    const actor = this.activityActor();
+    const read = readActivity({ actor, journal: this.store.sync, ...request.payload });
+    if (read.kind === "notFound") return reject(denied("notFound"));
+    if (read.kind === "unsupported")
+      return reject({ kind: "accepted", commandId, result: { kind: "activityUnsupported" } });
+    if (read.kind === "expired")
+      return reject({
+        kind: "accepted",
+        commandId,
+        result: { kind: "activityVersionExpired", replacement: read.replacement },
+      });
+    const source = read.current.threadId;
+    sub = {
+      threadId,
+      sourceThreadId: source,
+      itemId,
+      subscriptionId,
+      streamId,
+      visibility: actor.visibility,
+      off: () => {},
+    };
+    this.activities.set(subscriptionId, sub);
+    let stored: StoredToolActivityVersion | null = read.version;
+    let last = read.version.item.version,
+      terminal = false,
+      dirty = false;
+    let header: ToolActivityDetailFrame | null = null,
+      chunk: PullFrame | null = null;
+    const off = this.store.sync.subscribe(() => {
+      dirty = true;
+      this.wake();
+    });
+    sub.off = off;
+    pull = (offset, capacity) => {
+      if (terminal) return null;
+      if (!stored) {
+        if (!dirty) return null;
+        const version = this.store.sync.toolActivityVersion(
+          source,
+          itemId,
+          String(BigInt(last) + 1n),
+        );
+        if (!version) {
+          dirty = false;
+          return null;
+        }
+        stored = version;
+        last = version.item.version;
+      }
+      if (!header) {
+        const message: ToolActivityDetailFrame = {
+          kind: "tool.activity.detail",
+          subscriptionId,
+          reference: stored.reference,
+          transferId: v.parse(ContentTransferIdSchema, crypto.randomUUID()),
+        };
+        const frame = {
+          lane: "data" as const,
+          epoch: this.peer.epoch,
+          streamId,
+          offsetBytes: offset,
+          message,
+        };
+        if (wireBytes(JSON.stringify(frame), this.peer.port.utf8) > capacity) return null;
+        header = message;
+        return frame;
+      }
+      if (!chunk) {
+        const { bytes, item } = stored;
+        this.peer.control({
+          kind: "transport.content",
+          streamId,
+          transferId: header.transferId,
+          byteLength: bytes.length,
+          encoding: "utf8Json",
+        });
+        chunk = binarySource({
+          epoch: this.peer.epoch,
+          streamId,
+          transferId: header.transferId,
+          length: bytes.length,
+          utf8: this.peer.port.utf8,
+          read: (start, n) => {
+            if (start + n === bytes.length) {
+              stored = null;
+              chunk = null;
+              header = null;
+              terminal = item.phase === "ended";
+              dirty = true;
+            }
+            return bytes.subarray(start, start + n);
+          },
+        });
+        return null;
+      }
+      return chunk(offset, capacity);
+    };
+    this.wake();
+    return {
+      kind: "accepted",
+      commandId,
+      result: { kind: "activityReadStarted", subscriptionId, streamId },
+    };
   }
   private end(s: Sub, reason: "clientClosed" | "authorizationRevoked" | "backlogExceeded") {
     s.off();
@@ -188,7 +357,11 @@ export class ThreadSubscriptions {
           open.after.environmentId !== req.environmentId
         )
           return rejected("invalidState");
-        if (this.subs.has(open.subscriptionId) || !this.access.canRead(open.threadId))
+        if (
+          this.activities.has(open.subscriptionId) ||
+          this.subs.has(open.subscriptionId) ||
+          !this.access.canRead(open.threadId)
+        )
           return rejected("notFound");
         const writer = new SubscriptionWriter(this.peer, open.subscriptionId, this.wake);
         if (writer.id !== open.streamId) {
@@ -218,6 +391,11 @@ export class ThreadSubscriptions {
       case "subscription.gap":
       case "subscription.pageSaved":
       case "subscription.installed": {
+        const detail = this.activities.get(req.payload.subscriptionId);
+        if (detail && req.method === "subscription.close") {
+          this.endActivity(detail, "clientClosed");
+          return accepted({ kind: "actionAccepted" });
+        }
         const sub = this.subs.get(req.payload.subscriptionId);
         if (!sub) return rejected("notFound");
         if (!this.access.canRead(sub.open.threadId)) {
@@ -311,6 +489,8 @@ export class ThreadSubscriptions {
         this.wake();
         return accepted({ kind: "historyReadStarted", streamId });
       }
+      case "tool.readActivity":
+        return this.openActivity(req);
       case "history.pageSaved": {
         for (const [id, page] of this.histories)
           if (
@@ -331,6 +511,8 @@ export class ThreadSubscriptions {
   close() {
     for (const s of this.subs.values()) s.off();
     this.subs.clear();
+    for (const activity of this.activities.values()) activity.off();
+    this.activities.clear();
     this.histories.clear();
   }
 }

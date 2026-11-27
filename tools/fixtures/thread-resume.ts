@@ -24,6 +24,11 @@ import { within, withState } from "./replay-process";
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
   minor?: 0 | 1;
+  wire?: (data: import("@kraka/protocol").WireMessage) => void;
+  write?: (
+    data: import("@kraka/protocol").WireMessage,
+    send: (data: import("@kraka/protocol").WireMessage) => void,
+  ) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
@@ -35,7 +40,7 @@ type Options = {
 export async function connectReplica(
   url: string,
   identity: EnvironmentIdentity,
-  device: Client,
+  device: Pick<Client, "device" | "principal">,
   cache: SqliteThreadCache,
   opts: Options = {},
 ) {
@@ -71,6 +76,7 @@ export async function connectReplica(
       const wire = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
       bytes += wireBytes(wire, utf8);
       if (replica) {
+        opts.wire?.(wire);
         replica.peer.input(wire);
         replica.peer.pump();
         return;
@@ -117,7 +123,8 @@ export async function connectReplica(
           now: () => performance.now(),
           write(w) {
             bytes += wireBytes(w, utf8);
-            socket.send(w);
+            if (opts.write) opts.write(w, (data) => socket.send(data));
+            else socket.send(w);
             return 1;
           },
         },
@@ -140,6 +147,7 @@ export async function connectReplica(
                   },
                 }
               : cache),
+          sha256: async (bytes) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
           read: () => cache.read(),
           id: () => v.parse(SubscriptionIdSchema, crypto.randomUUID()),
           async sign(method, payload) {
@@ -233,22 +241,24 @@ async function setup(dir: string, root: string) {
   });
   const stateDir = join(pairing.stateDir, "host");
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
-  const f = await startFirstSendFixture({
-    stateDir,
-    projectDirectory: join(dir, "work"),
-    adapter: "replay",
-    root,
-    point: "resume",
-    ipc(message) {
-      const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
-      const waiter = pending.get(reply.id);
-      if (reply.error === null) waiter?.resolve();
-      else waiter?.reject(Error(reply.error));
-    },
-  }).catch(async (e) => {
-    await pairing.close();
-    throw e;
-  });
+  const launch = () =>
+    startFirstSendFixture({
+      stateDir,
+      projectDirectory: join(dir, "work"),
+      adapter: "replay",
+      root,
+      point: "resume",
+      ipc(message) {
+        const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
+        const waiter = pending.get(reply.id);
+        if (reply.error === null) waiter?.resolve();
+        else waiter?.reject(Error(reply.error));
+      },
+    }).catch(async (e) => {
+      await pairing.close();
+      throw e;
+    });
+  let f = await launch();
   const tablet = pairing.clients[0];
   if (!tablet) throw Error("Missing paired device");
   const caches = new Map<string, SqliteThreadCache>();
@@ -272,7 +282,16 @@ async function setup(dir: string, root: string) {
   }
   const threadId = v.parse(ThreadIdSchema, "thread-notes");
   return {
-    f,
+    get f() {
+      return f;
+    },
+    async restart() {
+      await Promise.all([...live].map((r) => r.close()));
+      live.clear();
+      await f.close();
+      f = await launch();
+      exit = undefined;
+    },
     dir,
     stateDir,
     threadId,

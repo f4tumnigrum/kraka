@@ -8,6 +8,9 @@ import {
   RoundPhaseSchema,
   MessageSchema,
   SyncPositionSchema,
+  ThreadIdSchema,
+  RoundIdSchema,
+  ToolActivityFileChangeSchema,
 } from "@kraka/protocol";
 import { type FirstSendStore, readRound } from "@kraka/environment";
 const schema = HistoryPageSchema.entries.rows.item;
@@ -78,7 +81,33 @@ export function scenarioInput(
     },
   };
 }
+const activity = v.strictObject({
+  threadId: ThreadIdSchema,
+  roundId: v.optional(RoundIdSchema),
+  instanceId: v.string(),
+  nativeSessionId: v.string(),
+  epoch: v.number(),
+  eventId: v.string(),
+  callId: v.string(),
+  attemptId: v.string(),
+  nativeRootTurnId: v.string(),
+  phase: v.picklist(["started", "progress", "ended"]),
+  inputJson: v.nullable(v.string()),
+  outputText: v.nullable(v.string()),
+  exitCode: v.nullable(v.number()),
+  at: v.number(),
+  changes: v.optional(v.array(ToolActivityFileChangeSchema)),
+});
 const seedCommand = v.union([
+  v.strictObject({ activity }),
+  v.strictObject({
+    unattributed: v.strictObject({
+      ...ToolActivityFileChangeSchema.entries,
+      threadId: ThreadIdSchema,
+      eventId: v.string(),
+      attemptId: v.string(),
+    }),
+  }),
   v.strictObject({ transactions: v.array(v.array(schema)) }),
   v.strictObject({ rows: v.array(schema) }),
   v.strictObject({ floor: SyncPositionSchema }),
@@ -93,7 +122,11 @@ export function serveSeed(store: FirstSendStore) {
     let error: string | null = null;
     try {
       const op = v.parse(seedCommand, command);
-      if ("transactions" in op) {
+      if ("activity" in op) {
+        if (store.sync.recordToolActivity(op.activity) === "conflict")
+          throw Error("Conflicting activity seed");
+      } else if ("unattributed" in op) store.sync.recordUnattributedToolChange(op.unattributed);
+      else if ("transactions" in op) {
         for (const rows of op.transactions) persist(store, rows);
       } else if ("rows" in op) persist(store, op.rows);
       else if ("floor" in op) store.db.run("UPDATE sync_meta SET floor=?", [op.floor]);

@@ -7,6 +7,7 @@ import {
 } from "./thread-list";
 import { TextReturnResultSchema } from "./handoffs";
 import { ContextOperationReceiptSchema } from "./context-operations";
+import { ToolActivityReadResultSchema } from "./tool-activity";
 import {
   AccessPageRequestSchema,
   AccessChangeSchema,
@@ -141,6 +142,7 @@ import {
   SubscriptionIdSchema,
   SyncCursorSchema,
   SyncPassIdSchema,
+  TimelineItemIdSchema,
   ThreadIdSchema,
   TodoRequestIdSchema,
   WorktreeIdSchema,
@@ -856,6 +858,18 @@ export const REQUEST_METHODS = {
       streamId: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)),
     }),
   ),
+  readToolActivity: defineRequestMethod(
+    "tool.readActivity",
+    "thread.view",
+    "thread",
+    v.strictObject({
+      threadId: ThreadIdSchema,
+      itemId: TimelineItemIdSchema,
+      expectedVersion: v.nullable(ObjectVersionSchema),
+      subscriptionId: SubscriptionIdSchema,
+      streamId: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)),
+    }),
+  ),
   acknowledgeHistoryPage: defineRequestMethod(
     "history.pageSaved",
     "thread.view",
@@ -1044,6 +1058,7 @@ export const DevicePairingResultSchema = v.variant("kind", [
 
 export type DevicePairingResult = v.InferOutput<typeof DevicePairingResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
+  ToolActivityReadResultSchema,
   ExecutorRefreshedSchema,
   v.strictObject({
     kind: v.literal("executorConfigured"),

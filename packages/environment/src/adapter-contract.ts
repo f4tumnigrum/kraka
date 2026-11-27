@@ -19,6 +19,8 @@ import type {
   NativeSessionId,
   RoundEndTimeEvidence,
   ExecutorSessionObservationPayload,
+  NativeObservationRelationship,
+  ToolActivityFileChange,
   ContextOperationObservation,
   TodoAnswer,
   TodoRequestBody,
@@ -296,6 +298,9 @@ export type AdapterEventPayload =
       kind: "toolActivity";
       attemptId: AttemptId;
       callId: NativeItemId;
+      relationship?: NativeObservationRelationship;
+      observation?: { eventId: string; sourceId: string };
+      changes?: readonly ToolActivityFileChange[];
       phase: "started" | "progress" | "ended";
       input: AdapterJsonValue | null;
       output: AdapterJsonValue | null;

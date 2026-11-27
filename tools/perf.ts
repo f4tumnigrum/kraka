@@ -49,7 +49,7 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions";
+  variant?: "access.listSessions" | "tool.readActivity";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -318,7 +318,11 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
   return metricIds
     .filter((m) => !metrics.length || metrics.includes(m))
     .flatMap((metric): Workload[] =>
-      metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
+      metric === "P1"
+        ? [{ metric, variant: "access.listSessions" }, { metric }]
+        : metric === "P11"
+          ? [{ metric }, { metric, variant: "tool.readActivity" }]
+          : [{ metric }],
     );
 }
 
@@ -369,7 +373,19 @@ export async function prepareBudget(root: string, role: Role) {
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (variant === "access.listSessions") {
+      else if (variant === "tool.readActivity") {
+        base.workload =
+          "Ten tool detail downloads, each containing 20,000,000 output bytes, with signed same-socket renames every 20 ms";
+        base.endpoint = "tool.readActivity";
+        base.thresholds = base.thresholds.filter((t) => t.series === "download");
+        if (!(await Bun.file(join(root, "packages/protocol/src/tool-activity.ts")).exists())) {
+          if (role === "candidate") throw Error("Missing tool.readActivity");
+          report = unavailable(base, "Parent lacks the versioned tool.readActivity endpoint");
+        } else {
+          const { measureToolActivity } = await import("./measure-tool-activity");
+          report = measured(base, await measureToolActivity(base, root, nextBlock));
+        }
+      } else if (variant === "access.listSessions") {
         base.workload =
           "Ten provisioned fresh/reused directory pairs, daemon spawn through first signed access.listSessions acceptance, existing OS cache";
         base.endpoint = "access serve with a registered device";

@@ -2,6 +2,7 @@ import * as v from "valibot";
 import { CaptureIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
+  recordAdapterActivity,
   readThread,
   readRound,
   readMessage,
@@ -121,10 +122,16 @@ export async function dispatchCodex(
     if (written.value.kind !== "written" || written.value.deliveryId !== deliveryId)
       throw new Error("Unmatched delivery");
     report({ kind: "written", ...ticket, at: Date.now() });
+    let root: import("@kraka/protocol").NativeRootTurnId | null = null;
     let next = await first;
     while (!next.done) {
       const event = next.value,
         p = event.payload;
+      if (p.kind === "sessionObservation" || p.kind === "fileChanged") {
+        recordAdapterActivity(store.sync, binding, roundId, event, root);
+        next = await events.next();
+        continue;
+      }
       if (
         !matchesAdapterEvent(binding, event) ||
         !("attemptId" in p) ||
@@ -142,6 +149,7 @@ export async function dispatchCodex(
             });
           break;
         case "roundStarted":
+          root = p.nativeRootTurnId;
           report({
             kind: "rootStarted",
             ...ticket,
@@ -161,6 +169,9 @@ export async function dispatchCodex(
           break;
         case "toolActivity": {
           const callId = p.callId;
+          const activity = recordAdapterActivity(store.sync, binding, roundId, event, root);
+          if (activity === "conflict") throw Error("Conflicting tool event");
+          if (activity === "unchanged") break;
           if (p.phase === "started")
             emit({
               kind: "tool.started",

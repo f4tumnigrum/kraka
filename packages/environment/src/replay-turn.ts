@@ -34,6 +34,8 @@ import type { FrozenDelivery, ThreadSessionBinding } from "./executor-records";
 import { type InputQueue, transitionInputQueue } from "./queue";
 import type { TransitionResult } from "./result";
 import { type RoundReport, transitionRound } from "./round";
+import { recordAdapterActivity } from "./tool-activity";
+import type { ThreadJournal } from "./thread-journal";
 
 const instance = {
   family: "replay",
@@ -84,6 +86,7 @@ export async function runReplayTurn<Handle extends object>({
     steer?: (run: LiveSteer) => void;
     previousReceipt?: (event: AdapterEventEnvelope<"replay">) => void;
     readSteer?: (attempt: RoundAttempt["attemptId"], message: MessageId) => void;
+    journal?: ThreadJournal;
     resume?: ThreadSessionBinding["nativeSessionId"];
     directory: () => string;
   };
@@ -373,6 +376,17 @@ export async function runReplayTurn<Handle extends object>({
         }
         case "toolActivity": {
           const { callId } = p;
+          if (persisted?.journal) {
+            const phase = attempt.phase;
+            const result = recordAdapterActivity(
+              persisted.journal,
+              binding,
+              roundId,
+              event,
+              "root" in phase ? (phase.root?.id ?? null) : null,
+            );
+            if (result === "conflict") throw Error("Conflicting replay tool event");
+          }
           if (p.phase === "started")
             publish({
               kind: "tool.started",

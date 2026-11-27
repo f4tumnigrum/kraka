@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
+import { Journal } from "./route-network";
 import type { ExecutorTurnUpdate } from "@kraka/protocol";
 import { configureLocalOwner, launchWriter, accepted, productRoot } from "./first-send";
 import { connectFirstSend, fixtureActor } from "./first-send-client";
@@ -63,9 +64,9 @@ export async function codexFixture(
   root = productRoot,
   hostSecret = true,
   installedBinary?: string,
+  stateDir = join(dir, "state"),
 ) {
-  const stateDir = join(dir, "state"),
-    projectDir = join(dir, "project");
+  const projectDir = join(dir, "project");
   mkdirSync(projectDir, { recursive: true });
   const cwd = realpathSync.native(projectDir),
     binary = installedBinary ?? (await buildPeer(dir, root)),
@@ -80,8 +81,9 @@ export async function codexFixture(
   const launch = launchWriter(stateDir, root, hostSecret ? "codex" : "codex-cli");
   try {
     const { instance } = await launch.ready();
-    const updates: ExecutorTurnUpdate[] = [];
-    const client = await connectFirstSend(stateDir, instance, (e) => updates.push(e));
+    const events = new Journal<ExecutorTurnUpdate>();
+    const updates = events.items;
+    const client = await connectFirstSend(stateDir, instance, (e) => events.push(e));
     try {
       const project = accepted(
         (await client.send("project.register", { realPath: cwd })).receipt,
@@ -142,6 +144,7 @@ export async function codexFixture(
         stateDir,
         project,
         updates,
+        events,
         configure,
         refresh,
         registration,

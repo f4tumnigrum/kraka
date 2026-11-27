@@ -36,6 +36,12 @@ jobs:
           KRAKA_REQUIRED_ROUTE_CASES: "1"
       - run: bun test ./tools/input-recovery.live.test.ts
       - run: bun test ./tools/codex-turn.live.test.ts
+      - name: Verify recorded tool activity and independent detail streams
+        shell: bash
+        run: |
+          set -euo pipefail
+          NO_COLOR=1 bun test ./tools/tool-activity.live.test.ts 2>&1 | tee "$RUNNER_TEMP/tool-activity.log"
+          for group in 1 2 3 4; do grep -F "(pass) $group. " "$RUNNER_TEMP/tool-activity.log"; done
       - run: bun test ./tools/owner-pairing.live.test.ts
         env:
           KRAKA_REQUIRED_PAIRING_CASES: "1"
@@ -51,6 +57,7 @@ jobs:
             --path-ignore-patterns "**/reference-conformance.live.test.ts" \
             --path-ignore-patterns "**/route-switch.live.test.ts" \
             --path-ignore-patterns "**/input-recovery.live.test.ts" \
+            --path-ignore-patterns "**/tool-activity.live.test.ts" \
             --path-ignore-patterns "**/codex-turn.live.test.ts" \
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
             --path-ignore-patterns "**/thread-resume.live.test.ts" \
