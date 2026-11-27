@@ -71,7 +71,7 @@ export async function codexFixture(
     binary = installedBinary ?? (await buildPeer(dir, root)),
     ledgerPath = join(dir, "peer.jsonl"),
     ledger = peerLedger(ledgerPath);
-  configureLocalOwner(stateDir, [
+  await configureLocalOwner(stateDir, [
     "workspace.change",
     "thread.send",
     "settings.change",

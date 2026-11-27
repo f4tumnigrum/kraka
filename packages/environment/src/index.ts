@@ -9,6 +9,7 @@ export { transitionContextOperation } from "./context-operations";
 export { promoteSessionObservation } from "./session-observations";
 export { prepareChildResultTransfer, transitionChildResultReturn } from "./child-results";
 export {
+  firstPending,
   transitionInputQueue,
   planQueuedChange,
   type EditableQueue,
@@ -41,5 +42,16 @@ export * from "./access-store";
 export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
+export { recordCommand, type FirstSendContext, type LocalActor } from "./command-receipts";
+export { managedView } from "./worktree-git";
+export * from "./isolated-start";
+export * from "./worktree-storage";
+export * from "./worktree-prepare";
+export { worktreeWorkerCommand, runWorktreeWorker } from "./worktree-worker";
+
+export * from "./input-command";
+export * from "./input-store";
 export * from "./executor-registry";
-export { stateEnvironmentId } from "./state-identity";
+
+export * from "./thread-pass";
+export * from "./environment-identity";

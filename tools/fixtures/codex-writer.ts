@@ -3,6 +3,11 @@ import { WriterExecutorRegistry } from "@kraka/environment";
 import { CredentialBindingSchema, ExecutorInstanceIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import { fixtureActor } from "./first-send-client";
+import { worktreeWorkerCommand, runWorktreeWorker } from "@kraka/environment";
+if (process.argv[2] === worktreeWorkerCommand) {
+  await runWorktreeWorker(process.argv[3]);
+  process.exit(0);
+}
 const state = process.argv[2];
 if (!state) throw new Error("Missing state directory");
 const writer = await startWriter(state, null, {

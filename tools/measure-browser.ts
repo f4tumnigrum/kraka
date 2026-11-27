@@ -89,16 +89,21 @@ async function trusted(state: string, deviceDir: string) {
     host.close();
   }
 }
-export async function measureBrowser(base: ReportBase, root: string, metric: "P1" | "P2" | "P9") {
+export async function measureBrowser(
+  base: ReportBase,
+  root: string,
+  metric: "P1" | "P2" | "P9",
+  nextBlock: () => Promise<void>,
+) {
   const idle = metric === "P2";
-  if (metric === "P9") return rename(base, root);
+  if (metric === "P9") return rename(base, root, nextBlock);
   const counts = { launches: 0, accepted: 0, joined: 0 };
   base.actual = counts;
   const n = idle ? 10 : 20;
   base.expected = { launches: n, accepted: n, joined: n };
   await withState(async (certificates) => {
     const tls = await certificate(certificates);
-    for (let pair = 0; pair < 10; pair++)
+    for (let pair = 0; pair < 10; pair++) {
       await withState(async (dir) => {
         const state = join(dir, "daemon"),
           clientDir = join(dir, "client");
@@ -170,10 +175,12 @@ export async function measureBrowser(base: ReportBase, root: string, metric: "P1
           }
         }
       });
+      await nextBlock();
+    }
   });
   return idle ? { idle: 10 } : { fresh: 10, reused: 10 };
 }
-async function rename(base: ReportBase, root: string) {
+async function rename(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
   const counts = { single: 0, eight: 0, warmups: 0, reopened: 0, refusals: 0, retries: 0 };
   base.actual = counts;
   base.expected = {
@@ -259,9 +266,14 @@ async function rename(base: ReportBase, root: string) {
         }
         const first = clients[0];
         if (!first) throw Error("No TLS writers");
-        for (let i = 0; i < 5; i++) await batch(first, "single", 300, 50);
-        for (let i = 0; i < 5; i++)
+        for (let i = 0; i < 5; i++) {
+          await batch(first, "single", 300, 50);
+          await nextBlock();
+        }
+        for (let i = 0; i < 5; i++) {
           await Promise.all(clients.map((c) => batch(c, "eight", 100, 0)));
+          await nextBlock();
+        }
         const db = openReceiptReader(state);
         try {
           for (let version = 2; version <= 5501; version++) {

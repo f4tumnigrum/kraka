@@ -13,7 +13,7 @@
   },
   "exports": "./src/index.ts",
   "scripts": {
-    "build": "bun build src/index.ts --target browser --minify-whitespace --outfile ../../.build/packages/browser-host.js"
+    "build": "bun -e \"require('node:fs').mkdirSync('../../.build/packages', { recursive: true })\" && bun build src/index.ts --target browser --minify-whitespace --outfile ../../.build/packages/browser-host.js"
   },
   "dependencies": {
     "@kraka/client-runtime": "workspace:*",

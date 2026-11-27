@@ -13,8 +13,8 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import * as v from "valibot";
 import {
+  directoryEnvironmentId,
   AccessStore,
-  stateEnvironmentId,
   type HostDecision,
   type TrustedHostPairing,
 } from "@kraka/environment";
@@ -59,7 +59,6 @@ export async function openAccessHost(
 ) {
   const dir = await ownedDirectory(resolve(stateDir));
   const filename = join(dir, "access.sqlite");
-
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     const stat = await lstat(filename + suffix).catch((e) => {
       if (e.code === "ENOENT") return null;
@@ -79,12 +78,12 @@ export async function openAccessHost(
           .query<{ id: string; secret: string }, []>("SELECT id,secret FROM host_identity")
           .get();
         if (previous) {
-          stateEnvironmentId(dir, v.parse(EnvironmentIdSchema, previous.id));
+          directoryEnvironmentId(dir, v.parse(EnvironmentIdSchema, previous.id));
           return previous;
         }
         const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
         const row = {
-          id: stateEnvironmentId(dir),
+          id: directoryEnvironmentId(dir),
           secret: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
         };
         db.run("INSERT INTO host_identity VALUES(1,?,?)", [row.id, row.secret]);

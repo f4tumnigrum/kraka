@@ -126,19 +126,18 @@ export class AccessStore implements PairingStore {
     this.db.run("INSERT INTO objects VALUES('thread',?,?)", [thread, project]);
   }
   ensureThread(thread: ThreadId, project: ProjectId) {
-    const known = this.db
-      .query<{ parent: string }, [string]>(
-        "SELECT parent FROM objects WHERE kind='thread' AND id=?",
-      )
-      .get(thread);
-    if (known) {
-      if (known.parent !== project) throw Error("Conflicting project for registered thread");
-      return;
-    }
-    this.db
+    const parent = this.db.query<{ parent: string }, [string]>(
+      "SELECT parent FROM objects WHERE kind='thread' AND id=?",
+    );
+    const known = parent.get(thread);
+    if (known) return known.parent === project;
+    return this.db
       .transaction(() => {
+        const concurrent = parent.get(thread);
+        if (concurrent) return concurrent.parent === project;
         this.provisionProject(project);
         this.provisionThread(thread, project);
+        return true;
       })
       .immediate();
   }

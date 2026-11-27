@@ -1,5 +1,7 @@
 import {
   FlowPeer,
+  sameRange,
+  sameHead,
   matchesAuthorizedConfiguration,
   readSubscriptionPage,
   TRANSPORT_LIMITS,
@@ -35,22 +37,6 @@ type Sub = {
   pass: Pass | null;
   content: { id: ContentTransferId; parts: Uint8Array[]; length: number; received: number } | null;
 };
-function sameRange(a: SyncCursor, b: SyncCursor) {
-  return (
-    a.environmentId === b.environmentId &&
-    a.databaseGeneration === b.databaseGeneration &&
-    a.visibilityGeneration === b.visibilityGeneration &&
-    a.shapeVersion === b.shapeVersion &&
-    a.scope.kind === b.scope.kind &&
-    (a.scope.kind === "thread"
-      ? b.scope.kind === "thread" && a.scope.threadId === b.scope.threadId
-      : b.scope.kind === "list" && a.scope.projectId === b.scope.projectId)
-  );
-}
-function sameHead(a: SyncCursor, b: SyncCursor) {
-  return sameRange(a, b) && a.through === b.through;
-}
-
 export class EnvironmentRpcUnavailableError extends Error {
   constructor() {
     super("Environment session unavailable");

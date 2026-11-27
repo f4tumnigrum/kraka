@@ -11,6 +11,7 @@ import {
 
 export interface SocketApplication {
   epoch: ConnectionId;
+  beforeSend?(): void;
   write?(data: WireMessage, send: (data: WireMessage) => number): number;
   attach(peer: FlowPeer, wake: () => void): FrameSink & { close(): void };
 }
@@ -22,6 +23,92 @@ export const utf8 = {
   decode: (b: Uint8Array) => decoder.decode(b),
 };
 
+export function attachFlow(
+  app: SocketApplication,
+  ws: Pick<Bun.ServerWebSocket<unknown>, "send" | "close">,
+) {
+  let sink: ReturnType<SocketApplication["attach"]>;
+  let scheduled: ReturnType<typeof setImmediate> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const send = (data: WireMessage) => ws.send(data, false);
+  let authorization: SessionAuthorized | null = null,
+    configured = false;
+  const peer = new FlowPeer(
+    app.epoch,
+    {
+      utf8,
+      now: () => performance.now(),
+      ...(app.beforeSend ? { beforeSend: app.beforeSend } : {}),
+      write: (data) => (app.write ? app.write(data, send) : send(data)),
+      sentControl(m) {
+        if (m.kind === "session.authorized") {
+          authorization = m;
+          configured = false;
+        }
+        if (m.kind === "session.configuration")
+          configured =
+            authorization?.connectionId === app.epoch &&
+            m.connectionId === app.epoch &&
+            authorization.environmentId === m.environment.id &&
+            authorization.environmentSessionId === m.environmentSessionId;
+      },
+    },
+    {
+      control: (m) => {
+        if (
+          m.kind === "signedRequest" &&
+          (!configured ||
+            !authorization ||
+            m.connectionId !== app.epoch ||
+            m.environmentId !== authorization.environmentId ||
+            m.signer.kind !== authorization.signer.kind ||
+            m.signer.keyId !== authorization.signer.keyId)
+        )
+          throw new Error("Unavailable session");
+        sink.control(m);
+      },
+      data: (f, n) => {
+        if (!configured) throw new Error("Unavailable session");
+        sink.data(f, n);
+      },
+      discarded: (id) => sink.discarded(id),
+    },
+  );
+  const wake = () => {
+    if (scheduled) return;
+    scheduled = setImmediate(() => {
+      scheduled = undefined;
+      try {
+        clearTimeout(timer);
+        if (peer.pump()) wake();
+        else if (Number.isFinite(peer.send.nextDeadline))
+          timer = setTimeout(
+            wake,
+            Math.max(1, Math.ceil(peer.send.nextDeadline - performance.now())),
+          );
+      } catch {
+        ws.close(1011);
+      }
+    });
+  };
+  const session = {
+    peer,
+    wake,
+    dispose: () => {
+      clearTimeout(timer);
+      if (scheduled) clearImmediate(scheduled);
+      peer.close();
+      sink?.close();
+    },
+  };
+  try {
+    sink = app.attach(peer, wake);
+    wake();
+  } catch {
+    ws.close(1011);
+  }
+  return session;
+}
 export async function listenFlow(options: {
   stateDir: string;
   host: string;
@@ -59,85 +146,7 @@ export async function listenFlow(options: {
       open(ws) {
         sockets.add(ws);
         const app = ws.data.app;
-        let sink: ReturnType<SocketApplication["attach"]>;
-        let scheduled: ReturnType<typeof setImmediate> | undefined;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const send = (data: WireMessage) => ws.send(data, false);
-        let authorization: SessionAuthorized | null = null,
-          configured = false;
-        const peer = new FlowPeer(
-          app.epoch,
-          {
-            utf8,
-            now: () => performance.now(),
-            write: (data) => (app.write ? app.write(data, send) : send(data)),
-            sentControl(m) {
-              if (m.kind === "session.authorized") {
-                authorization = m;
-                configured = false;
-              }
-              if (m.kind === "session.configuration")
-                configured =
-                  authorization?.connectionId === app.epoch &&
-                  m.connectionId === app.epoch &&
-                  authorization.environmentId === m.environment.id &&
-                  authorization.environmentSessionId === m.environmentSessionId;
-            },
-          },
-          {
-            control: (m) => {
-              if (
-                m.kind === "signedRequest" &&
-                (!configured ||
-                  !authorization ||
-                  m.connectionId !== app.epoch ||
-                  m.environmentId !== authorization.environmentId ||
-                  m.signer.kind !== authorization.signer.kind ||
-                  m.signer.keyId !== authorization.signer.keyId)
-              )
-                throw new Error("Unavailable session");
-              sink.control(m);
-            },
-            data: (f, n) => {
-              if (!configured) throw new Error("Unavailable session");
-              sink.data(f, n);
-            },
-            discarded: (id) => sink.discarded(id),
-          },
-        );
-        const wake = () => {
-          if (scheduled) return;
-          scheduled = setImmediate(() => {
-            scheduled = undefined;
-            try {
-              clearTimeout(timer);
-              if (peer.pump()) wake();
-              else if (Number.isFinite(peer.send.nextDeadline))
-                timer = setTimeout(
-                  wake,
-                  Math.max(1, Math.ceil(peer.send.nextDeadline - performance.now())),
-                );
-            } catch {
-              ws.close(1011);
-            }
-          });
-        };
-        ws.data.session = {
-          peer,
-          wake,
-          dispose: () => {
-            clearTimeout(timer);
-            if (scheduled) clearImmediate(scheduled);
-            peer.close();
-            sink?.close();
-          },
-        };
-        try {
-          sink = app.attach(peer, wake);
-          wake();
-        } catch {
-          ws.close(1011);
-        }
+        ws.data.session = attachFlow(app, ws);
       },
       message(ws, data) {
         const session = ws.data.session;

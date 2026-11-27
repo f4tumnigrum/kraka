@@ -225,7 +225,7 @@ test("3 S-STATE-004 / S-WORK-006 before-commit rollback and lost committed reply
 test("4 competing launchers follow the lock holder and an ambiguous write stays uncertain", async () => {
   await withState(async (dir) => {
     const { stateDir } = opts(dir);
-    configureLocalOwner(stateDir);
+    await configureLocalOwner(stateDir);
     const holder = launchWriter(stateDir, productRoot, "locked");
     try {
       await waitFile(join(stateDir, "entered-locked"));

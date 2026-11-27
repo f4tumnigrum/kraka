@@ -1,17 +1,14 @@
-import * as v from "valibot";
 import { FlowPeer, type FlowPort } from "./flow-peer";
-import { binarySource, OversizedControlFrame, type WireMessage } from "./stream-codec";
-import { type ConnectionId, ContentTransferIdSchema, SubscriptionIdSchema } from "./ids";
-import { ControlMessageSchema, type ControlMessage } from "./transport";
+import { OversizedControlFrame, type WireMessage } from "./stream-codec";
+import type { ConnectionId } from "./ids";
+import { ControlContentReceiver, sendLogicalContent } from "./logical-control";
+import type { ControlMessage } from "./transport";
 
 /** Multiplex authorized logical messages that exceed one control frame. */
 export class ControlStream {
   private readonly flow: FlowPeer;
-  private readonly incoming = new Map<
-    number,
-    { length: number; parts: Uint8Array[]; received: number }
-  >();
-  private readonly outgoing = new Map<number, { complete: boolean }>();
+  private readonly incoming: ControlContentReceiver;
+  private readonly sent = new Set<number>();
   constructor(
     epoch: ConnectionId,
     private readonly port: FlowPort,
@@ -25,26 +22,12 @@ export class ControlStream {
           return;
         }
         if (!authorized()) throw Error("Unauthenticated content stream");
-        this.flow.receive.open(message.streamId);
-        this.flow.receive.declare(message.streamId, message.transferId, message.byteLength);
-        this.incoming.set(message.streamId, { length: message.byteLength, received: 0, parts: [] });
+        this.incoming.declare(message);
       },
       data: (frame, size) => {
-        const pending = this.incoming.get(frame.streamId);
-        if (!pending || !("payload" in frame) || !authorized()) throw Error("Unexpected content");
-        pending.parts.push(frame.payload);
-        pending.received += frame.payload.length;
-        this.flow.control(this.flow.receive.consume(frame.streamId, size));
-        if (pending.received !== pending.length) return;
-        this.incoming.delete(frame.streamId);
-        this.flow.receive.cancel(frame.streamId);
-        const bytes = new Uint8Array(pending.length);
-        let position = 0;
-        for (const part of pending.parts) {
-          bytes.set(part, position);
-          position += part.length;
-        }
-        const msg = v.parse(ControlMessageSchema, JSON.parse(port.utf8.decode(bytes)));
+        if (!authorized()) throw Error("Unauthenticated content stream");
+        const msg = this.incoming.read(frame, size);
+        if (!msg) return;
         if (
           msg.kind !== "signedRequest" &&
           msg.kind !== "accepted" &&
@@ -55,15 +38,15 @@ export class ControlStream {
         receive(msg);
       },
       discarded: (id) => {
-        this.incoming.delete(id);
+        this.incoming.drop(id);
         throw Error("Invalid logical control stream");
       },
     });
+    this.incoming = new ControlContentReceiver(this.flow, Infinity);
   }
   input(wire: WireMessage) {
     this.flow.input(wire);
-    for (const [id, source] of this.outgoing)
-      if (source.complete && this.flow.send.releaseConsumed(id)) this.outgoing.delete(id);
+    for (const id of this.sent) if (this.flow.send.releaseConsumed(id)) this.sent.delete(id);
     this.flow.pump();
   }
   send(message: ControlMessage) {
@@ -83,43 +66,13 @@ export class ControlStream {
       )
         throw error;
       const bytes = utf8.encode(JSON.stringify(message));
-      const transferId = v.parse(ContentTransferIdSchema, `content-${++this.serial}`);
-      const source = { complete: false };
-      const streamId = this.flow.send.open(
-        v.parse(SubscriptionIdSchema, transferId),
-        (offset, size) => pull(offset, size),
-        (frame) => {
-          if (
-            frame.lane === "data" &&
-            frame.message.kind === "content.chunk" &&
-            frame.message.offsetBytes + frame.message.byteLength === bytes.length
-          )
-            source.complete = true;
-        },
-      );
-      const pull = binarySource({
-        epoch: this.flow.epoch,
-        streamId,
-        transferId,
-        length: bytes.length,
-        utf8,
-        read: (pos, n) => bytes.subarray(pos, pos + n),
-      });
-      this.outgoing.set(streamId, source);
-      this.flow.control({
-        kind: "transport.content",
-        streamId,
-        transferId,
-        encoding: "utf8Json",
-        byteLength: bytes.length,
-      });
+      sendLogicalContent(this.flow, bytes, message.commandId, (id) => this.sent.add(id));
     }
     this.flow.pump();
   }
-  private serial = 0;
   close() {
     this.incoming.clear();
-    this.outgoing.clear();
+    this.sent.clear();
     this.flow.close();
   }
 }

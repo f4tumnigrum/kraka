@@ -1,54 +1,62 @@
 import * as v from "valibot";
-import { CaptureIdSchema, type ExecutorTurnUpdate } from "@kraka/protocol";
+import { CaptureIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
   readThread,
   readRound,
   readMessage,
   recoverInputDelivery,
-  transitionRound,
+  claimNext,
+  recordInputEvidence,
+  advanceQueue,
   type FirstSendStore,
   type FrozenDelivery,
   type RoundReport,
   type ThreadSessionBinding,
 } from "@kraka/environment";
-import type { Started } from "./durable-replay";
 import type { CodexSelection } from "./codex-instances";
 
 export async function dispatchCodex(
   store: FirstSendStore,
-  result: Started,
+  initial: Round,
   selection: CodexSelection,
   isCurrent: () => boolean,
   emit: (update: ExecutorTurnUpdate) => void,
   signal: AbortSignal,
 ) {
-  const thread = readThread(store.db, result.threadId),
-    initial = readRound(store.db, result.roundId),
-    message = readMessage(store.db, result.messageId);
-  if (!thread || !initial || !message) throw new Error("Missing committed Codex input");
+  const thread = readThread(store.db, initial.threadId),
+    message = readMessage(store.db, initial.messageId);
+  if (!thread || !message) throw Error("Missing committed Codex input");
   if (initial.attempt.phase.kind !== "filed" || initial.attempt.phase.gate !== "eligible") return;
-  let round = initial;
   const { adapter, reg, model, snapshot } = selection;
-  const { attemptId, deliveryId, roundId } = result,
+  const { attemptId, deliveryId } = initial.attempt,
+    roundId = initial.id,
     ids = { roundId, attemptId },
     ticket = { attemptId, deliveryId };
   const instance = { family: "codex", instanceId: reg.instanceId } as const;
-  const phase = (p: typeof round.attempt.phase) => {
-    round = store.setPhase(round, p);
-  };
-  const report = (e: RoundReport) => {
-    const r = transitionRound(round.attempt, e);
-    if (r.kind === "rejected") throw new Error(r.reason);
-    phase(r.value);
-  };
+  let binding: ThreadSessionBinding | null = null;
+  function report(event: RoundReport) {
+    if (!binding) throw Error("Unbound Codex delivery");
+    const result = recordInputEvidence(store, binding, event);
+    if (result.kind === "rejected") throw Error(result.reason);
+  }
   const failed = (reason: string, message: string | null) => {
+    const round = readRound(store.db, roundId);
+    if (!round || round.attempt.attemptId !== attemptId) return;
     const current = round.attempt.phase;
-    if (current.kind === "filed")
-      phase({ kind: "notDelivered", reason: message ?? reason, lateReceipt: null });
-    else if (current.kind === "armed" && reason !== "unsafeToRetry")
+    if (current.kind === "armed" && reason !== "unsafeToRetry")
       report({ kind: "refused", ...ticket, reason: message ?? reason });
-    else phase(recoverInputDelivery(current, "person", "none"));
+    else {
+      if (current.kind === "filed" && round.version !== initial.version) return;
+      const next =
+        current.kind === "filed"
+          ? { kind: "notDelivered" as const, reason: message ?? reason, lateReceipt: null }
+          : recoverInputDelivery(current, "person", "none");
+      store.db.transaction(() => {
+        store.setPhase(round, next);
+        advanceQueue(store, round.threadId);
+      })();
+    }
     emit({ kind: "executor.failed", ...ids, reason, message });
   };
   const cwd = store.directory(thread);
@@ -78,7 +86,7 @@ export async function dispatchCodex(
     const sessionId = session.nativeSessionId;
     if (!sessionId || !isCurrent() || signal.aborted || store.directory(thread) !== cwd)
       return failed("invalidState", "Session binding changed");
-    const binding: ThreadSessionBinding = {
+    binding = {
       ...instance,
       epoch: session.epoch,
       nativeSessionId: sessionId,
@@ -99,17 +107,15 @@ export async function dispatchCodex(
     };
     const support = snapshot.matrix.submitTextInput;
     if (support.kind !== "native") return failed("unsupported", null);
-    store.db.transaction(() => {
-      if (store.freeze(delivery) === "conflict") throw new Error("Frozen delivery conflict");
-      phase({ kind: "armed" });
-    })();
+    const claim = claimNext(store, thread.id, delivery, selection.probe.declaration.input);
+    if (claim.kind === "rejected") return;
     const events = adapter.events(session, null)[Symbol.asyncIterator]();
     const first = events.next();
     void first.catch(() => {});
     const written = await adapter.invoke(
       session,
       { ...instance, capabilityVersion: snapshot.version, capability: "submitTextInput", support },
-      { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: delivery.input },
+      { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: claim.value.input },
     );
     if (written.kind === "rejected") return failed(written.reason, written.message);
     if (written.value.kind !== "written" || written.value.deliveryId !== deliveryId)
@@ -128,7 +134,12 @@ export async function dispatchCodex(
         throw new Error("Foreign Codex event");
       switch (p.kind) {
         case "deliveryReceived":
-          if (p.receipt.kind === "input") report({ kind: "received", ...ticket, proof: p.receipt });
+          if (p.receipt.kind === "input")
+            report({
+              kind: "received",
+              ...ticket,
+              proof: { sessionId: p.receipt.sessionId, itemId: p.receipt.itemId },
+            });
           break;
         case "roundStarted":
           report({

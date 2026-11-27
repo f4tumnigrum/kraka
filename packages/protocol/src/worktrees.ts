@@ -80,12 +80,29 @@ export const WorktreeRetainedSchema = v.variant("kind", [
   v.strictObject({ kind: v.literal("uncertain") }),
 ]);
 export type WorktreeRetained = v.InferOutput<typeof WorktreeRetainedSchema>;
-export const WorktreePrepareSchema = v.strictObject({
+const existingTask = v.strictObject({
   projectId: ProjectIdSchema,
   threadId: ThreadIdSchema,
   worktreeId: WorktreeIdSchema,
   branch: name,
   baseRef: v.nullable(name),
+});
+export const WorktreePrepareSchema = v.union([
+  existingTask,
+  v.strictObject({
+    projectId: ProjectIdSchema,
+    worktreeId: WorktreeIdSchema,
+    branch: name,
+    baseRef: name,
+  }),
+]);
+export const WorktreeSelectionSchema = v.strictObject({
+  kind: v.literal("worktreeBaseSelected"),
+  projectId: ProjectIdSchema,
+  worktreeId: WorktreeIdSchema,
+  branch: name,
+  baseRef: name,
+  commit: GitObjectIdSchema,
 });
 export const WorktreeCleanSchema = v.strictObject({
   projectId: ProjectIdSchema,

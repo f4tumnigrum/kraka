@@ -41,3 +41,5 @@ export * from "./canonical-json";
 
 export * from "./executor-instance";
 export { ControlStream } from "./control-stream";
+export * from "./sync";
+export * from "./logical-control";

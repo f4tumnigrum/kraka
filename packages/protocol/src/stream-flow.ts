@@ -184,13 +184,42 @@ export class FlowSender {
       }
     }
   }
+  withdraw(id: number) {
+    const stream = this.streams.get(id);
+    if (!stream) return;
+    const pending = this.controls;
+    const first = pending.find((r) => r.frame.lane === "control")?.frame;
+    if (first?.lane !== "control") return;
+    const retained = pending.filter(({ frame }) => {
+      if (frame.lane !== "control") return true;
+      const m = frame.message;
+      return !(
+        ("subscriptionId" in m && m.subscriptionId === stream.state.subscriptionId) ||
+        (m.kind === "transport.content" && m.streamId === id)
+      );
+    });
+    if (retained.length === pending.length) return;
+    this.controlOffset = first.offsetBytes;
+    pending.length = 0;
+    this.controlBytes = 0;
+    for (const { frame } of retained) {
+      if (frame.lane === "control") this.control(frame.message);
+      if (frame.lane === "window") this.control(frame);
+    }
+  }
   releaseConsumed(id: number) {
     const queue = this.streams.get(id);
     if (!queue || queue.frames.length || queue.state.consumedBytes !== queue.state.producedBytes)
       return false;
-    this.streams.delete(id);
-    queue.dispose?.();
+    this.finish(id);
     return true;
+  }
+  finish(id: number) {
+    const q = this.streams.get(id);
+    if (!q) return;
+    this.dataBytes -= q.state.reservedBytes;
+    q.dispose?.();
+    this.streams.delete(id);
   }
   end(id: number, reason: EndReason) {
     const q = this.streams.get(id);

@@ -64,7 +64,8 @@ export async function listenBrowserDaemon(stateDir: string, options: BrowserList
           const project = readProject(transaction.db, thread.projectId);
           if (project?.environmentId !== host.identity.id)
             throw Error("Thread project belongs to another environment");
-          host.store.ensureThread(thread.id, project.id);
+          if (!host.store.ensureThread(thread.id, project.id))
+            throw Error("Conflicting project for registered thread");
         }
         return renameThread({ ...context, ...r.payload });
       };

@@ -84,7 +84,7 @@ if (group === "native") {
       "@kraka/browser-host",
       "build",
     ]);
-    expect(built.exitCode).toBe(0);
+    expect(built.exitCode, built.stderr.toString() || built.stdout.toString()).toBe(0);
     const bundle = await Bun.file(".build/packages/browser-host.js").text();
     expect(bundle).toContain("openBrowserSession");
     expect(bundle).not.toContain("/__fixture__/");
