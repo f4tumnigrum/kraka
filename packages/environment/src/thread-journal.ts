@@ -1,3 +1,4 @@
+import { decodeJournalRow, encodeJournalRow } from "./journal-row";
 import { ListIndex } from "./list-index";
 import type { ListScope } from "./list-pass";
 import type { PrincipalId, TodoRequest, Round, SyncPosition } from "@kraka/protocol";
@@ -241,11 +242,12 @@ export class ThreadJournal {
         row.objectType === "timelineItem" ? row.value.createdPosition : position,
         position,
         row.value.version,
-        JSON.stringify(row),
+        encodeJournalRow(row),
       );
     }
     if (extras.activity) {
       const { item, round } = extras.activity;
+      this.list.touch(item.threadId, position, now);
       put.run(
         item.threadId,
         keyString(rowKey({ objectType: "timelineItem", value: item })),
@@ -463,7 +465,7 @@ export class ThreadJournal {
                     objectType: "timelineItem" as const,
                     value: this.activities.summary(source, payload, data.version),
                   }
-                : v.parse(rowSchema, payload);
+                : decodeJournalRow(payload);
             if (row.objectType === "round")
               row.value = roundForProtocol(row.value, scope.protocolMinor);
             rows.push({ row, source, created, changed, round: data.round });

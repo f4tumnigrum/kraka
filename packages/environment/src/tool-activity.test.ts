@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import * as v from "valibot";
 import {
   EnvironmentIdSchema,
+  PrincipalIdSchema,
   ThreadIdSchema,
   AttemptIdSchema,
   RoundIdSchema,
@@ -488,7 +489,18 @@ test("reopens the previous storage format with identical wire bytes, versions an
     expect(() => new ThreadJournal(f.db, environmentId)).toThrow("Incomplete legacy activity body");
     expect(f.db.query("SELECT 1 FROM tool_activity_blocks LIMIT 1").get()).toBeTruthy();
     f.db.run("UPDATE tool_activity_versions SET byte_length=byte_length+1 WHERE version='2'");
+    f.db.exec("DROP TABLE list_sources; DROP TABLE list_attempts; DROP TABLE list_watermarks;");
     const reopened = new ThreadJournal(f.db, environmentId);
+    const list = reopened.readList(
+      { kind: "list", projectId: null },
+      "visible",
+      v.parse(PrincipalIdSchema, "owner"),
+      () => true,
+      () => false,
+    );
+    expect(list.sources.get(threadId)?.summary.version).toBe(
+      v.parse(ObjectVersionSchema, list.head.through),
+    );
     for (const { item, bytes, hash } of versions) {
       const opened = read(reopened, threadId, id, item.version);
       if (opened.kind !== "ready") throw Error("Missing migrated version");

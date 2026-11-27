@@ -1,3 +1,4 @@
+import { decodeJournalRow } from "./journal-row";
 import type { Database } from "bun:sqlite";
 import * as v from "valibot";
 import {
@@ -6,7 +7,6 @@ import {
   AttentionFactsSchema,
   ObjectVersionSchema,
   SyncPositionSchema,
-  HistoryPageSchema,
   type HistoryRow,
   type ThreadId,
   type PrincipalId,
@@ -41,12 +41,11 @@ export class ListIndex {
           `SELECT source,created,changed,payload FROM sync_rows WHERE payload IS NOT NULL ORDER BY length(changed),changed`,
         )
         .all();
-      for (const row of rows)
-        this.record(
-          v.parse(HistoryPageSchema.entries.rows.item, JSON.parse(row.payload)),
-          row.changed,
-          0,
-        );
+      for (const row of rows) {
+        const payload: unknown = JSON.parse(row.payload);
+        if (typeof payload === "string") this.touch(row.source, row.changed, 0);
+        else this.record(decodeJournalRow(payload), row.changed, 0);
+      }
     }
   }
   touch(source: string, position: string, now: number) {
