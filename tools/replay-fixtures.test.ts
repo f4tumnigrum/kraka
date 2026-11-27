@@ -8,7 +8,9 @@ import { ReplayFactSchema } from "./fixtures/scenario";
 const root = join(import.meta.dir, "../fixtures");
 const executorDir = join(root, "executors");
 const scenarioDir = join(root, "scenarios");
-const executorFiles = [...new Bun.Glob("**/*.jsonl").scanSync({ cwd: executorDir })].sort();
+const executorFiles = [...new Bun.Glob("**/*.jsonl").scanSync({ cwd: executorDir })]
+  .map((file) => file.replaceAll("\\", "/"))
+  .sort();
 const scenarioFiles = [...new Bun.Glob("*.json").scanSync({ cwd: scenarioDir })].sort();
 test("older replay endings retain unknown clock provenance while newer facts preserve both times", () => {
   const fact = {
