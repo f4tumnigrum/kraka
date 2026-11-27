@@ -6,7 +6,7 @@ try {
   $path = $env:KRAKA_ACCESS_DIRECTORY
   $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
   if (-not [System.IO.Directory]::Exists($path)) {
-    $private = New-Object System.Security.AccessControl.DirectorySecurity
+    $private = [System.Security.AccessControl.DirectorySecurity]::new()
     $private.SetOwner($user)
     $private.SetAccessRuleProtection($true, $false)
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
@@ -22,6 +22,7 @@ try {
       throw 'State directory permits another account'
     }
   }
+  exit 0
 } catch {
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1
@@ -38,7 +39,12 @@ export async function ownedDirectory(dir: string) {
         "-EncodedCommand",
         Buffer.from(windowsDirectory, "utf16le").toString("base64"),
       ],
-      { env: { ...process.env, KRAKA_ACCESS_DIRECTORY: dir }, stdout: "ignore", stderr: "pipe" },
+      {
+        env: { ...process.env, KRAKA_ACCESS_DIRECTORY: dir },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
     );
     if (result.exitCode !== 0)
       throw Error(`Private state directory check failed: ${result.stderr.toString().trim()}`);

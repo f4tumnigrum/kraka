@@ -288,33 +288,6 @@ jobs:
           bun-version: 1.4.5
       - if: ${{ !matrix.alpine }}
         run: bun install --frozen-lockfile
-      - name: Inspect Windows ARM startup
-        if: matrix.target == 'win32-arm64'
-        shell: bash
-        run: |
-          set -eu
-          bun -e '
-            import {mkdtemp,rm} from "node:fs/promises";
-            import {tmpdir} from "node:os";
-            import {join} from "node:path";
-            import {readArtifact,installArtifact} from "./tools/package-release";
-            import {installedDirectory} from "./tools/fixtures/installed";
-            const dir=await mkdtemp(join(tmpdir(),"kraka-native-diag-"));
-            try{
-              const [path]=new Bun.Glob(".build/release/*.tar.gz").scanSync();
-              const site=await installedDirectory(dir,await installArtifact(await readArtifact(path),join(dir,"prefix")));
-              for(const [name,args,env] of [
-                ["compiled entry",[site.bin,"unknown-command"],site.env],
-                ["system identity",["whoami.exe","/user"],site.env],
-                ["PowerShell closed input",["powershell.exe","-NoProfile","-NonInteractive","-Command","Write-Output ready"],site.env],
-                ["PowerShell inherited path",["powershell.exe","-NoProfile","-NonInteractive","-Command","Write-Output ready"],process.env],
-                ["PowerShell explicit exit",["powershell.exe","-NoProfile","-NonInteractive","-Command","exit 0"],site.env]
-              ]){
-                const t=performance.now();
-                const r=Bun.spawnSync(args,{env,cwd:site.cwd,stdin:"ignore",stdout:"pipe",stderr:"pipe",timeout:25000});
-                console.log(name,Math.round(performance.now()-t),r.exitCode,r.signalCode,r.error?.code,"output bytes",r.stdout?.length,"stderr bytes",r.stderr?.length);
-              }
-            }finally{await rm(dir,{recursive:true,force:true,maxRetries:4,retryDelay:50});}'
       - name: Launch on host
         if: ${{ !matrix.alpine }}
         shell: bash

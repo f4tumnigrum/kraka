@@ -100,41 +100,14 @@ export function startInstalled(site: Installation, mode?: string) {
   const errors = new Response(child.stderr).text();
   const lines = createInterface({ input: Readable.fromWeb(child.stdout), crlfDelay: Infinity });
   const reader = lines[Symbol.asyncIterator]();
-  let records = 0;
   async function next<S extends v.GenericSchema>(schema: S): Promise<v.InferOutput<S>> {
-    const result = await within(reader.next(), 15000, "Installed daemon output").catch((error) => {
-      const flags = [
-        "writer.lock.sqlite",
-        "environment.sqlite",
-        "access.sqlite",
-        "instance.json",
-      ].filter((name) => existsSync(join(site.state, name)));
-      const client = existsSync(join(site.client, "device.sqlite"));
-      let children = "";
-      if (process.platform === "win32") {
-        const result = Bun.spawnSync(
-          [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            `(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${child.pid}').Name`,
-          ],
-          { timeout: 8000, stdout: "pipe", stderr: "ignore" },
-        );
-        children = result.stdout.toString().trim();
-      }
-      throw Error(
-        `${error}; record ${records + 1}, state directory ${existsSync(site.state)}, state files [${flags}], device store ${client}, children [${children}]`,
-      );
-    });
+    const result = await within(reader.next(), 15000, "Installed daemon output");
     if (result.done) {
       const code = await child.exited;
       throw Error(
         `Daemon exited before record (exit ${code}, signal ${child.signalCode ?? "none"}, state directory ${existsSync(site.state) ? "present" : "absent"}): ${await errors}`,
       );
     }
-    records++;
     return v.parse(schema, JSON.parse(result.value));
   }
   async function ready() {
