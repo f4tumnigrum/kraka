@@ -40,3 +40,5 @@ export { validateReplayUpdate } from "./replay-sequence";
 export * from "./canonical-json";
 
 export * from "./executor-instance";
+export * from "./sync";
+export * from "./logical-control";

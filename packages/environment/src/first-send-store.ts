@@ -1,3 +1,4 @@
+import { ThreadJournal } from "./thread-journal";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import {
@@ -151,12 +152,15 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
     : null;
 }
 export class FirstSendStore {
+  readonly sync: ThreadJournal;
   onQueueChanged?: (thread: Thread["id"]) => void;
   beforeCommit?: (method: string) => void;
   constructor(
     readonly db: Database,
     readonly writer: DirectoryWriter,
-  ) {}
+  ) {
+    this.sync = new ThreadJournal(db, writer.environmentId);
+  }
   projectDirectory(id: string) {
     const row = this.db
       .query<{ path: string; identity: string }, [string, string]>(
@@ -191,8 +195,10 @@ export class FirstSendStore {
       updated.attempts = updated.attempts.map((a) =>
         a.attemptId === updated.attempt.attemptId ? { ...a, phase } : a,
       );
+    const saved = v.parse(RoundSchema, updated);
     this.db.transaction(() => {
-      this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(updated), round.id]);
+      this.sync.record([{ objectType: "round", value: saved }]);
+      this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(saved), round.id]);
       const pending =
         phase.kind === "armed" ||
         phase.kind === "handed" ||
@@ -205,7 +211,8 @@ export class FirstSendStore {
         round.attempt.deliveryId,
       ]);
     })();
-    return v.parse(RoundSchema, updated);
+    this.sync.notify();
+    return saved;
   }
   freeze(delivery: FrozenDelivery) {
     const bytes = canonicalJson(delivery);

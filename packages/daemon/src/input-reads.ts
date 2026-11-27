@@ -7,6 +7,7 @@ import {
   SyncCursorSchema,
   REQUEST_METHODS,
   HistoryPageSchema,
+  roundForProtocol,
   type SynchronizedObjectSchema,
 } from "@kraka/protocol";
 import * as v from "valibot";
@@ -41,11 +42,10 @@ export function inputReads(store: FirstSendStore, actor: LocalActor) {
     });
     const rows: v.InferOutput<typeof SynchronizedObjectSchema>[] = [
       ...history.messages.map((value) => ({ objectType: "message" as const, value })),
-      ...history.rounds.map((value) => {
-        if (minor >= 1) return { objectType: "round" as const, value };
-        const { attempts, steering, ...legacy } = value;
-        return { objectType: "round" as const, value: legacy };
-      }),
+      ...history.rounds.map((round) => ({
+        objectType: "round" as const,
+        value: roundForProtocol(round, minor),
+      })),
     ];
     return { cursor, rows };
   }

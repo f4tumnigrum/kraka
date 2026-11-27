@@ -55,7 +55,7 @@ export function recordCommand(
       failure: { kind: "missingPermission", permission, target },
     } as const;
   const intent = canonicalJson({ method, target, payload });
-  return transaction.db.transaction((): CommandReceipt => {
+  const committed = transaction.db.transaction((): CommandReceipt => {
     const previous = readReceipt(transaction.db, actor.id, commandId);
     if (previous)
       return previous.intent === intent ? previous.receipt : reject(commandId, "idConflict");
@@ -70,6 +70,8 @@ export function recordCommand(
     transaction.beforeCommit?.(method);
     return receipt;
   })();
+  transaction.sync.notify();
+  return committed;
 }
 export function registerProject(
   context: FirstSendContext & { environmentId: EnvironmentId; realPath: string },
@@ -199,6 +201,11 @@ export function acceptFirstInput({
           phase: { kind: "filed", gate: "eligible" },
         },
       });
+      transaction.sync.record([
+        { objectType: "thread", value: thread },
+        { objectType: "message", value: message },
+        { objectType: "round", value: round },
+      ]);
       selected?.(round.id);
       const { attemptId, deliveryId } = round.attempt;
       transaction.db
@@ -241,6 +248,7 @@ export function renameThread(context: FirstSendContext & { threadId: ThreadId; t
       transaction.db
         .query("UPDATE threads SET data=? WHERE id=?")
         .run(JSON.stringify(changed), threadId);
+      transaction.sync.record([{ objectType: "thread", value: changed }]);
       return { kind: "threadRenamed", threadId, version: changed.version };
     },
   );

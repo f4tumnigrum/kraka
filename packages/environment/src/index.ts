@@ -46,3 +46,6 @@ export * from "./first-send";
 export * from "./input-command";
 export * from "./input-store";
 export * from "./executor-registry";
+
+export * from "./thread-pass";
+export * from "./environment-identity";

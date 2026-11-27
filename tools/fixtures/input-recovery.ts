@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { ownedDirectory } from "../../packages/cli-client/src/private-directory";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AttemptIdSchema,
@@ -44,7 +45,7 @@ export function withInputPeer(
 }
 async function setup(dir: string, holds: string[]) {
   const stateDir = join(dir, "state");
-  mkdirSync(stateDir);
+  await ownedDirectory(stateDir);
   const hold = (step: string) => writeFileSync(join(stateDir, "hold-" + step), "");
   const release = (step: string) => rmSync(join(stateDir, "hold-" + step), { force: true });
   for (const step of holds) hold(step);

@@ -13,6 +13,7 @@ import {
   PrincipalIdSchema,
   type RequestResult,
 } from "@kraka/protocol";
+import { ownedDirectory } from "../../packages/cli-client/src/private-directory";
 import * as v from "valibot";
 import { connectFirstSend, fixtureActor, fixtureSigner } from "./first-send-client";
 import { entry, fixture, sampleRequest, terminate, within } from "./replay-process";
@@ -24,12 +25,13 @@ export type Fault =
   | "afterCommit"
   | "externalWrite"
   | "peer"
+  | "resume"
   | "recovery";
-export function configureLocalOwner(
+export async function configureLocalOwner(
   stateDir: string,
   permissions = ["workspace.change", "thread.send", "thread.view"],
 ) {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  await ownedDirectory(stateDir);
   const privatePath = join(stateDir, "fixture-private.pem");
   if (existsSync(privatePath)) return;
   const { privateKey, publicKey } = generateKeyPairSync("ec", {
@@ -54,6 +56,7 @@ export function launchWriter(
   root: string,
   point?: Fault | "codex" | "codex-cli",
   recording = join(root, fixture),
+  ipc?: (message: unknown) => void,
 ) {
   const args =
     point === "codex-cli"
@@ -69,6 +72,7 @@ export function launchWriter(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
+    ...(ipc && { ipc }),
   });
   const stderr = new Response(child.stderr).text();
   const line = Promise.withResolvers<string>();
@@ -128,6 +132,7 @@ export async function startFirstSendFixture({
   root = productRoot,
   point,
   recording,
+  ipc,
 }: {
   stateDir: string;
   projectDirectory: string;
@@ -135,11 +140,12 @@ export async function startFirstSendFixture({
   root?: string;
   point?: Fault;
   recording?: string;
+  ipc?: (message: unknown) => void;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
-  configureLocalOwner(stateDir);
+  await configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
-  const launcher = launchWriter(stateDir, root, point, recording);
+  const launcher = launchWriter(stateDir, root, point, recording, ipc);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");

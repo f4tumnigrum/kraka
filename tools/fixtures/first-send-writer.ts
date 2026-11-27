@@ -1,3 +1,4 @@
+import { scenarioInput, serveSeed } from "./thread-seed";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
@@ -101,6 +102,17 @@ const writer = await startWriter(
       : {}),
   },
   {
+    ...(point === "resume"
+      ? {
+          threadCommand: scenarioInput,
+          inspectPage(page: import("@kraka/protocol").SubscriptionPage) {
+            if (!existsSync(join(state, "unknown-change"))) return page;
+            return JSON.parse(
+              JSON.stringify({ ...page, changes: [{ kind: "future.required" }, ...page.changes] }),
+            );
+          },
+        }
+      : {}),
     async beforeDispatch() {
       if (point === "recovery") while (existsSync(join(state, "hold-claim"))) await Bun.sleep(3);
       if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {
@@ -134,6 +146,7 @@ const writer = await startWriter(
       barrier("locked");
     },
     opened(store) {
+      if (point === "resume") serveSeed(store);
       openedStore = store;
       store.beforeCommit = (method) => {
         const marker = join(state, "auto-row");

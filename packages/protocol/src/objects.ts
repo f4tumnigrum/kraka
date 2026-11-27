@@ -17,6 +17,7 @@ import {
   RoundIdSchema,
   ThreadIdSchema,
   TodoRequestIdSchema,
+  TimelineItemIdSchema,
   WorktreeIdSchema,
 } from "./ids";
 import { RoundAttemptSchema, TodoStateSchema } from "./lifecycle";
@@ -210,6 +211,13 @@ export type MessageReference = v.InferOutput<typeof MessageReferenceSchema>;
 export type Subject = v.InferOutput<typeof SubjectSchema>;
 export type Message = v.InferOutput<typeof MessageSchema>;
 export type Round = v.InferOutput<typeof RoundSchema>;
+/** Minor 1 adds attempt history and steering to thread and history reads. */
+export function roundForProtocol(round: Round, minor: number): Round {
+  if (minor >= 1) return round;
+  const { attempts, steering, ...legacy } = round;
+  return legacy;
+}
+
 export type CheckpointCapture = v.InferOutput<typeof CheckpointCaptureSchema>;
 export type TodoRequestBody = v.InferOutput<typeof TodoRequestBodySchema>;
 export type TodoRequest = v.InferOutput<typeof TodoRequestSchema>;
@@ -217,6 +225,11 @@ export type WorkRelationship = v.InferOutput<typeof WorkRelationshipSchema>;
 export type ExecutorHandoff = Extract<WorkRelationship, { kind: "providerHandoff" }>;
 
 export const ObjectKeySchema = v.variant("objectType", [
+  v.strictObject({
+    objectType: v.literal("timelineItem"),
+    threadId: ThreadIdSchema,
+    id: TimelineItemIdSchema,
+  }),
   v.strictObject({ objectType: v.literal("environment"), id: EnvironmentIdSchema }),
   v.strictObject({ objectType: v.literal("project"), id: ProjectIdSchema }),
   v.strictObject({ objectType: v.literal("worktree"), id: WorktreeIdSchema }),

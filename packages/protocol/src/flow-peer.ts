@@ -14,6 +14,7 @@ export interface FlowPort {
   utf8: Utf8;
   now(): number;
   write(data: WireMessage): number;
+  beforeSend?(): void;
   sentControl?(message: ControlMessage): void;
 }
 export interface FrameSink {
@@ -75,8 +76,10 @@ export class FlowPeer {
   }
   pump(maxFrames = 32) {
     // A timer may expire a subscription even when the socket is waiting for drain.
+    this.port.beforeSend?.();
     this.send.expire(this.port.now());
     for (let n = 0; n < maxFrames && !this.closed && !this.blocked; n++) {
+      if (n) this.port.beforeSend?.();
       const reservation = this.send.next(this.port.now());
       if (!reservation) return false;
       const status = this.port.write(reservation.wire);

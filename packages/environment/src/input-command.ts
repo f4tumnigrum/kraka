@@ -8,6 +8,7 @@ import {
   RoundIdSchema,
   type SignedRequest,
   type ThreadId,
+  type Round,
 } from "@kraka/protocol";
 import * as v from "valibot";
 import { type LocalActor, recordCommand } from "./first-send";
@@ -82,11 +83,13 @@ export function applyInputCommand({
             threadId,
             change.queue.version,
           ]);
-          if (change.message)
+          if (change.message) {
+            transaction.sync.record([{ objectType: "message", value: change.message }]);
             transaction.db.run("UPDATE messages SET data=? WHERE id=?", [
               JSON.stringify(change.message),
               change.message.id,
             ]);
+          }
         }
         return change.receipt;
       }
@@ -121,6 +124,7 @@ export function applyInputCommand({
           message.id,
           JSON.stringify(message),
         ]);
+        let round: Round;
         if (active && head) {
           const original = readRound(transaction.db, head.id);
           if (!original) throw Error("Missing active round");
@@ -128,8 +132,13 @@ export function applyInputCommand({
             ...(original.steering ?? []),
             { attemptId, messageId: message.id, state: "pending" },
           ];
+          round = v.parse(RoundSchema, {
+            ...original,
+            version: nextVersion(original.version),
+            steering,
+          });
           transaction.db.run("UPDATE rounds SET data=? WHERE id=?", [
-            JSON.stringify({ ...original, version: nextVersion(original.version), steering }),
+            JSON.stringify(round),
             head.id,
           ]);
         } else {
@@ -137,7 +146,7 @@ export function applyInputCommand({
             head &&
             (head.attempt.phase.kind === "uncertain" ||
               ("gate" in head.attempt.phase && head.attempt.phase.gate === "held"));
-          const round = v.parse(RoundSchema, {
+          round = v.parse(RoundSchema, {
             id: roundId,
             threadId,
             messageId: message.id,
@@ -158,6 +167,10 @@ export function applyInputCommand({
           ]);
           transaction.db.run("INSERT INTO deliveries VALUES(?,?,1,NULL)", [deliveryId, round.id]);
         }
+        transaction.sync.record([
+          { objectType: "message", value: message },
+          { objectType: "round", value: round },
+        ]);
         advanceQueue(transaction, threadId);
         return {
           kind: "inputScheduled",
@@ -235,12 +248,12 @@ export function recordSteerRead(
   if (steer.state === "pending") {
     store.db.transaction(() => {
       steer.state = "completed";
-      store.db.run("UPDATE rounds SET data=? WHERE id=?", [
-        JSON.stringify({ ...round, version: nextVersion(round.version) }),
-        round.id,
-      ]);
+      const updated = { ...round, version: nextVersion(round.version) };
+      store.sync.record([{ objectType: "round", value: updated }]);
+      store.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(updated), round.id]);
       advanceQueue(store, threadId);
     })();
+    store.sync.notify();
   }
   return true;
 }
