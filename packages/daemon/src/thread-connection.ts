@@ -101,16 +101,7 @@ export async function threadConnection(
         if (!session || !usable(session.signer)) return false;
         const thread = readThread(store.db, threadId);
         if (!thread) return false;
-        const bound = host.store.db
-          .query<{ parent: string }, [string]>(
-            "SELECT parent FROM objects WHERE kind='thread' AND id=?",
-          )
-          .get(threadId);
-        if (bound && bound.parent !== thread.projectId) return false;
-        if (!bound) {
-          host.store.provisionProject(thread.projectId);
-          host.store.provisionThread(threadId, thread.projectId);
-        }
+        if (!host.store.ensureThread(threadId, thread.projectId)) return false;
         return !!host.store.ceiling(session.principal.id, { kind: "thread", threadId }, permission);
       };
       function accept(m: SignedRequest | PrivateSecretRequest | ClientAuthentication) {

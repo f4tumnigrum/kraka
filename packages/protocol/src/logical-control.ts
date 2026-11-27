@@ -26,14 +26,23 @@ export function sendLogicalRequest(
     peer.control(request);
     return;
   }
-  const transferId = v.parse(ContentTransferIdSchema, request.commandId);
+  return sendLogicalContent(peer, data, request.commandId);
+}
+
+export function sendLogicalContent(
+  peer: FlowPeer,
+  data: Uint8Array,
+  key: string,
+  onSent: (id: number) => void = (id) => peer.send.finish(id),
+) {
+  const transferId = v.parse(ContentTransferIdSchema, key);
   let pull: ReturnType<typeof binarySource>;
   const id = peer.send.open(
-    v.parse(SubscriptionIdSchema, request.commandId),
+    v.parse(SubscriptionIdSchema, key),
     (offset, capacity) => pull(offset, capacity),
     (frame) => {
       if ("payload" in frame && frame.message.offsetBytes + frame.payload.length === data.length)
-        peer.send.finish(id);
+        onSent(id);
     },
   );
   pull = binarySource({
@@ -41,7 +50,7 @@ export function sendLogicalRequest(
     streamId: id,
     transferId,
     length: data.length,
-    utf8,
+    utf8: peer.port.utf8,
     read: (offset, n) => data.subarray(offset, offset + n),
   });
   peer.control({
@@ -53,23 +62,22 @@ export function sendLogicalRequest(
   });
   return id;
 }
-export class RequestUploads {
+export class ControlContentReceiver {
   private streams = new Map<number, { parts: Uint8Array[]; length: number; received: number }>();
   private allocated = 0;
-  constructor(private peer: FlowPeer) {}
+  constructor(
+    private peer: FlowPeer,
+    private readonly maximumBytes: number,
+  ) {}
   declare(m: Extract<ControlMessage, { kind: "transport.content" }>) {
-    if (m.byteLength < 1 || this.allocated + m.byteLength > TRANSPORT_LIMITS.maxPendingDataBytes)
+    if (m.byteLength < 1 || this.allocated + m.byteLength > this.maximumBytes)
       throw Error("Request staging capacity exceeded");
     this.peer.receive.open(m.streamId);
     this.peer.receive.declare(m.streamId, m.transferId, m.byteLength);
     this.streams.set(m.streamId, { parts: [], length: m.byteLength, received: 0 });
     this.allocated += m.byteLength;
   }
-  data(
-    f: Extract<TransportFrame, { lane: "data" }>,
-    size: number,
-    features: SessionAuthorized["features"] = [],
-  ) {
+  protected readContent(f: Extract<TransportFrame, { lane: "data" }>, size: number) {
     const s = this.streams.get(f.streamId);
     if (!s || !("payload" in f)) throw Error("Undeclared request");
     s.parts.push(f.payload.slice());
@@ -83,17 +91,16 @@ export class RequestUploads {
       offset += part.length;
     }
     this.drop(f.streamId);
-    const raw: unknown = JSON.parse(this.peer.port.utf8.decode(bytes));
-    if (raw && typeof raw === "object" && "method" in raw && raw.method === "todo.submitSecret") {
-      const parsed = readPrivateSecretRequest(raw, features);
-      if (parsed.kind !== "request" || parsed.request.commandId !== String(f.message.transferId))
-        throw Error("Invalid confidential request");
-      return parsed.request;
-    }
-    const m = v.parse(ControlMessageSchema, raw);
-    if (m.kind !== "signedRequest" || m.commandId !== String(f.message.transferId))
-      throw Error("Invalid logical request binding");
-    return m;
+    const value: unknown = JSON.parse(this.peer.port.utf8.decode(bytes));
+    return { value, transferId: f.message.transferId };
+  }
+  read(f: Extract<TransportFrame, { lane: "data" }>, size: number) {
+    const content = this.readContent(f, size);
+    return content ? v.parse(ControlMessageSchema, content.value) : null;
+  }
+  clear() {
+    this.streams.clear();
+    this.allocated = 0;
   }
   drop(id: number) {
     const s = this.streams.get(id);
@@ -102,5 +109,35 @@ export class RequestUploads {
       this.streams.delete(id);
     }
     this.peer.receive.cancel(id);
+  }
+}
+
+export class RequestUploads extends ControlContentReceiver {
+  constructor(peer: FlowPeer) {
+    super(peer, TRANSPORT_LIMITS.maxPendingDataBytes);
+  }
+  data(
+    frame: Extract<TransportFrame, { lane: "data" }>,
+    size: number,
+    features: SessionAuthorized["features"] = [],
+  ) {
+    const content = this.readContent(frame, size);
+    if (!content) return null;
+    const { value, transferId } = content;
+    if (
+      value &&
+      typeof value === "object" &&
+      "method" in value &&
+      value.method === "todo.submitSecret"
+    ) {
+      const parsed = readPrivateSecretRequest(value, features);
+      if (parsed.kind !== "request" || parsed.request.commandId !== String(transferId))
+        throw Error("Invalid confidential request");
+      return parsed.request;
+    }
+    const message = v.parse(ControlMessageSchema, value);
+    if (message.kind !== "signedRequest" || message.commandId !== String(transferId))
+      throw Error("Invalid logical request binding");
+    return message;
   }
 }

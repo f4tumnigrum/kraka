@@ -1,3 +1,4 @@
+import { listenBrowserDaemon } from "./browser-daemon";
 import { accessCli } from "./access";
 import "@kraka/cli-client";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -12,7 +13,6 @@ import {
 } from "@kraka/environment";
 import { ReplayRunRequestSchema } from "@kraka/protocol";
 import * as v from "valibot";
-import { listenFlow } from "./flow-socket";
 import { startWriter } from "./first-send";
 
 type SocketState = { claimed: boolean; controller: AbortController; terminal: boolean };
@@ -162,14 +162,19 @@ if (import.meta.main && process.argv.length > 2) {
           "state-dir": { type: "string" },
           listen: { type: "string" },
           port: { type: "string" },
+          "tls-cert": { type: "string" },
+          "tls-key": { type: "string" },
+          "public-origin": { type: "string" },
         },
       });
       if (!values["state-dir"] || !values.listen || !values.port || !/^\d+$/.test(values.port))
         throw new Error("Expected daemon --state-dir DIR --listen 127.0.0.1 --port N");
-      const listener = await listenFlow({
-        stateDir: values["state-dir"],
+      const listener = await listenBrowserDaemon(values["state-dir"], {
         host: values.listen,
         port: Number(values.port),
+        ...(values["tls-cert"] !== undefined ? { certificate: values["tls-cert"] } : {}),
+        ...(values["tls-key"] !== undefined ? { privateKey: values["tls-key"] } : {}),
+        ...(values["public-origin"] !== undefined ? { publicOrigin: values["public-origin"] } : {}),
       });
       process.once("SIGTERM", listener.shutdown);
       process.once("SIGINT", listener.shutdown);

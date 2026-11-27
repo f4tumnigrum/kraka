@@ -49,7 +49,7 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions" | "worktree.recovery";
+  variant?: "access.listSessions" | "worktree.recovery" | "browserTLS";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -319,10 +319,16 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
     .filter((m) => !metrics.length || metrics.includes(m))
     .flatMap((metric): Workload[] =>
       metric === "P1"
-        ? [{ metric, variant: "access.listSessions" }, { metric }]
-        : metric === "P7"
-          ? [{ metric }, { metric, variant: "worktree.recovery" }]
-          : [{ metric }],
+        ? [
+            { metric, variant: "access.listSessions" },
+            { metric },
+            { metric, variant: "browserTLS" },
+          ]
+        : metric === "P2" || metric === "P9"
+          ? [{ metric }, { metric, variant: "browserTLS" }]
+          : metric === "P7"
+            ? [{ metric }, { metric, variant: "worktree.recovery" }]
+            : [{ metric }],
     );
 }
 
@@ -373,7 +379,43 @@ export async function prepareBudget(root: string, role: Role) {
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (variant === "worktree.recovery") {
+      else if (
+        variant === "browserTLS" &&
+        (metric === "P1" || metric === "P2" || metric === "P9")
+      ) {
+        base.endpoint = "TLS foreground daemon with a registered P-256 device";
+        base.workload =
+          metric === "P9"
+            ? "Durable thread.rename on eight registered TLS connections"
+            : metric === "P2"
+              ? "Current idle TLS daemon physical footprint at signed acceptance +60 s"
+              : "TLS daemon spawn through protected enrollment and first signed acceptance";
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, "packages/daemon/src/browser-daemon.ts")).exists())
+        ) {
+          const diagnostic = Bun.spawnSync(
+            [
+              process.execPath,
+              join(root, "packages/daemon/src/index.ts"),
+              "daemon",
+              "--tls-cert",
+              "fixture",
+            ],
+            { cwd: root },
+          );
+          if (diagnostic.exitCode === 0 || !diagnostic.stderr.toString().includes("tls-cert"))
+            throw Error("Unrecognized baseline TLS capability");
+          report = unavailable(
+            base,
+            "Parent foreground listener does not accept TLS certificate options",
+          );
+        } else {
+          const { measureBrowser } = await import("./measure-browser");
+          const counts = await measureBrowser(base, root, metric, nextBlock);
+          report = measured(base, counts, metric === "P2" && process.platform !== "darwin");
+        }
+      } else if (variant === "worktree.recovery") {
         base.workload = "Five restarts of a daemon with an unfinished managed checkout";
         base.endpoint = "original worktree claim's evidenced disposition";
         base.thresholds = [{ series: "claimRecovery", unit: "ms", statistic: "each", limit: 2000 }];
