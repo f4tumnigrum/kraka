@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { type HostInstanceId } from "@kraka/protocol";
+import type { HostInstanceId } from "@kraka/protocol";
 import * as v from "valibot";
 import { InstancePublicationSchema, observeWriter, type InstancePublication } from "./migrations";
 

@@ -26,7 +26,7 @@ export async function preflight(options: BrowserListenerOptions) {
   const loopback =
     bindName === "localhost" ||
     (ip === 4 && bindName.startsWith("127.")) ||
-    (ip === 6 && new URL("http://[" + bindName + "]").hostname === "[::1]");
+    (ip === 6 && new URL(`http://[${bindName}]`).hostname === "[::1]");
   const origin =
     options.publicOrigin === undefined ? null : canonicalHttpOrigin(options.publicOrigin, URL);
   const hostname = (origin ? new URL(origin).hostname : bindName).replace(/^\[|\]$/g, "");

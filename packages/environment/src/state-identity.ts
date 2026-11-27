@@ -36,7 +36,7 @@ export function stateEnvironmentId(directory: string, registered?: EnvironmentId
       db.close();
     }
   }
-  const temp = file + "." + crypto.randomUUID();
+  const temp = `${file}.${crypto.randomUUID()}`;
   writeFileSync(temp, preferred ?? crypto.randomUUID(), { mode: 0o600, flag: "wx", flush: true });
   try {
     linkSync(temp, file);

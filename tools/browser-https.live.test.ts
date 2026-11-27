@@ -79,9 +79,9 @@ if (native) {
     expect(bundle).toContain("openBrowserSession");
     expect(bundle).not.toContain("/__fixture__/");
     const html = await (await fetch(f.origin)).text();
-    const fixture = await (await fetch(f.origin + "/__fixture__/browser.html")).text();
+    const fixture = await (await fetch(`${f.origin}/__fixture__/browser.html`)).text();
     for (const body of [html, fixture]) expect(body).toContain('from "/assets/browser-host.js"');
-    const js = await fetch(f.origin + "/assets/browser-host.js");
+    const js = await fetch(`${f.origin}/assets/browser-host.js`);
     expect(js.status).toBe(200);
     expect(await js.clone().text()).toBe(bundle);
     const app = Bun.spawn(
@@ -103,8 +103,8 @@ if (native) {
       const first = await within(reader.read(), 3000, "release ready");
       const ready = JSON.parse(new TextDecoder().decode(first.value));
       expect(ready.kind).toBe("ready");
-      expect((await fetch(ready.origin + "/__fixture__/browser.html")).status).toBe(404);
-      expect(await (await fetch(ready.origin + "/assets/browser-host.js")).text()).toEqual(
+      expect((await fetch(`${ready.origin}/__fixture__/browser.html`)).status).toBe(404);
+      expect(await (await fetch(`${ready.origin}/assets/browser-host.js`)).text()).toEqual(
         await js.text(),
       );
     } finally {
@@ -340,7 +340,7 @@ if (native) {
           path: join(import.meta.dir, "fixtures/browser-observations.js"),
         });
         // The fixture page imports the same module without opening a second registered connection here.
-        await page.goto(f.origin + "/__fixture__/browser.html");
+        await page.goto(`${f.origin}/__fixture__/browser.html`);
         if (["missing", "corrupt", "unusable"].includes(change))
           await page.evaluate(
             ([env, mode]) => Reflect.get(globalThis, "inspectDevice")(env, mode),
@@ -485,7 +485,7 @@ if (process.env.KRAKA_BROWSER_CASES === "routed") {
     }
   });
   for (const [i, placement] of ["LAN", "routed"].entries())
-    networkCase("routed " + (i + 2) + ". insecure HTTP on " + placement, async (f) => {
+    networkCase(`routed ${i + 2}. insecure HTTP on ${placement}`, async (f) => {
       const { browserAssets } = await import("../packages/daemon/src/browser-listener");
       const asset = await browserAssets();
       let upgrades = 0;
@@ -505,7 +505,7 @@ if (process.env.KRAKA_BROWSER_CASES === "routed") {
         if (placement === "routed") await f.restore();
         const route = JSON.parse(await f.route());
         expect(route[0].prefsrc).toBe(placement === "LAN" ? "10.78.41.11" : "10.78.42.11");
-        const origin = "http://kraka.test:" + server.port;
+        const origin = `http://kraka.test:${server.port}`;
         await f.page.goto(origin);
         const facts = await f.page.evaluate(
           async ({ identity, origin, projectId }) => {
@@ -562,7 +562,7 @@ if (process.env.KRAKA_BROWSER_CASES === "routed") {
       },
     });
     try {
-      await expect(f.page.goto("https://kraka.test:" + server.port)).rejects.toThrow(
+      await expect(f.page.goto(`https://kraka.test:${server.port}`)).rejects.toThrow(
         "ERR_CERT_AUTHORITY_INVALID",
       );
       expect(pages).toBe(0);

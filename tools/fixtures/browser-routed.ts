@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { once } from "node:events";
 export async function mobile(path: string) {
-  const response = await fetch("http://localhost" + path, { unix: "/fixture/mobile.sock" });
+  const response = await fetch(`http://localhost${path}`, { unix: "/fixture/mobile.sock" });
   const body = await response.text();
   if (!response.ok) throw Error(body);
   return body;
@@ -30,16 +30,16 @@ export async function routedBrowser(profileDir: string) {
   await once(proxy, "listening");
   const addr = proxy.address();
   if (!addr || typeof addr === "string") throw Error("CDP proxy bind failed");
-  const url = "http://127.0.0.1:" + addr.port;
+  const url = `http://127.0.0.1:${addr.port}`;
   await mobile("/lan");
   return {
     async forkProfile() {
       const next = crypto.randomUUID();
-      await mobile("/copy?from=" + profile + "&to=" + next);
+      await mobile(`/copy?from=${profile}&to=${next}`);
       profile = next;
     },
     async launch() {
-      await mobile("/launch?profile=" + profile);
+      await mobile(`/launch?profile=${profile}`);
       const browser = await chromium.connectOverCDP(url);
       const context = browser.contexts()[0];
       if (!context) throw Error("Missing mobile profile");

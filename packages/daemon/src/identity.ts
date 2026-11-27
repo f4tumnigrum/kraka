@@ -579,7 +579,7 @@ export function listenIdentity(
   const origin = new URL(
     (browser?.binding.protocol ?? "http") +
       "://" +
-      (name.includes(":") && !name.startsWith("[") ? "[" + name + "]" : name) +
+      (name.includes(":") && !name.startsWith("[") ? `[${name}]` : name) +
       ":" +
       address.port,
   ).origin;

@@ -107,7 +107,7 @@ export async function startBrowserPage(main: HTMLElement) {
     if (pinned !== "pinned" && pinned !== "alreadyPinned") throw Error(pinned);
     identity = verified;
     await addBrowserRoute(verified.id, {
-      id: v.parse(RouteIdSchema, verified.id + "-browser"),
+      id: v.parse(RouteIdSchema, `${verified.id}-browser`),
       environmentId: verified.id,
       kind: location.protocol === "https:" ? "lan" : "local",
       endpoint: location.origin,

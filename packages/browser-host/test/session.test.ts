@@ -147,7 +147,7 @@ test(
               await commit({
                 ...cat,
                 environments: [
-                  { ...entry, routes: [{ ...row, endpoint: "https://kraka.test:" + n }] },
+                  { ...entry, routes: [{ ...row, endpoint: `https://kraka.test:${n}` }] },
                 ],
               });
               invalid.push(await open(cat, origin, ""));
@@ -178,7 +178,7 @@ test(
         ]);
         expect(results.fallback.snapshot).toMatchObject({
           phase: "sendable",
-          routeId: f.project.identity.id + "-browser",
+          routeId: `${f.project.identity.id}-browser`,
         });
         for (const value of results.bad)
           expect(value).toMatchObject({ snapshot: { phase: "failed" }, business: 0 });
@@ -187,9 +187,7 @@ test(
             const path = "/assets/browser-host.js",
               m = await import(path);
             const next = { ...identity, id: "distinct" };
-            await (0, eval)(
-              "const orig=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(...args){const r=orig.apply(this,args);this.transaction.abort();return r;};",
-            );
+            Reflect.get(globalThis, "abortNextBrowserWrite")("records");
             const result = await m.browserPins.pin({
               origin,
               environmentId: next.id,

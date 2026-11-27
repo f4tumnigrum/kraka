@@ -1,11 +1,11 @@
 import { join } from "node:path";
 import * as v from "valibot";
-import { type CommandId, type CommandReceipt } from "@kraka/protocol";
+import type { CommandId, CommandReceipt } from "@kraka/protocol";
 import { openReceiptReader, readReceipt, readThread } from "@kraka/environment";
 import { openDeviceCredentials } from "../packages/cli-client/src";
 import { openAccessHost } from "../packages/daemon/src/access";
 import type { RouteDial } from "../packages/client-runtime/src";
-import { type ReportBase } from "./perf";
+import type { ReportBase } from "./perf";
 import { certificate } from "./fixtures/browser-cert";
 import { currentFootprint, noChildren } from "./measure-replay";
 import { within, withState, terminate } from "./fixtures/replay-process";
@@ -229,7 +229,7 @@ async function rename(base: ReportBase, root: string) {
         ) {
           for (let i = 0; i < length; i++) {
             const id = commandId(),
-              title = "TLS rename " + ++ordinal;
+              title = `TLS rename ${++ordinal}`;
             const receipt = await c.request({
               commandId: id,
               method: "thread.rename",

@@ -25,7 +25,7 @@
     return signature;
   };
 })();
-globalThis.inspectDevice = async function (env, change) {
+globalThis.inspectDevice = async (env, change) => {
   const db = await new Promise((resolve, reject) => {
     const r = indexedDB.open("kraka-device-credentials", 1);
     r.onsuccess = () => resolve(r.result);
@@ -66,4 +66,16 @@ globalThis.inspectDevice = async function (env, change) {
   } finally {
     db.close();
   }
+};
+
+globalThis.abortNextBrowserWrite = (storeName) => {
+  const original = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function (...args) {
+    const result = original.apply(this, args);
+    if (this.name === storeName) {
+      IDBObjectStore.prototype.put = original;
+      this.transaction.abort();
+    }
+    return result;
+  };
 };

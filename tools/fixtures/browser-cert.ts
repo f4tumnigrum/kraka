@@ -5,9 +5,9 @@ export async function certificate(
   name = "loopback",
   san = "IP:127.0.0.1,DNS:localhost",
 ) {
-  const cert = join(dir, name + ".crt"),
-    key = join(dir, name + ".key"),
-    config = join(dir, name + ".cnf");
+  const cert = join(dir, `${name}.crt`),
+    key = join(dir, `${name}.key`),
+    config = join(dir, `${name}.cnf`);
   await writeFile(
     config,
     "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n[dn]\nCN=localhost\n[ext]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName=" +

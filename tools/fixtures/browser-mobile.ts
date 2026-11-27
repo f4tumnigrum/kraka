@@ -48,7 +48,7 @@ const control = createServer(async (req, res) => {
             "--no-first-run",
             "--disable-background-networking",
             "--disable-dev-shm-usage",
-            "--user-data-dir=" + dir,
+            `--user-data-dir=${dir}`,
             "--remote-debugging-port=9222",
             "about:blank",
           ],

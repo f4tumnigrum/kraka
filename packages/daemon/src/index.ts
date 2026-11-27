@@ -172,7 +172,7 @@ if (import.meta.main && process.argv.length > 2) {
       });
       process.once("SIGTERM", listener.shutdown);
       process.once("SIGINT", listener.shutdown);
-      process.stdout.write(JSON.stringify(listener.ready) + "\n");
+      process.stdout.write(`${JSON.stringify(listener.ready)}\n`);
     } else if (command === "start") {
       const { values } = parseArgs({
         args,

@@ -83,7 +83,7 @@ export class ControlStream {
       )
         throw error;
       const bytes = utf8.encode(JSON.stringify(message));
-      const transferId = v.parse(ContentTransferIdSchema, "content-" + ++this.serial);
+      const transferId = v.parse(ContentTransferIdSchema, `content-${++this.serial}`);
       const source = { complete: false };
       const streamId = this.flow.send.open(
         v.parse(SubscriptionIdSchema, transferId),
