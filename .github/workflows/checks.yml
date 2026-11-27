@@ -18,7 +18,8 @@ jobs:
           - ubuntu-latest
           - macos-latest
           - windows-latest
-    runs-on: ${{ matrix.os }}
+    # Playwright 1.56.1 ships Chromium for Ubuntu 24.04.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     env:
       KRAKA_REQUIRED_ATTENTION_CASES: "1"
     steps:
