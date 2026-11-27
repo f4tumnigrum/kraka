@@ -21,8 +21,20 @@ interface Threshold {
   unit: Unit;
   statistic: "median" | "p99" | "each";
   limit: number;
-  direction?: "min";
+  direction?: "min" | undefined;
 }
+export function budgetValue(
+  threshold: Pick<Threshold, "statistic" | "direction">,
+  summary: Record<"median" | "p99" | "min" | "max", number>,
+) {
+  if (threshold.statistic === "each")
+    return threshold.direction === "min" ? summary.min : summary.max;
+  return summary[threshold.statistic];
+}
+export function exceedsBudget(threshold: Pick<Threshold, "limit" | "direction">, value: number) {
+  return threshold.direction === "min" ? value < threshold.limit : value > threshold.limit;
+}
+
 export interface ProbeSpec {
   workload: string;
   endpoint: string;

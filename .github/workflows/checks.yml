@@ -34,38 +34,66 @@ jobs:
       - run: bun test ./tools/route-switch.live.test.ts
         env:
           KRAKA_REQUIRED_ROUTE_CASES: "1"
+      - run: bun test ./tools/input-recovery.live.test.ts
+      - run: bun test ./tools/codex-turn.live.test.ts
       - run: bun test ./tools/owner-pairing.live.test.ts
         env:
           KRAKA_REQUIRED_PAIRING_CASES: "1"
+      - run: bun test ./tools/thread-resume.live.test.ts
       - run: bun test ./tools/first-send.live.test.ts
       - run: bun test ./tools/isolated-start.live.test.ts
-      - run: >-
-          bun test
-          --path-ignore-patterns "**/reference-conformance.live.test.ts"
-          --path-ignore-patterns "**/route-switch.live.test.ts"
-          --path-ignore-patterns "**/first-send.live.test.ts"
-          --path-ignore-patterns "**/isolated-start.live.test.ts"
-          --path-ignore-patterns "**/owner-pairing.live.test.ts"
+      - name: Test workspace and require all three short socket cases
+        shell: bash
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          bun test \
+            --path-ignore-patterns "**/reference-conformance.live.test.ts" \
+            --path-ignore-patterns "**/route-switch.live.test.ts" \
+            --path-ignore-patterns "**/input-recovery.live.test.ts" \
+            --path-ignore-patterns "**/codex-turn.live.test.ts" \
+            --path-ignore-patterns "**/owner-pairing.live.test.ts" \
+            --path-ignore-patterns "**/thread-resume.live.test.ts" \
+            --path-ignore-patterns "**/isolated-start.live.test.ts" \
+            --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
+          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done
       - run: bun run build
       - run: bun run protocol:reference:check
-      - name: Measure budgets on the PR base
+      - name: Measure control receipts on delayed and bandwidth-limited sockets
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun tools/stream-flow-bench.ts --shaped | tee "$RUNNER_TEMP/budget-shaped.jsonl"
+          grep -Fx '{"group":4,"completed":true}' "$RUNNER_TEMP/budget-shaped.jsonl"
+      - name: Prepare PR budget baseline
+        id: baseline
+        continue-on-error: true
         if: runner.os == 'macOS' && github.event_name == 'pull_request'
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          BASE_ROOT="$(mktemp -d)"
-          trap 'rm -rf "$BASE_ROOT"' EXIT
+          BASE_ROOT="$(mktemp -d "$RUNNER_TEMP/kraka-perf-XXXXXX")"
           git archive "$BASE_SHA" | tar -xf - -C "$BASE_ROOT"
           (cd "$BASE_ROOT" && bun install --frozen-lockfile)
-          bun run perf --baseline-root "$BASE_ROOT" | tee "$RUNNER_TEMP/budget-baseline.jsonl"
-      - name: Measure candidate budgets
+          echo "root=$BASE_ROOT" >> "$GITHUB_OUTPUT"
+      - name: Measure budget workloads
         if: ${{ !cancelled() && runner.os == 'macOS' }}
+        env:
+          BASE_ROOT: ${{ steps.baseline.outputs.root }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          bun run perf --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
+          if [[ -n "$BASE_ROOT" ]]; then
+            trap 'rm -rf "$BASE_ROOT"' EXIT
+            bun tools/perf-pair.ts "$BASE_ROOT" "$RUNNER_TEMP"
+          else
+            bun run perf --report-only --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
+          fi
       - name: Compare budget observations
         if: ${{ !cancelled() && runner.os == 'macOS' && github.event_name == 'pull_request' }}
         shell: bash
@@ -76,5 +104,7 @@ jobs:
         if: always() && runner.os == 'macOS'
         with:
           name: daemon-budget-reports
-          path: ${{ runner.temp }}/budget-*.jsonl
+          path: |
+            ${{ runner.temp }}/budget-*.jsonl
+            ${{ runner.temp }}/flow-tests.log
           if-no-files-found: error

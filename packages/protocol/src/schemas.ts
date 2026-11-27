@@ -1,3 +1,4 @@
+import { ExecutorTurnUpdateSchema } from "./executor-instance";
 import { ReplayRunRequestSchema, ReplayTurnUpdateSchema } from "./replay";
 import { DeviceRegistrationSchema } from "./device-registration";
 import { AccessChangeSchema, UnusedInviteSchema } from "./access-management";
@@ -155,6 +156,7 @@ import {
   UpgradeRequestSchema,
 } from "./upgrades";
 export const protocolSchemas = {
+  ExecutorTurnUpdate: ExecutorTurnUpdateSchema,
   ReplayRunRequest: ReplayRunRequestSchema,
   ReplayTurnUpdate: ReplayTurnUpdateSchema,
   DeviceRegistration: DeviceRegistrationSchema,

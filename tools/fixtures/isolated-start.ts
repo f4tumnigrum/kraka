@@ -20,12 +20,12 @@ export function git(cwd: string, ...args: string[]) {
   if (r.exitCode !== 0) throw Error(r.stderr.toString());
   return r.stdout.toString().trimEnd();
 }
-export function seedGit(dir: string) {
+export function seedGit(dir: string, name = "repo") {
   const version = git(dir, "--version");
   const parts = /^git version 2\.(\d+)\.(\d+)/.exec(version);
   if (!parts || Number(parts[1]) * 1000 + Number(parts[2]) < 50001)
     throw Error(`Git 2.50.1+ required: ${version}`);
-  const path = join(realpathSync.native(dir), "repo");
+  const path = join(realpathSync.native(dir), name);
   git(dir, "init", "-b", "main", path);
   const commit = (text: string) => {
     writeFileSync(join(path, "version.txt"), text);

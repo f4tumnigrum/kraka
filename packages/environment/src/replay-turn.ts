@@ -1,34 +1,39 @@
-import * as v from "valibot";
 import {
   AttemptIdSchema,
   CaptureIdSchema,
+  type CommandReceipt,
+  type DeliveryId,
   DeliveryIdSchema,
   ExecutorInstanceIdSchema,
   ExecutorInstanceSnapshotSchema,
+  type MessageId,
   MessageIdSchema,
+  type ObjectVersion,
   QueuePositionSchema,
+  type ReplayRunRequest,
+  type ReplayTurnUpdate,
   ReplayTurnUpdateSchema,
+  type Round,
+  type RoundAttempt,
   RoundIdSchema,
+  type Thread,
   ThreadSchema,
   validateReplayUpdate,
-  type RoundAttempt,
-  type Thread,
-  type Round,
-  type ReplayRunRequest,
-  type CommandReceipt,
-  type ReplayTurnUpdate,
 } from "@kraka/protocol";
+import * as v from "valibot";
 import {
+  type AdapterEventEnvelope,
+  type AdapterEventPayload,
+  type AdapterInput,
+  type CloseReason,
+  type DeliveryGuarantee,
   matchesAdapterEvent,
   type ProviderAdapter,
-  type AdapterEventPayload,
-  type AdapterEventEnvelope,
-  type CloseReason,
 } from "./adapter-contract";
 import type { FrozenDelivery, ThreadSessionBinding } from "./executor-records";
-import { transitionInputQueue, type InputQueue } from "./queue";
-import { transitionRound, type RoundReport } from "./round";
+import { type InputQueue, transitionInputQueue } from "./queue";
 import type { TransitionResult } from "./result";
+import { type RoundReport, transitionRound } from "./round";
 
 const instance = {
   family: "replay",
@@ -50,6 +55,7 @@ const toolCommand = v.strictObject({ command: v.string() });
 const toolOutput = v.strictObject({ text: v.string() });
 const toolEnd = v.strictObject({ text: v.string(), exitCode: v.pipe(v.number(), v.integer()) });
 
+export type LiveSteer = (input: AdapterInput, deliveryId: DeliveryId) => Promise<void>;
 export async function runReplayTurn<Handle extends object>({
   request,
   adapter,
@@ -69,8 +75,16 @@ export async function runReplayTurn<Handle extends object>({
   persisted?: {
     thread: Thread;
     round: Round;
-    prepare: (delivery: FrozenDelivery) => void;
-    phase: (phase: RoundAttempt["phase"]) => void;
+    messageVersion: ObjectVersion;
+    prepare: (
+      delivery: FrozenDelivery,
+      guarantee: DeliveryGuarantee,
+    ) => { input: AdapterInput; handoff?: FrozenDelivery["handoff"] };
+    report: (binding: ThreadSessionBinding, event: RoundReport) => void;
+    steer?: (run: LiveSteer) => void;
+    previousReceipt?: (event: AdapterEventEnvelope<"replay">) => void;
+    readSteer?: (attempt: RoundAttempt["attemptId"], message: MessageId) => void;
+    resume?: ThreadSessionBinding["nativeSessionId"];
     directory: () => string;
   };
   emit: (message: CommandReceipt | ReplayTurnUpdate) => void;
@@ -156,7 +170,7 @@ export async function runReplayTurn<Handle extends object>({
   };
   const opened = await adapter.open({
     instance,
-    resume: null,
+    resume: persisted?.resume ?? null,
     attemptId,
     setup: {
       workingDirectory: persisted?.directory() ?? workingDirectory,
@@ -211,16 +225,64 @@ export async function runReplayTurn<Handle extends object>({
     let attempt: RoundAttempt = head.attempt;
     const report = (event: RoundReport) => {
       attempt = { ...attempt, phase: applied(transitionRound(attempt, event)) };
-      persisted?.phase(attempt.phase);
+      persisted?.report(binding, event);
     };
     const delivery: FrozenDelivery = {
       ...ticket,
       target: binding,
-      messageVersion: thread.version,
+      messageVersion: persisted?.messageVersion ?? thread.version,
       input: { id: messageId, ...request.input },
       parts: [],
     };
-    persisted?.prepare(delivery);
+    const payload = persisted?.prepare(delivery, c.input) ?? delivery;
+    if (payload.handoff) {
+      if (c.matrix.startSession.kind === "unsupported") throw Error("Handoff unsupported");
+      const ack = await adapter.invoke(
+        session,
+        {
+          ...instance,
+          capability: "startSession",
+          capabilityVersion: c.version,
+          support: c.matrix.startSession,
+        },
+        {
+          kind: "service",
+          capability: "startSession",
+          deliveryId,
+          request: { kind: "handoff", ...payload.handoff },
+        },
+      );
+      if (ack.kind !== "ok") throw Error("Frozen handoff rejected");
+    }
+    const steering = c.steering.insertCurrent;
+    if (steering.support.kind !== "unsupported" && steering.accepts.includes("text")) {
+      const steerSupport = steering.support;
+      persisted?.steer?.(async (input, deliveryId) => {
+        const ack = await adapter.invoke(
+          session,
+          {
+            ...instance,
+            capability: "steerCurrentRound",
+            capabilityVersion: c.version,
+            support: steerSupport,
+          },
+          {
+            kind: "steer",
+            capability: "steerCurrentRound",
+            deliveryId,
+            attemptId,
+            mode: "insertCurrent",
+            input,
+          },
+        );
+        if (
+          ack.kind !== "ok" ||
+          ack.value.kind !== "written" ||
+          ack.value.deliveryId !== deliveryId
+        )
+          throw Error("Steer write unconfirmed");
+      });
+    }
     iterator = adapter.events(session, null)[Symbol.asyncIterator]();
     const first = iterator.next().then(
       (value) => ({ ok: true as const, value }),
@@ -229,7 +291,7 @@ export async function runReplayTurn<Handle extends object>({
     const written = await adapter.invoke(
       session,
       { ...instance, capabilityVersion: snapshot.version, capability: "submitTextInput", support },
-      { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: delivery.input },
+      { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: payload.input },
     );
     signal.throwIfAborted();
     if (
@@ -249,6 +311,10 @@ export async function runReplayTurn<Handle extends object>({
     };
     const consume = (event: AdapterEventEnvelope<"replay">) => {
       const p = event.payload;
+      if (p.kind === "deliveryReceived" && p.attemptId !== attemptId && persisted) {
+        persisted.previousReceipt?.(event);
+        return;
+      }
       if (
         !matchesAdapterEvent(binding, event) ||
         !("attemptId" in p) ||
@@ -262,6 +328,18 @@ export async function runReplayTurn<Handle extends object>({
         return;
       }
       switch (p.kind) {
+        case "steerRead":
+          persisted?.readSteer?.(p.attemptId, p.messageId);
+          break;
+        case "deliveryReceived":
+          if (p.receipt.kind !== "input" || p.receipt.sessionId !== nativeSessionId)
+            throw Error("Foreign native receipt");
+          report({
+            kind: "received",
+            ...ticket,
+            proof: { sessionId: nativeSessionId, itemId: p.receipt.itemId },
+          });
+          break;
         case "deliveryWritten":
           if (p.at !== snapshot.checkedAt) throw new Error("Conflicting replay write");
           break;
@@ -345,7 +423,10 @@ export async function runReplayTurn<Handle extends object>({
           )
             throw new Error("Conflicting native end evidence");
           if (phase.kind === "closing") {
-            if (p.endedAt !== phase.endedAt || p.outcome.nativeReason !== phase.nativeReason)
+            if (
+              !persisted &&
+              (p.endedAt !== phase.endedAt || p.outcome.nativeReason !== phase.nativeReason)
+            )
               throw new Error("Native end changed");
             break;
           }

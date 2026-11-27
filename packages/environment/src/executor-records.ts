@@ -96,6 +96,9 @@ export type ModelCatalog = {
   models: readonly {
     id: string;
     displayName: string;
+    slug: string;
+    isDefault: boolean;
+    unavailableReason?: string | undefined;
     options: Readonly<Record<string, ModelOption>>;
   }[];
 };

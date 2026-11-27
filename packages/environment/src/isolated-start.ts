@@ -10,7 +10,7 @@ import {
   type SignedRequest,
 } from "@kraka/protocol";
 import { readProject } from "./first-send-store";
-import { record, reject, type CommandContext } from "./command-receipts";
+import { recordCommand, reject, type FirstSendContext } from "./command-receipts";
 import { REQUEST_METHODS } from "@kraka/protocol";
 import {
   commonDirectory,
@@ -38,8 +38,8 @@ const uuid = v.pipe(
   v.uuid("Expected worktree UUID"),
   v.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
 );
-export function selectWorktreeBase(ctx: CommandContext, payload: Prepare) {
-  return record(
+export function selectWorktreeBase(ctx: FirstSendContext, payload: Prepare) {
+  return recordCommand(
     ctx,
     REQUEST_METHODS.prepareWorktree,
     payload,
@@ -103,7 +103,7 @@ export function acceptIsolatedStart({
   worktreeId,
   selectedOrigin,
   transaction,
-}: CommandContext & {
+}: FirstSendContext & {
   project: Project;
   threadId: ThreadId;
   roundId: RoundId;

@@ -45,7 +45,7 @@ export type QueueEvent =
   | UnknownDeliveryDecision
   | { kind: "report"; report: RoundReport };
 
-function firstPending(rows: readonly QueueRow[]) {
+export function firstPending(rows: readonly QueueRow[]) {
   let head: QueueRow | undefined;
   for (const row of rows) {
     switch (row.attempt.phase.kind) {

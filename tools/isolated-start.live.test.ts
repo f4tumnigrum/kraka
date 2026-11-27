@@ -5,6 +5,7 @@ import * as v from "valibot";
 import { join } from "node:path";
 import { rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { accepted, waitFile, productRoot, startFirstSendFixture } from "./fixtures/first-send";
+import { codexFixture } from "./fixtures/codex-turn";
 import { withState } from "./fixtures/replay-process";
 import {
   seedGit,
@@ -130,6 +131,20 @@ test(
         expect(git(repo.path, "branch", "--show-current")).toBe("main");
         expect(readFileSync(join(path, "setup.log"), "utf8")).toBe("setup\n");
         expect(existsSync(join(repo.path, "setup.log"))).toBe(false);
+        const followup = accepted(
+          (
+            await f.client.send("input.send", {
+              threadId: task.ids.threadId,
+              content: f.payload.content,
+            })
+          ).receipt,
+          "inputScheduled",
+        );
+        await idle(f);
+        expect(peer(opts.stateDir, followup.deliveryId).cwd).toBe(path);
+        const history = await f.client.readInputHistory(task.ids.threadId);
+        expect(history.rounds.map((r) => r.id)).toEqual([task.ids.roundId, followup.roundId]);
+        expect(history.rounds.at(-1)?.attempts?.[0]?.attemptId).toBe(followup.attemptId);
         console.log(repo.version);
         done(1);
       } finally {
@@ -244,6 +259,9 @@ test(
             },
           },
         });
+        expect(
+          (await f.client.send("input.releaseQueue", { threadId: task.ids.threadId })).receipt,
+        ).toMatchObject({ kind: "rejected", failure: { kind: "queueHeld" } });
         expect(after.directory).toEqual(before.directory);
         expect(roundInfo(opts.stateDir, after).round).toMatchObject({
           id: task.ids.roundId,
@@ -461,4 +479,35 @@ test(
       }
     }),
   90000,
+);
+
+test(
+  "the configured Codex peer opens the isolated checkout after preparation",
+  () =>
+    withState(async (dir) => {
+      seedGit(dir, "project");
+      const f = await codexFixture(dir);
+      try {
+        accepted((await f.configure()).receipt, "executorConfigured");
+        accepted((await f.refresh()).receipt, "executorRefreshed");
+        const id = crypto.randomUUID();
+        const first = accepted(
+          (await f.client.send("thread.start", { ...f.payload, worktreeId: id })).receipt,
+          "threadStarted",
+        );
+        await f.waitTerminal();
+        const managed = readClaim(f.stateDir, id);
+        expect(managedView(managed).availability).toBe("usable");
+        expect(f.updates.at(-1)?.kind).toBe("round.ended");
+        expect(f.ledger.rows()).toContainEqual(
+          expect.objectContaining({ event: "spawn", cwd: managed.directory.realPath }),
+        );
+        expect(f.ledger.rows().filter((r) => r.event === "turn/start" && r.hasInput)).toMatchObject(
+          [{ clientId: first.deliveryId }],
+        );
+      } finally {
+        await f.close();
+      }
+    }),
+  60000,
 );

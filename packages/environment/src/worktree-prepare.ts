@@ -7,8 +7,9 @@ import {
   type SignedRequest,
   type CommandReceipt,
 } from "@kraka/protocol";
+import { advanceQueue, nextVersion } from "./input-store";
 import { readRound, readThread, type FirstSendStore } from "./first-send-store";
-import { type CommandContext, checkCommand, record, reject } from "./command-receipts";
+import { type FirstSendContext, checkCommand, recordCommand, reject } from "./command-receipts";
 import { REQUEST_METHODS } from "@kraka/protocol";
 import { managedView } from "./worktree-git";
 import {
@@ -89,6 +90,7 @@ export async function prepareClaim({
         transaction.directory(thread)
       ) {
         transaction.setPhase(round, { kind: "filed", gate: "eligible" });
+        advanceQueue(transaction, m.claim.threadId);
         db.run("INSERT INTO ready_dispatch VALUES(?,?,?)", [
           round.id,
           m.claim.worktreeId,
@@ -277,10 +279,10 @@ export async function prepareClaim({
   }
 }
 export function retryPreparation(
-  ctx: CommandContext,
+  ctx: FirstSendContext,
   p: Extract<SignedRequest, { method: "worktree.retrySetup" }>["payload"],
 ) {
-  return record(
+  return recordCommand(
     ctx,
     REQUEST_METHODS.retryWorktreeSetup,
     p,
@@ -310,13 +312,16 @@ export function retryPreparation(
   );
 }
 export async function restoreForInput(
-  ctx: CommandContext,
+  ctx: FirstSendContext,
   p: Extract<SignedRequest, { method: "input.send" }>["payload"],
   prepare: (m: Managed) => Promise<void>,
+  send: () => CommandReceipt,
 ) {
   const { db } = ctx.transaction,
     target = { kind: "thread" as const, threadId: p.threadId },
     method = REQUEST_METHODS.sendInput;
+  // Ordinary queues keep their existing admission and receipt transaction.
+  if (!readThread(db, p.threadId)?.worktreeId) return send();
   const begin = db.transaction(() => {
     const checked = checkCommand(ctx, method, p, target);
     if (checked.receipt) return checked.receipt;
@@ -344,6 +349,8 @@ export async function restoreForInput(
       m.branchOwned = false;
       m.directory.binding.generation = nextGeneration;
       thread.directory = m.directory.binding;
+      thread.version = nextVersion(thread.version);
+      ctx.transaction.sync.record([{ objectType: "thread", value: thread }]);
       db.run("UPDATE threads SET data=? WHERE id=?", [JSON.stringify(thread), thread.id]);
       saveManaged(db, m);
     }
@@ -363,23 +370,21 @@ export async function restoreForInput(
     return null;
   })();
   if (begin && "commandId" in begin) return begin;
-  if (begin) await prepare(begin);
-  return record(ctx, method, p, target, () => {
-    const thread = readThread(db, p.threadId),
-      m = thread?.worktreeId && readManaged(db, thread.worktreeId);
-    if (!thread) return reject(ctx.commandId, "notFound");
-    if (!m) return reject(ctx.commandId, "unsupported");
+  if (begin) {
+    ctx.transaction.sync.notify();
+    await prepare(begin);
+  }
+  return db.transaction(() => {
+    const thread = readThread(db, p.threadId);
+    const m = thread?.worktreeId && readManaged(db, thread.worktreeId);
+    if (!m) return send();
+    const phase = m.claim.phase,
+      view = managedView(m);
     db.run("DELETE FROM restoring_commands WHERE actor=? AND command=?", [
       ctx.actor.id,
       ctx.commandId,
     ]);
-    const phase = m.claim.phase,
-      view = managedView(m);
-    if (view.availability === "usable") {
-      if (phase.kind === "ready" && phase.origin.prior.kind === "rebuild")
-        return { kind: "worktreeStatus", view };
-      return reject(ctx.commandId, "unsupported");
-    }
+    if (view.availability === "usable") return send();
     const reason =
       phase.kind === "preparing" && phase.script.kind === "failed"
         ? "setupFailed"
@@ -387,17 +392,24 @@ export async function restoreForInput(
             (!exists(m.root.realPath) || view.availability !== "needsInspection")
           ? "sourceUnavailable"
           : "ownershipUnconfirmed";
-    return {
-      kind: "rejected",
-      commandId: ctx.commandId,
-      failure: {
-        kind: "worktreeRestoreFailed",
-        threadId: thread.id,
-        worktreeId: m.claim.worktreeId,
-        generation: m.claim.generation,
-        reason,
-        view,
-      },
-    } satisfies CommandReceipt;
-  });
+    return recordCommand(
+      ctx,
+      method,
+      p,
+      target,
+      () =>
+        ({
+          kind: "rejected",
+          commandId: ctx.commandId,
+          failure: {
+            kind: "worktreeRestoreFailed",
+            threadId: m.claim.threadId,
+            worktreeId: m.claim.worktreeId,
+            generation: m.claim.generation,
+            reason,
+            view,
+          },
+        }) satisfies CommandReceipt,
+    );
+  })();
 }

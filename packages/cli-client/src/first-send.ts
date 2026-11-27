@@ -3,6 +3,12 @@ import { readFileSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import {
+  SubscriptionPageSchema,
+  type SubscriptionPage,
+  HistoryPageSchema,
+  type HistoryPage,
+  ExecutorTurnUpdateSchema,
+  type ExecutorTurnUpdate,
   RequestSignerSchema,
   REQUEST_METHODS,
   canonicalJson,
@@ -35,6 +41,7 @@ export async function connectCommands(
   instance: { environmentId: string; instanceId: string; endpoint: string },
   signer: v.InferOutput<typeof RequestSignerSchema>,
   privateKeyPath: string,
+  onUpdate?: (event: ExecutorTurnUpdate) => void,
 ) {
   const key = createPrivateKey(readFileSync(privateKeyPath));
   const socket = new WebSocket(instance.endpoint);
@@ -42,10 +49,16 @@ export async function connectCommands(
   let hello: v.InferOutput<typeof helloSchema> | undefined;
   let sequence = 0;
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<CommandReceipt>>>();
+  const pages = new Map<string, ReturnType<typeof Promise.withResolvers<HistoryPage>>>();
+  const snapshots = new Map<string, ReturnType<typeof Promise.withResolvers<SubscriptionPage>>>();
   function fail(reason: Error) {
     ready.reject(reason);
     for (const request of pending.values()) request.reject(reason);
     pending.clear();
+    for (const waiter of pages.values()) waiter.reject(reason);
+    pages.clear();
+    for (const waiter of snapshots.values()) waiter.reject(reason);
+    snapshots.clear();
   }
   socket.onerror = () => fail(new Error("Writer connection failed"));
   socket.onclose = () => fail(new Error("Writer connection closed"));
@@ -61,7 +74,28 @@ export async function connectCommands(
         ready.resolve(hello);
         return;
       }
-      const receipt = v.parse(CommandReceiptSchema, JSON.parse(String(data)));
+      const raw = JSON.parse(String(data));
+      if (raw.kind === "subscription.page") {
+        const page = v.parse(SubscriptionPageSchema, raw);
+        const waiter = snapshots.get(page.subscriptionId);
+        if (!waiter) throw Error("Unexpected subscription page");
+        waiter.resolve(page);
+        return;
+      }
+      if (["subscription.begin", "subscription.seal", "subscription.ended"].includes(raw.kind))
+        return;
+      if (raw.kind === "history.page") {
+        const page = v.parse(HistoryPageSchema, raw);
+        const waiter = pages.get(page.threadId);
+        if (!waiter) throw Error("Unexpected history page");
+        waiter.resolve(page);
+        return;
+      }
+      if (onUpdate && raw.kind !== "accepted" && raw.kind !== "rejected") {
+        onUpdate(v.parse(ExecutorTurnUpdateSchema, raw));
+        return;
+      }
+      const receipt = v.parse(CommandReceiptSchema, raw);
       const waiter = pending.get(receipt.commandId);
       if (!waiter) throw new Error("Unmatched receipt");
       pending.delete(receipt.commandId);
@@ -81,12 +115,65 @@ export async function connectCommands(
     close() {
       socket.terminate();
     },
-    async send(method: string, payload: unknown, id: string = crypto.randomUUID()) {
+    async subscribedRounds(threadId: string) {
+      const subscriptionId = crypto.randomUUID(),
+        waiter = Promise.withResolvers<SubscriptionPage>();
+      snapshots.set(subscriptionId, waiter);
+      void waiter.promise.catch(() => {});
+      try {
+        const { receipt } = await this.send(
+          "subscription.openThread",
+          { subscriptionId, streamId: 2, threadId, knownWindow: [], after: null, recheckTodos: [] },
+          crypto.randomUUID(),
+          1,
+        );
+        if (receipt.kind !== "accepted") throw Error("Input subscription rejected");
+        const page = await within(waiter.promise, 5000, "Input subscription");
+        await this.send("subscription.close", { subscriptionId });
+        return page.changes.flatMap((change) =>
+          change.kind === "object.replace" && change.object.objectType === "round"
+            ? [change.object.value]
+            : [],
+        );
+      } finally {
+        snapshots.delete(subscriptionId);
+      }
+    },
+    async readInputHistory(threadId: string, roundId?: string) {
+      if (pages.has(threadId)) throw Error("History read outstanding");
+      const waiter = Promise.withResolvers<HistoryPage>();
+      pages.set(threadId, waiter);
+      void waiter.promise.catch(() => {});
+      try {
+        const { receipt } = await this.send(
+          "thread.readHistory",
+          { threadId, anchor: null, streamId: 1 },
+          crypto.randomUUID(),
+          1,
+        );
+        if (receipt.kind !== "accepted") throw Error(JSON.stringify(receipt));
+        const page = await within(waiter.promise, 5000, "Input history");
+        return {
+          version: page.verifiedAt.through,
+          rounds: page.rows.flatMap((r) =>
+            r.objectType === "round" && (!roundId || r.value.id === roundId) ? [r.value] : [],
+          ),
+          messages: page.rows.flatMap((r) =>
+            r.objectType === "message" && (!roundId || r.value.roundId === roundId)
+              ? [r.value]
+              : [],
+          ),
+        };
+      } finally {
+        pages.delete(threadId);
+      }
+    },
+    async send(method: string, payload: unknown, id: string = crypto.randomUUID(), minor = 0) {
       if (!hello) throw new Error("Missing writer hello");
       const commandId = v.parse(CommandIdSchema, id);
       const body = {
         kind: "signedRequest",
-        protocolVersion: { major: 1, minor: 0 },
+        protocolVersion: { major: 1, minor },
         environmentId: instance.environmentId,
         connectionId: hello.connectionId,
         challengeId: hello.challengeId,
@@ -116,7 +203,6 @@ export async function connectCommands(
     },
   };
 }
-
 const payload = REQUEST_METHODS.startThread.schema.entries.payload;
 const draft = v.strictObject({
   projectId: payload.entries.projectId,

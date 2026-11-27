@@ -1,48 +1,75 @@
-import { createPublicKey, verify, randomBytes } from "node:crypto";
+import { openAccessHost } from "./access";
+import { threadConnection, type FixtureThreadCommand } from "./thread-connection";
+import { attachFlow, type SocketApplication } from "./flow-socket";
+import { inputReads, inputReadMethods } from "./input-reads";
+import { createPublicKey, randomBytes, verify } from "node:crypto";
+import { CodexInstances } from "./codex-instances";
+import { dispatchCodex } from "./durable-codex";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import * as v from "valibot";
 import {
-  openWriter,
-  openStore,
-  registerProject,
   acceptFirstInput,
-  renameThread,
   selectWorktreeBase,
   prepareClaim,
   retryPreparation,
   restoreForInput,
   readManaged,
+  selectionSweepMs,
+  type Managed,
+  type LocalActor,
+  type PreparationHook,
+  applyInputCommand,
+  advanceQueue,
+  type FirstSendStore,
+  firstPending,
+  frozenInput,
+  inputMethods,
+  loadQueue,
+  openStore,
+  openWriter,
+  type ProviderAdapter,
+  type RecoveryScope,
+  readMessage,
   readReceipt,
   readRound,
   readThread,
-  selectionSweepMs,
-  type Managed,
-  type PreparationHook,
-  type FirstSendStore,
-  type ProviderAdapter,
+  recordInputEvidence,
+  registerProject,
+  renameThread,
 } from "@kraka/environment";
 import {
+  checkBusinessUpgrade,
+  CheckpointCaptureSchema,
+  type CommandId,
+  CommandIdSchema,
+  type CommandReceipt,
   canonicalJson,
   HostInstanceIdSchema,
+  type PermissionItem,
+  PermissionItemSchema,
   PrincipalIdSchema,
   REQUEST_METHODS,
-  RequestSignerSchema,
   type ReplayTurnUpdate,
-  PermissionItemSchema,
-  type PermissionItem,
+  type RoundId,
+  type ExecutorTurnUpdate,
+  RequestSignerSchema,
+  RoundSchema,
   type SignedRequest,
-  type CommandReceipt,
+  type ThreadId,
 } from "@kraka/protocol";
-import { dispatchReplay } from "./durable-replay";
+import * as v from "valibot";
+import { type ActiveSteers, dispatchReplay, inspectOriginalInput } from "./durable-replay";
 
 const methods = v.variant("method", [
+  REQUEST_METHODS.configureExecutor.schema,
+  REQUEST_METHODS.refreshExecutor.schema,
   REQUEST_METHODS.registerProject.schema,
   REQUEST_METHODS.startThread.schema,
   REQUEST_METHODS.renameThread.schema,
   REQUEST_METHODS.prepareWorktree.schema,
   REQUEST_METHODS.retryWorktreeSetup.schema,
-  REQUEST_METHODS.sendInput.schema,
+  ...inputReadMethods.map((m) => m.schema),
+  ...inputMethods.map((m) => m.schema),
 ]);
 export const localOwnerSchema = v.strictObject({
   principalId: PrincipalIdSchema,
@@ -50,15 +77,27 @@ export const localOwnerSchema = v.strictObject({
   publicKey: v.string(),
   permissions: v.array(PermissionItemSchema),
 });
-type Session = { connectionId: string; challengeId: string; challenge: string; sequence: number };
+type Commands = { connectionId: string; challengeId: string; challenge: string; sequence: number };
+type Session = Commands | { app: SocketApplication; flow: ReturnType<typeof attachFlow> | null };
 export async function startWriter<H extends object>(
   stateDir: string,
-  replay: { adapter: ProviderAdapter<"replay", H>; expectedText: string; modelId: string },
+  replay: {
+    adapter: ProviderAdapter<"replay", H>;
+    expectedText: string;
+    modelId: string;
+    recovery?: RecoveryScope;
+    confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
+  } | null,
   lifecycle?: {
     preparation?: PreparationHook;
+    inspectPage?: (
+      page: import("@kraka/protocol").SubscriptionPage,
+    ) => import("@kraka/protocol").SubscriptionPage;
+    threadCommand?: FixtureThreadCommand;
+    beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
-    committed?: (request: SignedRequest, receipt: CommandReceipt) => void;
+    committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
     update?: (event: ReplayTurnUpdate) => void;
   },
 ) {
@@ -69,11 +108,13 @@ export async function startWriter<H extends object>(
   );
   if (lock.kind !== "writer") return lock;
   let store: FirstSendStore | undefined;
+  let auth: Awaited<ReturnType<typeof openAccessHost>> | undefined;
   try {
     lifecycle?.locked?.();
-    const transaction = openStore(lock.lease);
+    const transaction = openStore(lock.lease, replay?.recovery);
     store = transaction;
     lifecycle?.opened?.(transaction);
+    const codex = new CodexInstances(transaction);
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
@@ -87,71 +128,186 @@ export async function startWriter<H extends object>(
       environmentId: lock.lease.environmentId,
       allows: (permission: PermissionItem) => granted.has(permission),
     };
+    const authHost = await openAccessHost(stateDir);
+    auth = authHost;
+    const reads = inputReads(transaction, actor);
+    transaction.onQueueChanged = (threadId) => queueMicrotask(() => reads.changed(threadId));
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
     const controller = new AbortController();
     const sweep = () =>
       transaction.db.run("DELETE FROM worktree_selections WHERE expires<=?", [Date.now()]);
     sweep();
-    const schedule = (
-      result: Extract<
-        Extract<CommandReceipt, { kind: "accepted" }>["result"],
-        { kind: "threadStarted" }
-      >,
-      commandId: SignedRequest["commandId"],
-      retry = false,
-    ) => {
-      const existing = turns.get(result.roundId);
-      if (existing) return existing;
-      const run = Bun.sleep(0).then(async () => {
-        const thread = readThread(transaction.db, result.threadId);
-        if (thread?.worktreeId) {
-          const m = readManaged(transaction.db, thread.worktreeId);
-          if (!m) return;
-          await prepareClaim({ claim: m, transaction, hook: lifecycle?.preparation, retry });
-        }
-        await dispatchReplay(
-          transaction,
-          result,
-          commandId,
-          replay,
-          (event) => lifecycle?.update?.(event),
-          controller.signal,
-        );
-      });
-      turns.set(result.roundId, run);
-      void run.then(
-        () => turns.delete(result.roundId),
-        () => turns.delete(result.roundId),
-      );
-      return run;
-    };
+    const preparing = new Map<string, Promise<void>>();
     function resume(m: Managed, retry = false) {
-      const round = readRound(transaction.db, m.roundId);
-      if (!round) throw Error("Missing first round");
-      return schedule(
-        {
-          kind: "threadStarted",
-          threadId: m.claim.threadId,
-          roundId: round.id,
-          messageId: round.messageId,
-          attemptId: round.attempt.attemptId,
-          deliveryId: round.attempt.deliveryId,
+      const id = m.claim.worktreeId;
+      const pending = preparing.get(id);
+      if (pending) return pending;
+      const run = Bun.sleep(0)
+        .then(() => prepareClaim({ claim: m, transaction, hook: lifecycle?.preparation, retry }))
+        .then(() => {
+          if (accepting) schedule(m.claim.threadId, m.firstCommand);
+        })
+        .finally(() => preparing.delete(id));
+      preparing.set(id, run);
+      return run;
+    }
+    const sendInput = (
+      actor: LocalActor,
+      command: Extract<SignedRequest, { method: "input.send" }>,
+    ) =>
+      restoreForInput(
+        { actor, transaction, commandId: command.commandId },
+        command.payload,
+        (m) => resume(m),
+        () => applyInputCommand({ actor, transaction, command }),
+      );
+    let accepting = true;
+    const steers: ActiveSteers = new Map();
+    const recipients = new Map<RoundId, Bun.ServerWebSocket<Session>>();
+    function schedule(threadId: ThreadId, commandId: CommandId) {
+      if (turns.has(threadId) || !accepting) return;
+      const pump = async () => {
+        await lifecycle?.beforeDispatch?.(threadId);
+        while (accepting) {
+          const queue = loadQueue(transaction, threadId);
+          const head = firstPending(queue.rows);
+          if (!head) return;
+          const phase = head.attempt.phase;
+          if (
+            phase.kind === "closing" &&
+            queue.rows.some((r) => r.attempt.phase.kind === "filed")
+          ) {
+            const thread = readThread(transaction.db, threadId);
+            const frozen = frozenInput(transaction, head.attempt.deliveryId);
+            if (!thread || !frozen) return;
+            const capture = v.parse(CheckpointCaptureSchema, {
+              id: phase.captureId,
+              roundId: head.id,
+              attemptId: head.attempt.attemptId,
+              version: "1",
+              result: {
+                kind: "missing",
+                reason: thread.worktreeId ? "captureMissing" : "noWorktree",
+              },
+            });
+            const settled = transaction.db.transaction(() => {
+              const evidence = recordInputEvidence(transaction, frozen.target, {
+                ...head.attempt,
+                kind: "captureSettled",
+                capture,
+              });
+              if (evidence.kind === "ok")
+                transaction.db.run("INSERT OR REPLACE INTO turn_work VALUES(?,?,?)", [
+                  head.id,
+                  "capture",
+                  JSON.stringify(capture),
+                ]);
+              return evidence;
+            })();
+            if (settled.kind === "rejected") return;
+            continue;
+          }
+          if (
+            (phase.kind !== "filed" && phase.kind !== "recovering") ||
+            phase.gate === "held" ||
+            (phase.kind === "recovering" && phase.action !== "retrySameDelivery")
+          )
+            return;
+          const round = readRound(transaction.db, head.id);
+          if (!round) return;
+          const saved = codex.forThread(threadId);
+          if (saved) {
+            const thread = readThread(transaction.db, threadId);
+            if (!thread) return;
+            const selection = await codex.resolve(saved, actor.id, thread);
+            if (!accepting) return;
+            if (!selection) {
+              const current = readRound(transaction.db, round.id);
+              if (current?.version !== round.version) continue;
+              const reason = "Saved executor configuration unavailable";
+              transaction.db.transaction(() => {
+                transaction.setPhase(current, { kind: "notDelivered", reason, lateReceipt: null });
+                advanceQueue(transaction, threadId);
+              })();
+              const recipient = recipients.get(round.id);
+              if (recipient?.readyState === 1)
+                recipient.send(
+                  JSON.stringify({
+                    kind: "executor.failed",
+                    roundId: round.id,
+                    attemptId: round.attempt.attemptId,
+                    reason: "invalidState",
+                    message: reason,
+                  } satisfies ExecutorTurnUpdate),
+                );
+              recipients.delete(round.id);
+              continue;
+            }
+            await dispatchCodex(
+              transaction,
+              round,
+              selection,
+              () =>
+                codex.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+                selection.snapshot,
+              (event: ExecutorTurnUpdate) => {
+                const recipient = recipients.get(round.id);
+                if (recipient?.readyState === 1) recipient.send(JSON.stringify(event));
+              },
+              controller.signal,
+            );
+          } else if (replay) {
+            await dispatchReplay(
+              transaction,
+              round,
+              commandId,
+              replay,
+              (event) => lifecycle?.update?.(event),
+              controller.signal,
+              steers,
+            );
+          } else return;
+          recipients.delete(round.id);
+          if (readRound(transaction.db, head.id)?.version === round.version) return;
+        }
+      };
+      const run = Bun.sleep(0).then(pump);
+      turns.set(threadId, run);
+      void run.then(
+        () => turns.delete(threadId),
+        (error) => {
+          turns.delete(threadId);
+          console.error(error);
         },
-        m.firstCommand,
-        retry,
       );
     }
-    let accepting = true;
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(req, server) {
+      async fetch(req, server) {
         const url = new URL(req.url);
         if (!accepting || req.headers.has("Origin") || url.hostname !== "127.0.0.1")
           return new Response(null, { status: 403 });
+        if (url.pathname === "/ws") {
+          const admission = checkBusinessUpgrade(url.pathname + url.search, [], [], URL);
+          if (admission.kind === "reject") return new Response(null, { status: admission.status });
+          const app = await threadConnection(
+            transaction,
+            authHost,
+            admission.nonce,
+            schedule,
+            sendInput,
+            lifecycle?.threadCommand,
+            lifecycle?.inspectPage,
+          );
+          if (!app) return new Response(null, { status: 403 });
+          if (server.upgrade(req, { data: { app, flow: null } })) return;
+          return new Response(null, { status: 400 });
+        }
         if (/^\/instance\/[0-9a-f]{48}$/.test(url.pathname)) {
-          if (url.search === "?idle" && turns.size) return new Response(null, { status: 409 });
+          if (url.search === "?idle" && (turns.size || preparing.size))
+            return new Response(null, { status: 409 });
           const answer = lock.confirm(url.pathname.slice(10) + url.search);
           return new Response(answer, { status: answer ? 200 : 503 });
         }
@@ -174,6 +330,10 @@ export async function startWriter<H extends object>(
         data: {} as Session,
         open(ws) {
           sockets.add(ws);
+          if ("app" in ws.data) {
+            ws.data.flow = attachFlow(ws.data.app, ws);
+            return;
+          }
           const { sequence, ...challenge } = ws.data;
           ws.send(
             JSON.stringify({
@@ -185,6 +345,12 @@ export async function startWriter<H extends object>(
         },
         async message(ws, frame) {
           try {
+            if ("app" in ws.data) {
+              if (!accepting) throw Error("Writer closed");
+              ws.data.flow?.peer.input(frame);
+              ws.data.flow?.wake();
+              return;
+            }
             if (!accepting || typeof frame !== "string") {
               ws.close(1008);
               return;
@@ -195,7 +361,7 @@ export async function startWriter<H extends object>(
             if (
               req.environmentId !== actor.environmentId ||
               req.protocolVersion.major !== 1 ||
-              req.protocolVersion.minor !== 0 ||
+              req.protocolVersion.minor > 1 ||
               req.connectionId !== session.connectionId ||
               req.challengeId !== session.challengeId ||
               req.challenge !== session.challenge ||
@@ -213,58 +379,205 @@ export async function startWriter<H extends object>(
             }
             session.sequence = req.sequence;
             const context = { actor, commandId: req.commandId, transaction };
+            if (
+              req.method === "thread.readHistory" ||
+              req.method === "subscription.openThread" ||
+              req.method === "subscription.pageSaved" ||
+              req.method === "subscription.installed" ||
+              req.method === "subscription.close"
+            ) {
+              reads.request(ws, req);
+              return;
+            }
             const priorRetry =
               req.method === "worktree.retrySetup" &&
+              actor.allows("workspace.change") &&
               readReceipt(transaction.db, actor.id, req.commandId);
-            const receipt = await (() => {
-              switch (req.method) {
-                case "project.register":
-                  return registerProject({
-                    ...context,
-                    environmentId: req.environmentId,
-                    ...req.payload,
-                  });
-                case "thread.rename":
-                  return renameThread({ ...context, ...req.payload });
-                case "worktree.prepare":
-                  return selectWorktreeBase(context, req.payload);
-                case "worktree.retrySetup":
-                  return retryPreparation(context, req.payload);
-                case "input.send":
-                  return restoreForInput(context, req.payload, (m) => resume(m));
-                case "thread.start":
-                  return acceptFirstInput({
-                    verifiedActor: actor,
-                    commandId: req.commandId,
-                    threadStart: req.payload,
-                    transaction,
-                  });
+            const priorSteer =
+              req.method === "input.steer" && actor.allows("thread.send")
+                ? readReceipt(transaction.db, actor.id, req.commandId)
+                : null;
+            let receipt: CommandReceipt;
+            switch (req.method) {
+              case "worktree.prepare":
+                receipt = selectWorktreeBase(context, req.payload);
+                break;
+              case "worktree.retrySetup":
+                receipt = retryPreparation(context, req.payload);
+                break;
+              case "input.send":
+                receipt = await sendInput(actor, req);
+                break;
+              case "executor.configure":
+                receipt = codex.registry.configure(context, req.payload);
+                break;
+              case "executor.refresh": {
+                const work = codex.refresh(context, req.payload);
+                codex.active.add(work);
+                try {
+                  receipt = await work;
+                } finally {
+                  codex.active.delete(work);
+                }
+                break;
               }
-            })();
-            lifecycle?.committed?.(req, receipt);
-            ws.send(JSON.stringify(receipt));
+              case "project.register":
+                receipt = registerProject({
+                  ...context,
+                  environmentId: req.environmentId,
+                  ...req.payload,
+                });
+                break;
+              case "thread.rename":
+                receipt = renameThread({ ...context, ...req.payload });
+                break;
+              case "thread.start": {
+                const { projectId, model } = req.payload;
+                const id = req.payload.instanceId ?? codex.registry.defaultFor(projectId);
+                const cwd = id ? transaction.projectDirectory(projectId) : null;
+                let entry = id && cwd ? codex.current(id, actor.id, cwd) : null;
+                if (
+                  id &&
+                  !entry &&
+                  actor.allows("thread.send") &&
+                  !readReceipt(transaction.db, actor.id, req.commandId)
+                )
+                  entry = await codex.lookup(id, actor.id, projectId);
+                if (!accepting) return;
+                const chosen = codex.select(entry, model);
+                receipt = acceptFirstInput({
+                  verifiedActor: actor,
+                  commandId: req.commandId,
+                  threadStart: req.payload,
+                  transaction,
+                  validate: () =>
+                    id
+                      ? chosen
+                        ? null
+                        : "unsupported"
+                      : replay &&
+                          (!model ||
+                            (model.id === replay.modelId && !Object.keys(model.options).length))
+                        ? null
+                        : "unsupported",
+                  selected(roundId) {
+                    if (chosen)
+                      transaction.db.run("INSERT INTO round_executors VALUES(?,?,?,?)", [
+                        roundId,
+                        chosen.reg.instanceId,
+                        chosen.reg.version,
+                        JSON.stringify(chosen.model),
+                      ]);
+                  },
+                });
+                break;
+              }
+              default:
+                receipt = applyInputCommand({
+                  actor,
+                  transaction,
+                  command: req,
+                  supportsSteer: (id) => steers.has(id),
+                });
+            }
+            if (lifecycle?.committed?.(req, receipt) === "disconnect") ws.close(1011);
+            else ws.send(JSON.stringify(receipt));
             if (receipt.kind === "accepted") {
-              if (receipt.result.kind === "threadStarted") schedule(receipt.result, req.commandId);
+              const result = receipt.result;
               if (
-                receipt.result.kind === "worktreeStatus" &&
-                req.method === "worktree.retrySetup" &&
-                !priorRetry
+                (result.kind === "threadStarted" || result.kind === "inputScheduled") &&
+                !(req.method === "input.steer" && req.payload.mode === "insertCurrent")
               ) {
-                const m = readManaged(transaction.db, receipt.result.view.status.worktreeId);
-                if (m) resume(m, req.method === "worktree.retrySetup");
+                const threadId =
+                  result.kind === "threadStarted"
+                    ? result.threadId
+                    : "threadId" in req.payload
+                      ? req.payload.threadId
+                      : null;
+                if (
+                  threadId &&
+                  codex.forThread(threadId) &&
+                  readRound(transaction.db, result.roundId)?.attempt.phase.kind === "filed"
+                )
+                  recipients.set(result.roundId, ws);
               }
+              if (
+                req.method === "input.steer" &&
+                req.payload.mode === "insertCurrent" &&
+                result.kind === "inputScheduled"
+              ) {
+                const send = steers.get(result.attemptId);
+                const message = readMessage(transaction.db, result.messageId);
+                if (!priorSteer && send && message)
+                  void send(
+                    {
+                      id: message.id,
+                      text: message.text,
+                      references: message.references,
+                      attachments: message.attachments,
+                    },
+                    result.deliveryId,
+                  ).catch(() => {});
+              } else if (result.kind === "threadStarted") {
+                const worktreeId = req.method === "thread.start" && req.payload.worktreeId;
+                const managed = worktreeId && readManaged(transaction.db, worktreeId);
+                if (
+                  managed &&
+                  (managed.claim.phase.kind === "building" ||
+                    managed.claim.phase.kind === "preparing")
+                )
+                  void resume(managed);
+                else schedule(result.threadId, req.commandId);
+              } else if (
+                req.method === "worktree.retrySetup" &&
+                !priorRetry &&
+                result.kind === "worktreeStatus"
+              ) {
+                const m = readManaged(transaction.db, req.payload.worktreeId);
+                if (m) void resume(m, true);
+              } else if (req.method.startsWith("input.") && "threadId" in req.payload)
+                schedule(req.payload.threadId, req.commandId);
             }
           } catch {
             ws.close(1007);
           }
         },
+        drain(ws) {
+          if ("app" in ws.data) {
+            ws.data.flow?.peer.drain();
+            ws.data.flow?.wake();
+          }
+        },
         close(ws) {
+          if ("app" in ws.data) ws.data.flow?.dispose();
+          for (const [roundId, socket] of recipients) if (socket === ws) recipients.delete(roundId);
+          reads.close(ws);
           sockets.delete(ws);
         },
       },
     });
     let instance: ReturnType<typeof lock.publish>;
     try {
+      const pending = transaction.db
+        .query<{ data: string }, []>(
+          "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE d.pending=1 AND d.round NOT IN (SELECT round FROM ready_dispatch)",
+        )
+        .all();
+      for (const row of pending) {
+        const round = v.parse(RoundSchema, JSON.parse(row.data));
+        if (
+          replay &&
+          round.attempt.phase.kind === "recovering" &&
+          round.attempt.phase.action === "inspectInput"
+        ) {
+          try {
+            await inspectOriginalInput(transaction, round, replay);
+          } catch {
+            /* A failed lookup leaves the old delivery pending. */
+          }
+        }
+        schedule(round.threadId, v.parse(CommandIdSchema, round.attempt.deliveryId));
+      }
       instance = lock.publish(`ws://127.0.0.1:${server.port}/commands`);
     } catch (e) {
       await server.stop(true);
@@ -291,9 +604,11 @@ export async function startWriter<H extends object>(
         controller.abort();
         try {
           await server.stop(true);
-          await Promise.allSettled(turns.values());
+          await Promise.allSettled([...turns.values(), ...preparing.values()]);
+          await codex.close();
         } finally {
           try {
+            authHost.close();
             transaction.db.close();
           } finally {
             lock.close();
@@ -303,6 +618,7 @@ export async function startWriter<H extends object>(
     };
   } catch (e) {
     try {
+      auth?.close();
       store?.db.close();
     } finally {
       lock.close();

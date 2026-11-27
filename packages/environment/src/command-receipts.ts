@@ -17,7 +17,7 @@ export type LocalActor = {
   environmentId: EnvironmentId;
   allows: (permission: PermissionItem, target: AuthorizationTarget) => boolean;
 };
-export type CommandContext = {
+export type FirstSendContext = {
   actor: LocalActor;
   commandId: CommandId;
   transaction: FirstSendStore;
@@ -29,7 +29,7 @@ export function reject(
   return { kind: "rejected", commandId, failure: { kind } };
 }
 export function checkCommand(
-  context: CommandContext,
+  context: FirstSendContext,
   operation: RequestMethodDefinition,
   payload: unknown,
   target: AuthorizationTarget,
@@ -66,8 +66,8 @@ export function checkCommand(
     receipt: pending && pending.intent !== intent ? reject(commandId, "idConflict") : null,
   };
 }
-export function record(
-  context: CommandContext,
+export function recordCommand(
+  context: FirstSendContext,
   operation: RequestMethodDefinition,
   payload: unknown,
   target: AuthorizationTarget,
@@ -75,7 +75,7 @@ export function record(
   additional: PermissionItem[] = [],
 ) {
   const { actor, transaction, commandId } = context;
-  return transaction.db.transaction((): CommandReceipt => {
+  const committed = transaction.db.transaction((): CommandReceipt => {
     const { receipt: prior, intent } = checkCommand(
       context,
       operation,
@@ -95,4 +95,6 @@ export function record(
     transaction.beforeCommit?.(operation.method);
     return receipt;
   })();
+  transaction.sync.notify();
+  return committed;
 }

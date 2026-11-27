@@ -16,18 +16,18 @@ import {
 import { type FirstSendStore, readProject, readThread } from "./first-send-store";
 import { physicalDirectory, projectRoot } from "./project-directory";
 
-import { record, reject, type CommandContext, type LocalActor } from "./command-receipts";
+import { recordCommand, reject, type FirstSendContext, type LocalActor } from "./command-receipts";
 import { acceptIsolatedStart } from "./isolated-start";
 import { selection } from "./worktree-storage";
 type Start = Extract<SignedRequest, { method: "thread.start" }>["payload"];
 export function registerProject(
-  context: CommandContext & { environmentId: EnvironmentId; realPath: string },
+  context: FirstSendContext & { environmentId: EnvironmentId; realPath: string },
 ) {
   const { transaction, environmentId, commandId } = context;
   if (environmentId !== transaction.writer.environmentId) return reject(commandId, "notFound");
   const physical = physicalDirectory(context.realPath);
   const realPath = physical?.realPath ?? context.realPath;
-  return record(
+  return recordCommand(
     context,
     REQUEST_METHODS.registerProject,
     { realPath },
@@ -79,19 +79,25 @@ export function acceptFirstInput({
   commandId,
   threadStart,
   transaction,
+  validate,
+  selected,
 }: {
   verifiedActor: LocalActor;
   commandId: CommandId;
   threadStart: Start;
+  selected?: (roundId: string) => void;
+  validate?: () => "notFound" | "invalidState" | "unsupported" | null;
   transaction: FirstSendStore;
 }) {
   const { projectId, worktreeId, content } = threadStart;
-  return record(
+  return recordCommand(
     { actor: verifiedActor, commandId, transaction },
     REQUEST_METHODS.startThread,
     threadStart,
     { kind: "project", projectId },
     () => {
+      const invalid = validate?.();
+      if (invalid) return reject(commandId, invalid);
       const project = readProject(transaction.db, projectId);
       if (!project?.root || project.environmentId !== verifiedActor.environmentId)
         return reject(commandId, "notFound");
@@ -159,6 +165,12 @@ export function acceptFirstInput({
           phase: { kind: "filed", gate: worktreeId === null ? "eligible" : "held" },
         },
       });
+      transaction.sync.record([
+        { objectType: "thread", value: thread },
+        { objectType: "message", value: message },
+        { objectType: "round", value: round },
+      ]);
+      selected?.(round.id);
       const { attemptId, deliveryId } = round.attempt;
       transaction.db
         .query("INSERT INTO threads VALUES(?,?)")
@@ -184,9 +196,9 @@ export function acceptFirstInput({
     worktreeId === null ? [] : ["workspace.change"],
   );
 }
-export function renameThread(context: CommandContext & { threadId: ThreadId; title: string }) {
+export function renameThread(context: FirstSendContext & { threadId: ThreadId; title: string }) {
   const { threadId, title, transaction, commandId } = context;
-  return record(
+  return recordCommand(
     context,
     REQUEST_METHODS.renameThread,
     { threadId, title },
@@ -203,6 +215,7 @@ export function renameThread(context: CommandContext & { threadId: ThreadId; tit
       transaction.db
         .query("UPDATE threads SET data=? WHERE id=?")
         .run(JSON.stringify(changed), threadId);
+      transaction.sync.record([{ objectType: "thread", value: changed }]);
       return { kind: "threadRenamed", threadId, version: changed.version };
     },
   );

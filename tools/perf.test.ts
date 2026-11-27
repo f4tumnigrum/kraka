@@ -38,17 +38,22 @@ test("selection checks all IDs and roots before starting any workload", () => {
 });
 
 test("an absent endpoint produces no samples, a broken capability check fails", async () => {
-  const { exit, reports } = await run(product, "P4");
-  expect(exit).toBe(0);
-  expect(reports[0]).toMatchObject({
-    metric: "P4",
-    role: "candidate",
-    status: "unavailable",
-    samples: [],
-    actual: { capabilityChecks: 1, workloadSamples: 0 },
-    reason: expect.stringMatching(/subscription.*cursor/),
+  await withState(async (dir) => {
+    await put(
+      dir,
+      "packages/daemon/src/index.ts",
+      'console.error("Unknown command, expected replay, start, access or daemon");process.exit(1)',
+    );
+    const { exit, reports } = await run(dir, "P4");
+    expect(exit).toBe(0);
+    expect(reports[0]).toMatchObject({
+      metric: "P4",
+      status: "unavailable",
+      samples: [],
+      actual: { capabilityChecks: 1, workloadSamples: 0 },
+    });
+    expect(reports[0]).not.toHaveProperty("summary");
   });
-  expect(reports[0]).not.toHaveProperty("summary");
   await withState(async (dir) => {
     const broken = await run(dir, "P4");
     expect(broken.exit).toBe(1);
@@ -100,6 +105,21 @@ test("a shared dependency counts once, selected native and optional packages are
     await put(dir, "node_modules/native/build/addon.node", "sample artifact");
     const { exit, reports } = await run(dir, "A1");
     expect(exit).toBe(1);
+    const collect = () =>
+      Bun.spawnSync(
+        [process.execPath, join(import.meta.dir, "perf.ts"), "A1", "--root", dir, "--report-only"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+    const breach = collect();
+    expect(breach.exitCode).toBe(0);
+    expect(JSON.parse(breach.stdout.toString())).toMatchObject({
+      status: "measured",
+      result: "breach",
+    });
+    await put(dir, "bun.lock", "invalid lock");
+    const failed = collect();
+    expect(failed.exitCode).toBe(1);
+    expect(JSON.parse(failed.stdout.toString())).toMatchObject({ status: "failed" });
     expect(reports[0]).toMatchObject({
       status: "measured",
       result: "breach",
