@@ -28,15 +28,19 @@ export type LocalActor = {
   allows: (permission: PermissionItem, target: AuthorizationTarget) => boolean;
 };
 type Start = Extract<SignedRequest, { method: "thread.start" }>["payload"];
-type Context = { actor: LocalActor; commandId: CommandId; transaction: FirstSendStore };
+export type FirstSendContext = {
+  actor: LocalActor;
+  commandId: CommandId;
+  transaction: FirstSendStore;
+};
 function reject(
   commandId: CommandId,
   kind: "idConflict" | "notFound" | "invalidState" | "unsupported",
 ): CommandReceipt {
   return { kind: "rejected", commandId, failure: { kind } };
 }
-export function record(
-  context: Context,
+export function recordCommand(
+  context: FirstSendContext,
   operation: RequestMethodDefinition,
   payload: unknown,
   target: AuthorizationTarget,
@@ -68,13 +72,13 @@ export function record(
   })();
 }
 export function registerProject(
-  context: Context & { environmentId: EnvironmentId; realPath: string },
+  context: FirstSendContext & { environmentId: EnvironmentId; realPath: string },
 ) {
   const { transaction, environmentId, commandId } = context;
   if (environmentId !== transaction.writer.environmentId) return reject(commandId, "notFound");
   const physical = physicalDirectory(context.realPath);
   const realPath = physical?.realPath ?? context.realPath;
-  return record(
+  return recordCommand(
     context,
     REQUEST_METHODS.registerProject,
     { realPath },
@@ -126,19 +130,25 @@ export function acceptFirstInput({
   commandId,
   threadStart,
   transaction,
+  validate,
+  selected,
 }: {
   verifiedActor: LocalActor;
   commandId: CommandId;
   threadStart: Start;
+  selected?: (roundId: string) => void;
+  validate?: () => "notFound" | "invalidState" | "unsupported" | null;
   transaction: FirstSendStore;
 }) {
   const { projectId, worktreeId, content } = threadStart;
-  return record(
+  return recordCommand(
     { actor: verifiedActor, commandId, transaction },
     REQUEST_METHODS.startThread,
     threadStart,
     { kind: "project", projectId },
     () => {
+      const invalid = validate?.();
+      if (invalid) return reject(commandId, invalid);
       const project = readProject(transaction.db, projectId);
       if (!project?.root || project.environmentId !== verifiedActor.environmentId)
         return reject(commandId, "notFound");
@@ -189,6 +199,7 @@ export function acceptFirstInput({
           phase: { kind: "filed", gate: "eligible" },
         },
       });
+      selected?.(round.id);
       const { attemptId, deliveryId } = round.attempt;
       transaction.db
         .query("INSERT INTO threads VALUES(?,?)")
@@ -211,9 +222,9 @@ export function acceptFirstInput({
     },
   );
 }
-export function renameThread(context: Context & { threadId: ThreadId; title: string }) {
+export function renameThread(context: FirstSendContext & { threadId: ThreadId; title: string }) {
   const { threadId, title, transaction, commandId } = context;
-  return record(
+  return recordCommand(
     context,
     REQUEST_METHODS.renameThread,
     { threadId, title },

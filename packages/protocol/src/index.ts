@@ -8,6 +8,10 @@ export * from "./routes";
 export * from "./origins";
 export * from "./transport";
 export * from "./transport-limits";
+export * from "./stream-codec";
+export * from "./stream-flow";
+export * from "./stream-receiver";
+export * from "./flow-peer";
 export * from "./executor-capabilities";
 export * from "./settings";
 export * from "./attention";
@@ -34,3 +38,5 @@ export * from "./device-registration";
 export * from "./replay";
 export { validateReplayUpdate } from "./replay-sequence";
 export * from "./canonical-json";
+
+export * from "./executor-instance";

@@ -1,10 +1,13 @@
 import { inputReads, inputReadMethods } from "./input-reads";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
+import { CodexInstances } from "./codex-instances";
+import { dispatchCodex } from "./durable-codex";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   acceptFirstInput,
   applyInputCommand,
+  advanceQueue,
   type FirstSendStore,
   firstPending,
   frozenInput,
@@ -34,6 +37,8 @@ import {
   PrincipalIdSchema,
   REQUEST_METHODS,
   type ReplayTurnUpdate,
+  type RoundId,
+  type ExecutorTurnUpdate,
   RequestSignerSchema,
   RoundSchema,
   type SignedRequest,
@@ -43,6 +48,8 @@ import * as v from "valibot";
 import { type ActiveSteers, dispatchReplay, inspectOriginalInput } from "./durable-replay";
 
 const methods = v.variant("method", [
+  REQUEST_METHODS.configureExecutor.schema,
+  REQUEST_METHODS.refreshExecutor.schema,
   REQUEST_METHODS.registerProject.schema,
   REQUEST_METHODS.startThread.schema,
   REQUEST_METHODS.renameThread.schema,
@@ -64,7 +71,7 @@ export async function startWriter<H extends object>(
     modelId: string;
     recovery?: RecoveryScope;
     confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
-  },
+  } | null,
   lifecycle?: {
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
@@ -82,9 +89,10 @@ export async function startWriter<H extends object>(
   let store: FirstSendStore | undefined;
   try {
     lifecycle?.locked?.();
-    const transaction = openStore(lock.lease, replay.recovery);
+    const transaction = openStore(lock.lease, replay?.recovery);
     store = transaction;
     lifecycle?.opened?.(transaction);
+    const codex = new CodexInstances(transaction);
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
@@ -105,6 +113,7 @@ export async function startWriter<H extends object>(
     const controller = new AbortController();
     let accepting = true;
     const steers: ActiveSteers = new Map();
+    const recipients = new Map<RoundId, Bun.ServerWebSocket<Session>>();
     function schedule(threadId: ThreadId, commandId: CommandId) {
       if (turns.has(threadId) || !accepting) return;
       const pump = async () => {
@@ -153,15 +162,59 @@ export async function startWriter<H extends object>(
             return;
           const round = readRound(transaction.db, head.id);
           if (!round) return;
-          await dispatchReplay(
-            transaction,
-            round,
-            commandId,
-            replay,
-            (event) => lifecycle?.update?.(event),
-            controller.signal,
-            steers,
-          );
+          const saved = codex.forThread(threadId);
+          if (saved) {
+            const thread = readThread(transaction.db, threadId);
+            if (!thread) return;
+            const selection = await codex.resolve(saved, actor.id, thread.projectId);
+            if (!accepting) return;
+            if (!selection) {
+              const current = readRound(transaction.db, round.id);
+              if (current?.version !== round.version) continue;
+              const reason = "Saved executor configuration unavailable";
+              transaction.db.transaction(() => {
+                transaction.setPhase(current, { kind: "notDelivered", reason, lateReceipt: null });
+                advanceQueue(transaction, threadId);
+              })();
+              const recipient = recipients.get(round.id);
+              if (recipient?.readyState === 1)
+                recipient.send(
+                  JSON.stringify({
+                    kind: "executor.failed",
+                    roundId: round.id,
+                    attemptId: round.attempt.attemptId,
+                    reason: "invalidState",
+                    message: reason,
+                  } satisfies ExecutorTurnUpdate),
+                );
+              recipients.delete(round.id);
+              continue;
+            }
+            await dispatchCodex(
+              transaction,
+              round,
+              selection,
+              () =>
+                codex.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+                selection.snapshot,
+              (event: ExecutorTurnUpdate) => {
+                const recipient = recipients.get(round.id);
+                if (recipient?.readyState === 1) recipient.send(JSON.stringify(event));
+              },
+              controller.signal,
+            );
+          } else if (replay) {
+            await dispatchReplay(
+              transaction,
+              round,
+              commandId,
+              replay,
+              (event) => lifecycle?.update?.(event),
+              controller.signal,
+              steers,
+            );
+          } else return;
+          recipients.delete(round.id);
           if (readRound(transaction.db, head.id)?.version === round.version) return;
         }
       };
@@ -215,7 +268,7 @@ export async function startWriter<H extends object>(
             }),
           );
         },
-        message(ws, frame) {
+        async message(ws, frame) {
           try {
             if (!accepting || typeof frame !== "string") {
               ws.close(1008);
@@ -259,28 +312,101 @@ export async function startWriter<H extends object>(
               req.method === "input.steer" && actor.allows("thread.send")
                 ? readReceipt(transaction.db, actor.id, req.commandId)
                 : null;
-            const receipt =
-              req.method === "project.register"
-                ? registerProject({ ...context, environmentId: req.environmentId, ...req.payload })
-                : req.method === "thread.rename"
-                  ? renameThread({ ...context, ...req.payload })
-                  : req.method === "thread.start"
-                    ? acceptFirstInput({
-                        verifiedActor: actor,
-                        commandId: req.commandId,
-                        threadStart: req.payload,
-                        transaction,
-                      })
-                    : applyInputCommand({
-                        actor,
-                        transaction,
-                        command: req,
-                        supportsSteer: (id) => steers.has(id),
-                      });
+            let receipt: CommandReceipt;
+            switch (req.method) {
+              case "executor.configure":
+                receipt = codex.registry.configure(context, req.payload);
+                break;
+              case "executor.refresh": {
+                const work = codex.refresh(context, req.payload);
+                codex.active.add(work);
+                try {
+                  receipt = await work;
+                } finally {
+                  codex.active.delete(work);
+                }
+                break;
+              }
+              case "project.register":
+                receipt = registerProject({
+                  ...context,
+                  environmentId: req.environmentId,
+                  ...req.payload,
+                });
+                break;
+              case "thread.rename":
+                receipt = renameThread({ ...context, ...req.payload });
+                break;
+              case "thread.start": {
+                const { projectId, model } = req.payload;
+                const id = req.payload.instanceId ?? codex.registry.defaultFor(projectId);
+                const cwd = id ? transaction.projectDirectory(projectId) : null;
+                let entry = id && cwd ? codex.current(id, actor.id, cwd) : null;
+                if (
+                  id &&
+                  !entry &&
+                  actor.allows("thread.send") &&
+                  !readReceipt(transaction.db, actor.id, req.commandId)
+                )
+                  entry = await codex.lookup(id, actor.id, projectId);
+                if (!accepting) return;
+                const chosen = codex.select(entry, model);
+                receipt = acceptFirstInput({
+                  verifiedActor: actor,
+                  commandId: req.commandId,
+                  threadStart: req.payload,
+                  transaction,
+                  validate: () =>
+                    id
+                      ? chosen
+                        ? null
+                        : "unsupported"
+                      : replay &&
+                          (!model ||
+                            (model.id === replay.modelId && !Object.keys(model.options).length))
+                        ? null
+                        : "unsupported",
+                  selected(roundId) {
+                    if (chosen)
+                      transaction.db.run("INSERT INTO round_executors VALUES(?,?,?,?)", [
+                        roundId,
+                        chosen.reg.instanceId,
+                        chosen.reg.version,
+                        JSON.stringify(chosen.model),
+                      ]);
+                  },
+                });
+                break;
+              }
+              default:
+                receipt = applyInputCommand({
+                  actor,
+                  transaction,
+                  command: req,
+                  supportsSteer: (id) => steers.has(id),
+                });
+            }
             if (lifecycle?.committed?.(req, receipt) === "disconnect") ws.close(1011);
             else ws.send(JSON.stringify(receipt));
             if (receipt.kind === "accepted") {
               const result = receipt.result;
+              if (
+                (result.kind === "threadStarted" || result.kind === "inputScheduled") &&
+                !(req.method === "input.steer" && req.payload.mode === "insertCurrent")
+              ) {
+                const threadId =
+                  result.kind === "threadStarted"
+                    ? result.threadId
+                    : "threadId" in req.payload
+                      ? req.payload.threadId
+                      : null;
+                if (
+                  threadId &&
+                  codex.forThread(threadId) &&
+                  readRound(transaction.db, result.roundId)?.attempt.phase.kind === "filed"
+                )
+                  recipients.set(result.roundId, ws);
+              }
               if (
                 req.method === "input.steer" &&
                 req.payload.mode === "insertCurrent" &&
@@ -307,6 +433,7 @@ export async function startWriter<H extends object>(
           }
         },
         close(ws) {
+          for (const [roundId, socket] of recipients) if (socket === ws) recipients.delete(roundId);
           reads.close(ws);
           sockets.delete(ws);
         },
@@ -322,6 +449,7 @@ export async function startWriter<H extends object>(
       for (const row of pending) {
         const round = v.parse(RoundSchema, JSON.parse(row.data));
         if (
+          replay &&
           round.attempt.phase.kind === "recovering" &&
           round.attempt.phase.action === "inspectInput"
         ) {
@@ -349,6 +477,7 @@ export async function startWriter<H extends object>(
         try {
           await server.stop(true);
           await Promise.allSettled(turns.values());
+          await codex.close();
         } finally {
           try {
             transaction.db.close();

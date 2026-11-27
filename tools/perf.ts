@@ -258,8 +258,11 @@ async function checkCommandSurface(root: string) {
       ![
         "Unknown command, expected replay",
         "Unknown command, expected replay or start",
+        "Unknown command, expected replay or daemon",
+        "Unknown command, expected replay, start or daemon",
         "Unknown command, expected replay or access",
         "Unknown command, expected replay, start or access",
+        "Unknown command, expected replay, start, access or daemon",
       ].includes(diagnostic)
     )
       throw new Error(`Cannot confirm command surface (exit ${r.exitCode}): ${r.stderr}`);
@@ -378,6 +381,19 @@ export async function runBudget({
         }
       } else if (
         durable &&
+        role === "baseline" &&
+        (metric === "P1" || metric === "P2") &&
+        !(await Bun.file(join(root, "packages/daemon/src/codex-instances.ts")).exists())
+      ) {
+        const daemon = await Bun.file(join(root, "packages/daemon/src/index.ts")).text();
+        if (!daemon.includes("createReplayAdapter") || daemon.includes("createCodexAdapter"))
+          throw new Error("Unrecognized daemon adapter selection");
+        report = unavailable(
+          base,
+          "Parent first-send writer only supports the replay adapter; missing Codex stdio profile",
+        );
+      } else if (
+        durable &&
         (metric === "P1" ||
           metric === "P2" ||
           metric === "P7" ||
@@ -399,9 +415,34 @@ export async function runBudget({
         }
         if (report.status === "unavailable" && report.reason.startsWith("Known baseline stub"))
           stub = true;
+      } else if (
+        metric === "P11" &&
+        (await Bun.file(join(root, "packages/daemon/src/flow-socket.ts")).exists())
+      ) {
+        const { sampleTransfers } = await import("./stream-flow-bench");
+        base.expected = {
+          uploads: 10,
+          downloads: 10,
+          uploadBytes: 200_000_000,
+          downloadBytes: 200_000_000,
+        };
+        base.actual = { uploads: 0, downloads: 0, uploadBytes: 0, downloadBytes: 0 };
+        const series = { upload: 0, download: 0 };
+        for await (const trial of sampleTransfers(root)) {
+          const { direction, bytes, receiptsMs } = trial;
+          base.observations.push(trial);
+          base.actual[`${direction}s`] = (base.actual[`${direction}s`] ?? 0) + 1;
+          base.actual[`${direction}Bytes`] = (base.actual[`${direction}Bytes`] ?? 0) + bytes;
+          series[direction] += receiptsMs.length;
+          for (const value of receiptsMs)
+            base.samples.push({ series: direction, unit: "ms", value });
+        }
+        report = measured(base, series);
       } else {
         base.expected = { capabilityChecks: 1, workloadSamples: 0 };
         base.actual = { capabilityChecks: 0, workloadSamples: 0 };
+        if (metric === "P11" && role === "candidate")
+          throw new Error("Missing required flow-controlled transfer endpoint");
         if (metric === "P8") {
           if (
             !(await Bun.file(join(root, "packages/daemon/package.json")).exists()) ||
@@ -409,7 +450,9 @@ export async function runBudget({
           )
             throw new Error("Cannot confirm absence of the daemon release packager");
         } else if (!stub) {
-          await commandSurface();
+          const diagnostic = await commandSurface();
+          if (metric === "P11" && diagnostic.includes("daemon"))
+            throw new Error("Cannot confirm absence of the flow-controlled endpoint");
         }
         base.actual.capabilityChecks = 1;
         report = unavailable(base, `Missing ${base.endpoint}`);

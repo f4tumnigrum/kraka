@@ -45,3 +45,4 @@ export * from "./first-send";
 
 export * from "./input-command";
 export * from "./input-store";
+export * from "./executor-registry";

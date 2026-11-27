@@ -1,3 +1,4 @@
+import { RegistrationInputSchema, ExecutorRefreshedSchema } from "./executor-instance";
 import {
   ThreadChangeSchema,
   EarlierSettledRequestSchema,
@@ -26,6 +27,7 @@ import {
   AppCallbackResultSchema,
   AppConfirmationSchema,
   CheckoutResultSchema,
+  ChildModelSchema,
   ChildLaunchSchema,
   ChildReceiptSchema,
   ChildStatusSchema,
@@ -123,6 +125,7 @@ import {
   DeliveryIdSchema,
   DeviceIdSchema,
   DeviceKeyIdSchema,
+  ExecutorInstanceIdSchema,
   ExecutorKeyIdSchema,
   PrincipalIdSchema,
   EnvironmentIdSchema,
@@ -339,6 +342,8 @@ function defineRequestMethod<
 const ThreadStartPayloadSchema = v.strictObject({
   projectId: ProjectIdSchema,
   worktreeId: v.nullable(WorktreeIdSchema),
+  instanceId: v.optional(ExecutorInstanceIdSchema),
+  model: v.optional(ChildModelSchema),
   content: InputContentSchema,
 });
 const UploadTargetSchema = v.variant("kind", [
@@ -718,6 +723,21 @@ export const REQUEST_METHODS = {
     "thread",
     AttentionReadSchema,
   ),
+  configureExecutor: defineRequestMethod(
+    "executor.configure",
+    "settings.change",
+    "environment",
+    v.strictObject({
+      expectedVersion: v.nullable(ObjectVersionSchema),
+      registration: RegistrationInputSchema,
+    }),
+  ),
+  refreshExecutor: defineRequestMethod(
+    "executor.refresh",
+    "thread.view",
+    "project",
+    v.strictObject({ projectId: ProjectIdSchema, instanceId: ExecutorInstanceIdSchema }),
+  ),
   registerProject: defineRequestMethod(
     "project.register",
     "workspace.change",
@@ -1024,6 +1044,12 @@ export const DevicePairingResultSchema = v.variant("kind", [
 
 export type DevicePairingResult = v.InferOutput<typeof DevicePairingResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
+  ExecutorRefreshedSchema,
+  v.strictObject({
+    kind: v.literal("executorConfigured"),
+    instanceId: ExecutorInstanceIdSchema,
+    version: ObjectVersionSchema,
+  }),
   ContextOperationReceiptSchema,
   v.strictObject({ kind: v.literal("projectRegistered"), project: ProjectSchema }),
   v.strictObject({

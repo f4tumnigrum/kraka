@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type InstancePublication, InstancePublicationSchema } from "@kraka/environment";
 import {
+  ExecutorTurnUpdateSchema,
+  type ExecutorTurnUpdate,
   CommandIdSchema,
   type CommandReceipt,
   CommandReceiptSchema,
@@ -28,7 +30,11 @@ const helloSchema = v.strictObject({
   challengeId: v.string(),
   challenge: ConnectionChallengeSchema,
 });
-export async function connectFirstSend(stateDir: string, instance: InstancePublication) {
+export async function connectFirstSend(
+  stateDir: string,
+  instance: InstancePublication,
+  onUpdate?: (event: ExecutorTurnUpdate) => void,
+) {
   const key = createPrivateKey(readFileSync(join(stateDir, "fixture-private.pem")));
   const socket = new WebSocket(instance.endpoint);
   const ready = Promise.withResolvers<v.InferOutput<typeof helloSchema>>();
@@ -75,6 +81,10 @@ export async function connectFirstSend(stateDir: string, instance: InstancePubli
         const waiter = pages.get(page.threadId);
         if (!waiter) throw Error("Unexpected history page");
         waiter.resolve(page);
+        return;
+      }
+      if (onUpdate && raw.kind !== "accepted" && raw.kind !== "rejected") {
+        onUpdate(v.parse(ExecutorTurnUpdateSchema, raw));
         return;
       }
       const receipt = v.parse(CommandReceiptSchema, raw);

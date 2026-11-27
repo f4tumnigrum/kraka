@@ -35,6 +35,7 @@ function scope(r: Report) {
     return r.observations.map((o) =>
       v.parse(v.object({ source: v.string(), unit: v.string() }), o),
     );
+  if (r.metric === "P11") return r.actual;
   return r.actual.launches;
 }
 
