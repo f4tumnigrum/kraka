@@ -156,20 +156,18 @@ export class ThreadReplica {
       return this.request(await signed);
     });
   }
-  private async invalidate(cursor: SyncCursor | null, keepEarlier = false) {
+  private async invalidate(cursor: SyncCursor | null, listShapeChanged = false) {
     if (!cursor) return;
     await this.host.store.transact((old) => {
-      const current = old.scopes[scopeKey(cursor)]?.cursor;
-      return {
-        next:
-          current && sameRange(current, cursor)
-            ? {
-                ...emptyThreadCache(),
-                ...(keepEarlier && old.earlier ? { earlier: old.earlier } : {}),
-              }
-            : old,
-        result: undefined,
-      };
+      const key = scopeKey(cursor),
+        current = old.scopes[key]?.cursor;
+      if (!current || !sameRange(current, cursor)) return { next: old, result: undefined };
+      if (listShapeChanged && cursor.scope.kind === "list") {
+        const scopes = { ...old.scopes };
+        delete scopes[key];
+        return { next: { ...old, scopes }, result: undefined };
+      }
+      return { next: emptyThreadCache(), result: undefined };
     });
   }
   openList(projectId: ProjectId | null, cached: SyncCursor | null, cold = false, mayReset = true) {
