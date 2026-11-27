@@ -1,3 +1,4 @@
+import { controlledTurn } from "./codex-controlled";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -29,6 +30,17 @@ if (
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
+  if (process.env.PEER_CONTROL)
+    writeFileSync(
+      join(args[3], "ServerRequest.json"),
+      JSON.stringify({
+        oneOf: [
+          "item/commandExecution/requestApproval",
+          "item/fileChange/requestApproval",
+          "item/tool/requestUserInput",
+        ].map((method) => ({ properties: { method: { const: method } } })),
+      }),
+    );
   for (const [file, direction] of [
     ["ClientRequest.json", "toExecutor"],
     ["ServerNotification.json", "fromExecutor"],
@@ -38,11 +50,40 @@ if (
         .filter((r) => r.direction === direction && typeof r.frame.method === "string")
         .map((r) => r.frame.method),
     );
-    if (direction === "toExecutor") methods.add("thread/read");
+    if (direction === "toExecutor") {
+      methods.add("thread/read");
+      methods.add("thread/resume");
+      if (process.env.PEER_CONTROL) {
+        methods.add("turn/interrupt");
+        methods.add("turn/steer");
+      }
+    }
     writeFileSync(
       join(args[3], file),
       JSON.stringify({
-        oneOf: [...methods].map((method) => ({ properties: { method: { enum: [method] } } })),
+        oneOf: [...methods].map((method) => ({
+          properties: {
+            method: { enum: [method] },
+            ...(method === "turn/steer"
+              ? {
+                  params: {
+                    properties: {
+                      threadId: { type: "string" },
+                      expectedTurnId: { type: "string" },
+                      input: {
+                        type: "array",
+                        items: {
+                          oneOf: [
+                            { properties: { type: { const: "text" }, text: { type: "string" } } },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                }
+              : {}),
+          },
+        })),
       }),
     );
   }
@@ -86,9 +127,15 @@ async function gate(name: string, id: number | null) {
   const path = join(`${ledgerPath}.${name}.release`);
   while (!existsSync(path)) await Bun.sleep(3);
 }
+const controlled = process.env.PEER_CONTROL
+  ? controlledTurn(process.env.PEER_CONTROL, recording, write)
+  : null;
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   const r = obj(JSON.parse(line));
-  if (!r.method) continue;
+  if (!r.method) {
+    if (controlled) await controlled.reply(r);
+    continue;
+  }
   const method = String(r.method),
     id = typeof r.id === "number" ? r.id : null;
   const p = r.params ? obj(r.params) : {};
@@ -143,7 +190,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         nextCursor: p.cursor === null ? "p2" : null,
       },
     });
-  } else if (method === "thread/start") {
+  } else if (method === "thread/start" || method === "thread/resume") {
     const result = obj(frame(5).result);
     const thread = obj(result.thread);
     const cwd = process.cwd(),
@@ -151,12 +198,15 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     if (
       p.cwd !== cwd ||
       !["gpt-5.4", "other"].includes(String(model)) ||
-      p.approvalPolicy !== "untrusted" ||
+      (!controlled && p.approvalPolicy !== "untrusted") ||
       p.approvalsReviewer !== "user" ||
-      p.sandbox !== "read-only"
+      (!controlled && p.sandbox !== "read-only")
     )
       throw new Error("Unexpected submitted open policy");
     session = String(thread.id);
+    if (controlled && !p.ephemeral) session = await controlled.open(method, p);
+    if (!controlled && method === "thread/resume" && p.threadId !== session)
+      throw Error("Wrong saved session");
     openedModel = model;
     const actual = profile === "mismatch" && !p.ephemeral ? "never" : p.approvalPolicy;
     if (actual === "never") await gate("policy", id);
@@ -173,7 +223,23 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       id,
       result: {
         ...result,
-        thread: { ...thread, cwd, model },
+        thread: { ...thread, id: session, cwd, model },
+        ...(controlled
+          ? {
+              sandbox:
+                p.sandbox === "workspace-write"
+                  ? {
+                      type: "workspaceWrite",
+                      writableRoots: [cwd],
+                      networkAccess: false,
+                      excludeSlashTmp: true,
+                      excludeTmpdirEnvVar: true,
+                    }
+                  : p.sandbox === "danger-full-access"
+                    ? { type: "dangerFullAccess" }
+                    : result.sandbox,
+            }
+          : {}),
         cwd,
         model,
         approvalPolicy: actual,
@@ -181,6 +247,8 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         serviceTier: p.serviceTier ?? null,
       },
     });
+  } else if (controlled && session) {
+    await controlled.request(method, id, p);
   } else if (method === "turn/start") {
     if (!p.threadId) {
       write({ id, error: { code: -32602, message: "Missing required threadId" } });
@@ -222,4 +290,5 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     write({ id, result: { thread: { id: session, turns: [obj(frame(19).params).turn] } } });
   } else write({ id, error: { code: -32601, message: "Method not found" } });
 }
+controlled?.close();
 log("exit", null);

@@ -253,6 +253,10 @@ export function acceptTodoReply({
       if (todo.state.kind !== "open")
         return save(reject(commandId, { kind: "todoChanged", current: todo }));
       const route = todo.state.route;
+      if (route.kind === "message" && binding.nativeNode) {
+        const thread = readThread(writer.db, todo.threadId);
+        if (!thread || !writer.directory(thread)) return fail("invalidState");
+      }
       if (route.kind === "live" && !writer.todos.isLive(todo)) return fail("invalidState");
       const content =
         cmd.method === "todo.answer"
