@@ -1,3 +1,4 @@
+import { changeThreadLifecycle } from "./thread-lifecycle";
 import * as v from "valibot";
 import {
   DirectoryRecordSchema,
@@ -218,5 +219,65 @@ export function renameThread(context: FirstSendContext & { threadId: ThreadId; t
       transaction.sync.record([{ objectType: "thread", value: changed }]);
       return { kind: "threadRenamed", threadId, version: changed.version };
     },
+  );
+}
+
+export function applyThreadChange(
+  context: FirstSendContext,
+  payload: Extract<SignedRequest, { method: "thread.changeLifecycle" }>["payload"],
+  visibility: string,
+) {
+  const { transaction: store, commandId, actor } = context;
+  const { threadId, baseVersion, change } = payload,
+    target = { kind: "thread" as const, threadId };
+  return recordCommand(
+    context,
+    REQUEST_METHODS.changeThreadLifecycle,
+    payload,
+    target,
+    () => {
+      const thread = readThread(store.db, threadId);
+      if (!thread) return reject(commandId, "notFound");
+      if (thread.version !== baseVersion)
+        return {
+          kind: "rejected",
+          commandId,
+          failure: { kind: "threadVersionConflict", threadId, currentVersion: thread.version },
+        };
+      const source = () =>
+        store.sync
+          .readList(
+            { kind: "list", projectId: thread.projectId },
+            visibility,
+            actor.id,
+            (id) => actor.allows("thread.view", { kind: "thread", threadId: id }),
+            () => false,
+          )
+          .sources.get(threadId);
+      const old = source();
+      if (!old) return reject(commandId, "notFound");
+      const blocked =
+        old.facts.requests.some(
+          (r) => r.request.state.kind === "open" && r.request.body.kind === "approval",
+        ) ||
+        old.facts.rounds.some(
+          (r) =>
+            !r.quota &&
+            !["finished", "endedEarly", "notDelivered"].includes(r.round.attempt.phase.kind),
+        );
+      const lifecycle = changeThreadLifecycle(old.summary.lifecycle, change, Date.now(), blocked);
+      if (!lifecycle) return reject(commandId, "invalidState");
+      const updated = v.parse(ThreadSchema, {
+        ...thread,
+        lifecycle,
+        version: String(BigInt(thread.version) + 1n),
+      });
+      store.db.query("UPDATE threads SET data=? WHERE id=?").run(JSON.stringify(updated), threadId);
+      store.sync.record([{ objectType: "thread", value: updated }]);
+      const result = source();
+      if (!result) throw Error("Committed lifecycle is missing its summary");
+      return { kind: "threadChanged", summary: result.summary };
+    },
+    ["thread.view"],
   );
 }

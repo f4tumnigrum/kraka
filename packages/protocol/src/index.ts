@@ -42,3 +42,5 @@ export * from "./canonical-json";
 export * from "./executor-instance";
 export * from "./sync";
 export * from "./logical-control";
+
+export { subscriptionWirePage, listWireChange } from "./list-wire";

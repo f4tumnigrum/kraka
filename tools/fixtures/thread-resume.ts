@@ -26,7 +26,9 @@ import { within, withState } from "./replay-process";
 
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
+  holdSeal?: (head: SyncCursor) => Promise<void>;
   minor?: 0 | 1;
+  captureReply?: (wire: import("@kraka/protocol").WireMessage) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
@@ -73,13 +75,24 @@ export async function connectReplica(
     ready.reject(Error("Replica socket closed"));
     closed.resolve();
   };
+  let held: Promise<void> | null = null;
   socket.onmessage = async (e) => {
     arrival = performance.now();
     try {
       const wire = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
       bytes += wireBytes(wire, utf8);
       replyBytes += wireBytes(wire, utf8);
+      opts.captureReply?.(wire);
       if (replica) {
+        if (held) await held;
+        if (opts.holdSeal && typeof wire === "string") {
+          const frame = decodeFrame(wire, utf8);
+          if (frame.lane === "control" && frame.message.kind === "subscription.seal") {
+            held = opts.holdSeal(frame.message.cursor);
+            await held;
+            held = null;
+          }
+        }
         replica.peer.input(wire);
         replica.peer.pump();
         return;

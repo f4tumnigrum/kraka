@@ -166,6 +166,8 @@ export function stageThreadFrame(
         : { kind: "list" as const, projectId: req.payload.projectId };
     if (
       m.through.environmentId !== req.environmentId ||
+      (req.method === "subscription.openList" &&
+        req.payload.windowShapeVersion !== m.through.shapeVersion) ||
       !sameScope(scope, m.through.scope) ||
       (m.mode === "replace"
         ? m.base !== null || s.lastSeal !== null || req.payload.after !== null
@@ -216,6 +218,7 @@ type SavedPage = Pick<HistoryPage, "threadId" | "anchor" | "verifiedAt" | "older
   timelineItems: boolean;
 };
 export interface ThreadCache {
+  earlier?: Record<string, import("@kraka/protocol").EarlierSettledPage>;
   format: 1;
   rows: Record<string, SavedRow>;
   scopes: Record<string, Membership>;
@@ -359,6 +362,12 @@ export async function installThreadPass(
             saveRow(cache, { objectType: "timelineItem", value: change.observation });
             break;
           case "handoff.textReturned": {
+            if (
+              change.result.target.environmentId !== begin.through.environmentId ||
+              begin.through.scope.kind !== "thread" ||
+              change.result.target.threadId !== begin.through.scope.threadId
+            )
+              throw Error("Return outside target input");
             const k = JSON.stringify(change.result.transferId),
               old = cache.returns[k];
             const cmp = old ? comparePositions(change.version, old.version) : 1;
@@ -403,12 +412,12 @@ export async function installThreadPass(
           case "thread.summary": {
             if (begin.through.scope.kind !== "list") throw Error("Summary outside list");
             const k = JSON.stringify(change.summary.threadId),
-              old = cache.summaries[k];
-            if (scope.listRows) scope.listRows[k] = change.summary;
+              summaries = scope.listRows ?? cache.summaries,
+              old = summaries[k];
             const cmp = old ? comparePositions(change.summary.version, old.version) : 1;
             if (cmp === 0 && canonicalJson(old) !== canonicalJson(change.summary))
               throw Error("Conflicting summary");
-            if (cmp > 0) cache.summaries[k] = change.summary;
+            if (cmp > 0) summaries[k] = change.summary;
             break;
           }
           case "list.counts": {
@@ -429,7 +438,7 @@ export async function installThreadPass(
     for (const [k, member] of Object.entries(scope.members)) {
       if (
         begin.through.scope.kind === "list" && member.objectType === "thread"
-          ? !cache.summaries[JSON.stringify(member.id)]
+          ? !(scope.listRows ?? cache.summaries)[JSON.stringify(member.id)]
           : !cache.rows[k]?.row
       )
         throw Error("Missing member");
@@ -439,7 +448,13 @@ export async function installThreadPass(
         if (!scope.members[keyString({ objectType: "thread", id: scope.listRows[key]!.threadId })])
           delete scope.listRows[key];
       for (const key of Object.keys(scope.facts))
-        if (!scope.listRows[key]) throw Error("Attention outside list");
+        if (
+          !scope.listRows[key] &&
+          !scope.facts[key]?.root.requests.some(
+            (r) => r.request.state.kind === "open" && r.answerable,
+          )
+        )
+          throw Error("Unexpected attention outside the list window");
       for (const member of Object.values(scope.members))
         if (
           member.objectType !== "thread" ||
@@ -509,4 +524,20 @@ export function cachedHistory(cache: ThreadCache, anchor: string, current: SyncC
     verified: sameHead(page.verifiedAt, current),
     rows: page.keys.flatMap((k) => cache.rows[k]?.row ?? []),
   };
+}
+
+export function returnsForInput(
+  cache: ThreadCache,
+  target: TextReturnedEvent["result"]["target"],
+  input: TextReturnedEvent["result"]["input"],
+) {
+  return Object.values(cache.returns).filter(
+    ({ result }) =>
+      result.target.environmentId === target.environmentId &&
+      result.target.threadId === target.threadId &&
+      result.input.messageId === input.messageId &&
+      result.input.roundId === input.roundId &&
+      result.input.attemptId === input.attemptId &&
+      result.input.deliveryId === input.deliveryId,
+  );
 }

@@ -24,6 +24,7 @@ import {
   type LocalActor,
   readThread,
   renameThread,
+  applyThreadChange,
   type FirstSendStore,
 } from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
@@ -113,6 +114,12 @@ export async function threadConnection(
         }
         return !!host.store.ceiling(session.principal.id, { kind: "thread", threadId }, permission);
       };
+      function visibility() {
+        const n = host.store.db
+          .query<{ n: string }, []>("SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes")
+          .get()?.n;
+        return JSON.stringify([session?.principal.id, n]);
+      }
       function accept(m: SignedRequest | PrivateSecretRequest | ClientAuthentication) {
         const actor = usable(m.signer);
         if (
@@ -190,14 +197,7 @@ export async function threadConnection(
             store,
             {
               principal: actor.principal.id,
-              visibility: () => {
-                const n = host.store.db
-                  .query<{ n: string }, []>(
-                    "SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes",
-                  )
-                  .get()?.n;
-                return JSON.stringify([actor.principal.id, n]);
-              },
+              visibility,
               canList: (projectId) => {
                 if (!session || !usable(session.signer)) return false;
                 if (
@@ -298,22 +298,29 @@ export async function threadConnection(
             return;
           }
           let result = subs.handle(m);
-          if (result?.kind === "accepted" && result.result.kind === "earlierSettled") {
-            const visibility = result.result.page.through.visibilityGeneration;
+          if (!result && m.method === "thread.changeLifecycle") {
+            result = applyThreadChange(
+              {
+                actor: {
+                  id: actor.principal.id,
+                  environmentId: host.identity.id,
+                  allows: (right, target) =>
+                    target.kind === "thread" && allows(target.threadId, right),
+                },
+                commandId: m.commandId,
+                transaction: store,
+              },
+              m.payload,
+              visibility(),
+            );
+          }
+          if (
+            result?.kind === "accepted" &&
+            (result.result.kind === "earlierSettled" || result.result.kind === "threadChanged")
+          ) {
+            const authorizedAt = visibility();
             const stream = sendLogicalRequest(peer, result);
-            disclosures.set(m.commandId, {
-              stream,
-              allowed: () =>
-                visibility ===
-                JSON.stringify([
-                  actor.principal.id,
-                  host.store.db
-                    .query<{ n: string }, []>(
-                      "SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes",
-                    )
-                    .get()?.n,
-                ]),
-            });
+            disclosures.set(m.commandId, { stream, allowed: () => authorizedAt === visibility() });
             wake();
             return;
           }

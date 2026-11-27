@@ -122,7 +122,7 @@ function makeCause(
   };
 }
 
-function compareText(a: string, b: string): number {
+export function compareText(a: string, b: string): number {
   const right = b[Symbol.iterator]();
   for (const ch of a) {
     const next = right.next();

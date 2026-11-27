@@ -22,6 +22,8 @@ import {
   type SyncCursor,
   type SubscriptionId,
 } from "@kraka/protocol";
+import { installEarlierPage } from "./thread-list";
+import type { EarlierSettledRequest } from "@kraka/protocol";
 import { ThreadInstallation } from "./thread-installation";
 import {
   reflectInputReceipt,
@@ -49,6 +51,7 @@ type Host = {
     payload: unknown,
   ) => SignedRequest | Promise<SignedRequest>;
   id: () => SubscriptionId;
+  opened?: (sub: ThreadInstallation) => void;
   receipt?: () => void;
   pageStaged?: (page: SubscriptionPage) => void | Promise<void>;
   acknowledged?: (head: SyncCursor) => void;
@@ -153,12 +156,18 @@ export class ThreadReplica {
       return this.request(await signed);
     });
   }
-  private async invalidate(cursor: SyncCursor | null) {
+  private async invalidate(cursor: SyncCursor | null, keepEarlier = false) {
     if (!cursor) return;
     await this.host.store.transact((old) => {
       const current = old.scopes[scopeKey(cursor)]?.cursor;
       return {
-        next: current && sameRange(current, cursor) ? emptyThreadCache() : old,
+        next:
+          current && sameRange(current, cursor)
+            ? {
+                ...emptyThreadCache(),
+                ...(keepEarlier && old.earlier ? { earlier: old.earlier } : {}),
+              }
+            : old,
         result: undefined,
       };
     });
@@ -268,7 +277,7 @@ export class ThreadReplica {
             reason === "databaseGenerationChanged" ||
             reason === "shapeChanged";
           const restart = async () => {
-            if (incompatible) await this.invalidate(cached);
+            if (incompatible) await this.invalidate(cached, reason === "shapeChanged");
             if (mayReset && !this.closed)
               await (
                 await this.orderStream(() =>
@@ -282,8 +291,25 @@ export class ThreadReplica {
       cached,
     );
     this.streams.set(streamId, sub);
+    this.host.opened?.(sub);
     this.peer.receive.open(streamId);
     return { sub, receipt: this.request(req), streamId };
+  }
+  async earlier(head: SyncCursor, after: EarlierSettledRequest["after"] = null) {
+    if (head.scope.kind !== "list" || head.environmentId !== this.hello.identity.id)
+      throw Error("Expected authorized list");
+    const target =
+      head.scope.projectId === null
+        ? { kind: "environment", environmentId: head.environmentId }
+        : { kind: "project", projectId: head.scope.projectId };
+    const receipt = await this.orderStream(() =>
+      this.rpc("thread.readEarlierSettled", { target, after }),
+    );
+    if (receipt.kind !== "accepted" || receipt.result.kind !== "earlierSettled")
+      throw Error(receipt.kind === "rejected" ? receipt.failure.kind : "Earlier page unavailable");
+    const page = receipt.result.page;
+    await installEarlierPage(this.host.store, head, after, page);
+    return page;
   }
   async history(
     head: SyncCursor,

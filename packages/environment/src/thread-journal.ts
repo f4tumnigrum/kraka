@@ -1,6 +1,6 @@
 import { ListIndex } from "./list-index";
 import type { ListScope } from "./list-pass";
-import type { PrincipalId, TodoRequest } from "@kraka/protocol";
+import type { PrincipalId, TodoRequest, Round, SyncPosition } from "@kraka/protocol";
 import type { Database } from "bun:sqlite";
 import * as v from "valibot";
 import {
@@ -111,6 +111,46 @@ export class ThreadJournal {
   notify() {
     for (const wake of this.listeners) wake();
   }
+  private advanceClock() {
+    const meta = this.meta();
+    if (!meta) throw Error("Missing sync clock");
+    const position = String(BigInt(meta.head) + 1n);
+    this.db.run("UPDATE sync_meta SET head=? WHERE id=1", [position]);
+    return position;
+  }
+  markRead(actor: PrincipalId, thread: ThreadId, through: SyncPosition) {
+    const changed = this.db.transaction(() => {
+      const current = this.db
+        .query<{ position: string }, [string, string]>(
+          "SELECT position FROM list_watermarks WHERE owner=? AND source=?",
+        )
+        .get(actor, thread);
+      if (current && BigInt(current.position) >= BigInt(through)) return false;
+      this.db
+        .query(
+          "INSERT INTO list_watermarks VALUES(?,?,?) ON CONFLICT(owner,source) DO UPDATE SET position=excluded.position",
+        )
+        .run(actor, thread, through);
+      this.advanceClock();
+      return true;
+    })();
+    if (changed) this.notify();
+  }
+  observeQuota(
+    round: Pick<Round, "id" | "threadId" | "attempt">,
+    quota: { resetAt: number | null } | null,
+  ) {
+    const changed = this.db.transaction(() => {
+      const sql = this.db.query(`UPDATE list_attempts SET data=json_set(data,'$.quota',json(?))
+        WHERE source=? AND round=? AND attempt=? AND terminal=0 AND json_extract(data,'$.quota') IS NOT json_extract(?,'$')`);
+      const value = JSON.stringify(quota);
+      if (!sql.run(value, round.threadId, round.id, round.attempt.attemptId, value).changes)
+        return false;
+      this.advanceClock();
+      return true;
+    })();
+    if (changed) this.notify();
+  }
   record(
     rows: readonly HistoryRow[],
     extras: {
@@ -120,10 +160,7 @@ export class ThreadJournal {
   ) {
     if (!this.db.inTransaction) throw Error("Sync index must share the object write transaction");
     if (!rows.length && !extras.removed?.length && !extras.returns?.length) return;
-    const meta = this.meta();
-    if (!meta) throw Error("Missing sync clock");
-    const position = String(BigInt(meta.head) + 1n);
-    this.db.run("UPDATE sync_meta SET head=? WHERE id=1", [position]);
+    const position = this.advanceClock();
     const put =
       this.db.query(`INSERT INTO sync_rows(source,key,round,created,changed,version,payload) VALUES(?,?,?,?,?,?,?)
    ON CONFLICT(source,key) DO UPDATE SET changed=excluded.changed,version=excluded.version,payload=excluded.payload,round=excluded.round`);

@@ -16,6 +16,7 @@ export async function threadListCli(args: string[]) {
       endpoint: { type: "string" },
       "device-dir": { type: "string" },
       project: { type: "string" },
+      scope: { type: "string" },
     },
   });
   const dir = values["device-dir"] ?? process.env.KRAKA_DEVICE_DIR,
@@ -29,7 +30,18 @@ export async function threadListCli(args: string[]) {
   try {
     const reg = device.load(v.parse(EnvironmentIdSchema, environment));
     if (reg?.kind !== "registered") throw Error("Device is not registered in this environment");
-    const projectId = values.project ? v.parse(ProjectIdSchema, values.project) : null;
+    const project = values.project ?? process.env.KRAKA_PROJECT;
+    if (
+      (values.scope && !["project", "environment"].includes(values.scope)) ||
+      (values.scope === "environment" && project)
+    )
+      throw Error("Expected a project or environment list scope");
+    const projectId =
+      values.scope === "environment"
+        ? null
+        : project
+          ? v.parse(ProjectIdSchema, project)
+          : reg.target.projectId;
     const nonce = base64url(crypto.getRandomValues(new Uint8Array(32)));
     const url = new URL(endpoint);
     url.pathname = "/ws";

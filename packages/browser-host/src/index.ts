@@ -81,3 +81,4 @@ export interface BrowserSessionInput {
 }
 /** Return the opening handle before discovery or dialing. Callers share the host implementation. */
 export declare function openBrowserSession(input: BrowserSessionInput): SessionHandle;
+export { openBrowserList } from "./thread-list";

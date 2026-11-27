@@ -84,7 +84,7 @@ export class ListIndex {
       changedAt: v.parse(SyncPositionSchema, position),
       quota: null,
       review:
-        attempt.phase.kind === "finished"
+        attempt.phase.kind === "finished" || attempt.phase.kind === "closing"
           ? {
               kind: "work",
               deferredAtEnd:
@@ -94,9 +94,24 @@ export class ListIndex {
             }
           : null,
     };
+    if (attempt.phase.kind === "finished" || attempt.phase.kind === "closing") {
+      const prior = this.db
+        .query<{ data: string }, [string, string, string]>(
+          "SELECT data FROM list_attempts WHERE source=? AND round=? AND attempt=?",
+        )
+        .get(source, id, attempt.attemptId);
+      const before = prior && v.parse(roundFact, JSON.parse(prior.data));
+      const end = before?.round.attempt.phase;
+      if (before && end?.kind === "closing") {
+        fact.changedAt = before.changedAt;
+        fact.review = before.review;
+        fact.round.attempt = { ...attempt, phase: { ...end, kind: attempt.phase.kind } };
+      }
+    }
     this.db
       .query(
-        `INSERT INTO list_attempts VALUES(?,?,?,?,?) ON CONFLICT(source,round,attempt) DO UPDATE SET data=excluded.data,terminal=excluded.terminal WHERE list_attempts.terminal=0`,
+        `INSERT INTO list_attempts VALUES(?,?,?,?,?) ON CONFLICT(source,round,attempt) DO UPDATE SET data=CASE WHEN json_extract(list_attempts.data,'$.quota') IS NULL THEN excluded.data
+         ELSE json_set(excluded.data,'$.quota',json_extract(list_attempts.data,'$.quota')) END,terminal=excluded.terminal WHERE list_attempts.terminal=0`,
       )
       .run(source, id, attempt.attemptId, JSON.stringify(fact), Number(terminal));
   }

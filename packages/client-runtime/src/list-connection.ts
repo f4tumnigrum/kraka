@@ -9,6 +9,7 @@ import {
   type FlowPort,
   type WireMessage,
   type RegisteredDevice,
+  type SignedRequest,
   type ProjectId,
   type SyncCursor,
 } from "@kraka/protocol";
@@ -29,6 +30,7 @@ export function listConnection(opts: {
   store: ThreadCacheStore;
   read: () => ThreadCache;
   installed: (reading: ListReading) => void;
+  changed?: (reading: ListReading | null) => void;
   fail: (error: unknown) => void;
 }) {
   const { registration, port } = opts;
@@ -40,8 +42,11 @@ export function listConnection(opts: {
       try {
         if (closed) return;
         if (replica) {
+          const old = sub?.state.status;
           replica.peer.input(wire);
           replica.peer.pump();
+          if (old === "current" && sub && sub.state.status !== "current")
+            opts.changed?.(installedList(opts.read(), sub.state));
           return;
         }
         const frame = decodeFrame(wire, port.utf8);
@@ -90,6 +95,9 @@ export function listConnection(opts: {
           port,
           {
             store: opts.store,
+            opened: (opened) => {
+              sub = opened;
+            },
             read: opts.read,
             id: () => v.parse(SubscriptionIdSchema, opts.uuid()),
             async sign(method, payload) {
@@ -134,12 +142,34 @@ export function listConnection(opts: {
         opts.fail(error);
       }
     },
+    async reply(
+      command:
+        | Pick<Extract<SignedRequest, { method: "todo.answer" }>, "method" | "payload">
+        | Pick<Extract<SignedRequest, { method: "todo.decide" }>, "method" | "payload">,
+    ) {
+      const view = sub && installedList(opts.read(), sub.state);
+      const kind = command.method === "todo.answer" ? "question" : command.payload.decision.kind;
+      if (
+        !replica ||
+        !view?.requests.some(
+          (r) =>
+            r.kind === kind &&
+            r.actionable &&
+            r.key.threadId === command.payload.threadId &&
+            r.key.object.kind === "request" &&
+            r.key.object.requestId === command.payload.todoRequestId,
+        )
+      )
+        throw Error("Request is not currently answerable");
+      return replica.rpc(command.method, command.payload);
+    },
     reading() {
       return sub ? installedList(opts.read(), sub.state) : null;
     },
     close() {
       closed = true;
       replica?.close();
+      if (sub) opts.changed?.(installedList(opts.read(), sub.state));
     },
   };
 }

@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import {
   binarySource,
+  listWireChange,
   ContentTransferIdSchema,
   SyncPassIdSchema,
   SubscriptionIdSchema,
@@ -35,6 +36,7 @@ type Sub = {
   writer: SubscriptionWriter;
   off: () => void;
   dirty: boolean;
+  installed: import("@kraka/protocol").SyncCursor | null;
   flight: { plan: Plan; id: SubscriptionPage["passId"]; count: number } | null;
 };
 type Access = {
@@ -129,6 +131,15 @@ export class ThreadSubscriptions {
     if (s.flight || !s.dirty) return;
     s.dirty = false;
     const open = s.open;
+    if ("windowShapeVersion" in open && open.windowShapeVersion !== 2) {
+      this.peer.control({
+        kind: "subscription.reset",
+        subscriptionId: open.subscriptionId,
+        reason: "shapeChanged",
+      });
+      this.end(s, "clientClosed");
+      return;
+    }
     const plan =
       "threadId" in open
         ? this.threadPlan(open)
@@ -158,7 +169,13 @@ export class ThreadSubscriptions {
     let part: SubscriptionPage["changes"] = [],
       bytes = 0;
     for (const change of plan.changes) {
-      const n = Buffer.byteLength(JSON.stringify(change));
+      const n = Buffer.byteLength(
+        JSON.stringify(
+          plan.through.scope.kind === "list" && plan.through.shapeVersion === 2
+            ? listWireChange(change)
+            : change,
+        ),
+      );
       if (part.length && bytes + n > 16384) {
         parts.push(part);
         part = [];
@@ -214,12 +231,31 @@ export class ThreadSubscriptions {
     const accepted = (
       result: Extract<CommandReceipt, { kind: "accepted" }>["result"],
     ): CommandReceipt => ({ kind: "accepted", commandId, result });
-    const rejected = (kind: "invalidState" | "notFound"): CommandReceipt => ({
+    const rejected = (kind: "invalidState" | "notFound" | "cursorExpired"): CommandReceipt => ({
       kind: "rejected",
       commandId,
       failure: { kind },
     });
     switch (req.method) {
+      case "thread.markRead": {
+        const { subscriptionId, threadId, cursor } = req.payload;
+        const sub = this.subs.get(subscriptionId);
+        if (
+          !sub ||
+          !("threadId" in sub.open) ||
+          sub.open.threadId !== threadId ||
+          !this.access.canRead(threadId)
+        )
+          return rejected("notFound");
+        if (
+          !sub.installed ||
+          !sameHead(sub.installed, cursor) ||
+          cursor.visibilityGeneration !== this.access.visibility()
+        )
+          return rejected("invalidState");
+        this.store.sync.markRead(this.access.principal, threadId, cursor.through);
+        return accepted({ kind: "actionAccepted" });
+      }
       case "thread.readEarlierSettled": {
         const { target, after } = req.payload;
         if (target.kind === "environment" && target.environmentId !== req.environmentId)
@@ -227,7 +263,7 @@ export class ThreadSubscriptions {
         const project = target.kind === "project" ? target.projectId : null;
         if (!this.access.canList(project)) return rejected("notFound");
         const page = earlierSettledPage(this.list(project), after);
-        return page ? accepted({ kind: "earlierSettled", page }) : rejected("invalidState");
+        return page ? accepted({ kind: "earlierSettled", page }) : rejected("cursorExpired");
       }
       case "subscription.openList":
       case "subscription.openThread": {
@@ -243,7 +279,7 @@ export class ThreadSubscriptions {
           writer.end("clientClosed");
           return rejected("invalidState");
         }
-        const s: Sub = { open, writer, off: () => {}, dirty: true, flight: null };
+        const s: Sub = { open, writer, off: () => {}, dirty: true, installed: null, flight: null };
         this.subs.set(open.subscriptionId, s);
         s.off = this.store.sync.subscribe(() => {
           s.dirty = true;
@@ -280,6 +316,7 @@ export class ThreadSubscriptions {
         if (!flight || flight.id !== req.payload.passId) return rejected("invalidState");
         if (req.method === "subscription.installed") {
           if (!sameHead(req.payload.cursor, flight.plan.through)) return rejected("invalidState");
+          sub.installed = flight.plan.through;
           sub.open =
             "knownThreads" in sub.open
               ? {

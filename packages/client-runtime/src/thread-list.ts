@@ -1,5 +1,7 @@
+import { sameRange, type EarlierSettledRequest, type EarlierSettledPage } from "@kraka/protocol";
+import type { ThreadCacheStore } from "./thread-pass";
 import { sameHead, comparePositions, type SyncCursor, type ThreadSummary } from "@kraka/protocol";
-import { interpretAttention } from "./attention";
+import { interpretAttention, compareText, reminderKeyId } from "./attention";
 import { scopeKey, type ThreadCache, type ThreadFrameState } from "./thread-pass";
 function order(a: ThreadSummary, b: ThreadSummary) {
   const x = a.lifecycle.state,
@@ -24,13 +26,7 @@ function order(a: ThreadSummary, b: ThreadSummary) {
     const time = pinned ? b.createdAt - a.createdAt : b.lastActivityAt - a.lastActivityAt;
     if (time) return time;
   }
-  const left = Array.from(a.threadId),
-    right = Array.from(b.threadId);
-  for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    const diff = left[i]!.codePointAt(0)! - right[i]!.codePointAt(0)!;
-    if (diff) return diff;
-  }
-  return left.length - right.length;
+  return compareText(a.threadId, b.threadId);
 }
 export function installedList(
   cache: ThreadCache,
@@ -40,23 +36,95 @@ export function installedList(
   const scope = head && cache.scopes[scopeKey(head)];
   if (!scope?.facts || !scope.listRows || !scope.counts || !head || !sameHead(scope.cursor, head))
     return null;
+  const byRoot = new Map(
+    Object.values(scope.facts).map((f) => {
+      const { first, causes, needsHuman, open } = interpretAttention(f);
+      const requests = open.flatMap((c) =>
+        c.reminder && c.reminder.key.object.kind === "request"
+          ? [{ ...c.reminder, actionable: state.status === "current" && c.answerable === true }]
+          : [],
+      );
+      return [
+        f.root.threadId,
+        { state: first.kind, causes, needsHuman, activity: [f.root, ...f.descendants], requests },
+      ] as const;
+    }),
+  );
   const rows = Object.values(scope.listRows)
     .sort(order)
     .map((summary) => {
-      const facts = scope.facts![JSON.stringify(summary.threadId)]!;
-      const { first, causes, needsHuman, open } = interpretAttention(facts);
-      return {
-        summary,
-        state: first.kind,
-        causes,
-        needsHuman,
-        activity: [facts.root, ...facts.descendants],
-        requests: open.flatMap((c) =>
-          c.reminder && c.reminder.key.object.kind === "request"
-            ? [{ ...c.reminder, actionable: state.status === "current" && c.answerable === true }]
-            : [],
-        ),
-      };
+      const reading = byRoot.get(summary.threadId);
+      if (!reading) throw Error("Missing installed facts");
+      return { summary, ...reading };
     });
-  return { head, threadIds: rows.map((r) => r.summary.threadId), counts: scope.counts, rows };
+  const requests = new Map(
+    [...byRoot.values()].flatMap((r) => r.requests).map((r) => [reminderKeyId(r.key), r]),
+  );
+  return {
+    head,
+    threadIds: rows.map((r) => r.summary.threadId),
+    counts: scope.counts,
+    rows,
+    requests: [...requests.values()],
+  };
+}
+
+type After = EarlierSettledRequest["after"];
+const earlierKey = (head: SyncCursor, after: After) =>
+  JSON.stringify([
+    head.environmentId,
+    head.databaseGeneration,
+    head.visibilityGeneration,
+    scopeKey(head),
+    after?.settledAt ?? null,
+    after?.threadId ?? null,
+  ]);
+export function earlierPage(cache: ThreadCache, head: SyncCursor, after: After = null) {
+  const page = cache.earlier?.[earlierKey(head, after)];
+  return page ? { page, verified: sameHead(head, page.through) } : null;
+}
+export async function installEarlierPage(
+  store: ThreadCacheStore,
+  head: SyncCursor,
+  after: After,
+  page: EarlierSettledPage,
+) {
+  const scope = head.scope;
+  if (
+    scope.kind !== "list" ||
+    !sameRange(page.through, head) ||
+    (after && !sameHead(after.snapshot, page.through))
+  )
+    throw Error("Earlier settlement range changed");
+  let last = after;
+  const seen = new Set();
+  for (const row of page.threads) {
+    const at = row.lifecycle.state.at;
+    if (
+      seen.has(row.threadId) ||
+      (scope.projectId !== null && scope.projectId !== row.projectId) ||
+      (last &&
+        (at > last.settledAt ||
+          (at === last.settledAt && compareText(row.threadId, last.threadId) <= 0)))
+    )
+      throw Error("Invalid earlier settlement order");
+    last = { snapshot: page.through, settledAt: at, threadId: row.threadId };
+    seen.add(row.threadId);
+  }
+  if (
+    page.next &&
+    (!page.threads.length ||
+      !last ||
+      page.next.settledAt !== last.settledAt ||
+      page.next.threadId !== last.threadId ||
+      !sameHead(page.next.snapshot, page.through))
+  )
+    throw Error("Invalid earlier settlement continuation");
+  const key = earlierKey(page.through, after);
+  await store.transact((old) => {
+    const previous = old.earlier?.[key];
+    if (previous && comparePositions(previous.through.through, page.through.through) > 0)
+      return { next: old, result: undefined };
+    return { next: { ...old, earlier: { ...old.earlier, [key]: page } }, result: undefined };
+  });
 }

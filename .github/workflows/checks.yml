@@ -19,6 +19,8 @@ jobs:
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.os }}
+    env:
+      KRAKA_REQUIRED_ATTENTION_CASES: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,7 +28,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.5
+      - name: Select private browser cache
+        shell: bash
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/kraka-browsers" >> "$GITHUB_ENV"
       - run: bun install --frozen-lockfile
+      - run: bunx --no-install playwright install chromium
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck
@@ -45,6 +51,12 @@ jobs:
           set -euo pipefail
           NO_COLOR=1 bun test ./tools/first-answer.live.test.ts 2>&1 | tee "$RUNNER_TEMP/first-answer.log"
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/first-answer.log"; done
+      - name: Verify all three sealed attention list cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          NO_COLOR=1 bun test ./tools/thread-attention.live.test.ts 2>&1 | tee "$RUNNER_TEMP/thread-attention.log"
+          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/thread-attention.log"; done
       - run: bun test ./tools/thread-resume.live.test.ts
       - run: bun test ./tools/first-send.live.test.ts
       - run: bun test ./tools/isolated-start.live.test.ts
@@ -61,6 +73,7 @@ jobs:
             --path-ignore-patterns "**/codex-turn.live.test.ts" \
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
             --path-ignore-patterns "**/first-answer.live.test.ts" \
+            --path-ignore-patterns "**/thread-attention.live.test.ts" \
             --path-ignore-patterns "**/thread-resume.live.test.ts" \
             --path-ignore-patterns "**/isolated-start.live.test.ts" \
             --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
@@ -87,6 +100,19 @@ jobs:
           git archive "$BASE_SHA" | tar -xf - -C "$BASE_ROOT"
           (cd "$BASE_ROOT" && bun install --frozen-lockfile)
           echo "root=$BASE_ROOT" >> "$GITHUB_OUTPUT"
+      - name: Measure sealed list budgets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          BASE_ROOT: ${{ steps.baseline.outputs.root }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BASE_SHA" ]]; then
+            bun run perf P3 P4 P5 --report-only --baseline-root "${BASE_ROOT:?}" > "$RUNNER_TEMP/budget-list-base.jsonl"
+          fi
+          bun run perf P3 P4 P5 --report-only --root . > "$RUNNER_TEMP/budget-list-candidate.jsonl"
+          jq -es 'length == 3 and all(.[]; .status == "measured") and any(.[]; .metric == "P5" and .actual == {"small":1,"cold":5,"warm":50} and all(.samples[] | select(.unit == "B"); .value <= 954991))' "$RUNNER_TEMP/budget-list-candidate.jsonl"
       - name: Measure answer slice budgets
         if: runner.os == 'macOS'
         shell: bash
@@ -127,4 +153,5 @@ jobs:
             ${{ runner.temp }}/budget-*.jsonl
             ${{ runner.temp }}/flow-tests.log
             ${{ runner.temp }}/first-answer.log
+            ${{ runner.temp }}/thread-attention.log
           if-no-files-found: error

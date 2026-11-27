@@ -44,6 +44,7 @@ export async function dispatchCodex(
   const failed = (reason: string, message: string | null) => {
     const round = readRound(store.db, roundId);
     if (!round || round.attempt.attemptId !== attemptId) return;
+    if (reason === "usageLimited") store.sync.observeQuota(round, { resetAt: null });
     const current = round.attempt.phase;
     if (current.kind === "armed" && reason !== "unsafeToRetry")
       report({ kind: "refused", ...ticket, reason: message ?? reason });
@@ -133,6 +134,12 @@ export async function dispatchCodex(
     while (!next.done) {
       const event = next.value,
         p = event.payload;
+      if (
+        p.kind === "sessionLost" &&
+        p.failure.kind === "usageLimit" &&
+        matchesAdapterEvent(binding, event)
+      )
+        store.sync.observeQuota(initial, { resetAt: p.failure.resetAt });
       if (todos.event(event)) {
         next = await events.next();
         continue;
@@ -204,6 +211,7 @@ export async function dispatchCodex(
             text: p.finalText ?? p.text,
           });
           break;
+
         case "roundEnded": {
           if (
             p.endTimeEvidence.source !== "executorReported" ||
@@ -211,20 +219,24 @@ export async function dispatchCodex(
           )
             throw new Error("Missing Codex end boundary");
           const root = { id: p.nativeRootTurnId, sessionId, beganAt: null };
-          report({
-            kind: "rootEnded",
-            ...ticket,
-            root,
-            endedAt: p.endedAt,
-            endTimeEvidence: p.endTimeEvidence,
-            nativeReason: p.outcome.nativeReason,
-            ...(p.outcome.reason === "completed"
-              ? ({
-                  outcome: "completed",
-                  captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
-                } as const)
-              : { outcome: p.outcome.reason }),
-          });
+          store.db.transaction(() => {
+            if (p.outcome.reason === "failed" && p.outcome.failure.kind === "usageLimit")
+              store.sync.observeQuota(initial, { resetAt: p.outcome.failure.resetAt });
+            report({
+              kind: "rootEnded",
+              ...ticket,
+              root,
+              endedAt: p.endedAt,
+              endTimeEvidence: p.endTimeEvidence,
+              nativeReason: p.outcome.nativeReason,
+              ...(p.outcome.reason === "completed"
+                ? ({
+                    outcome: "completed",
+                    captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
+                  } as const)
+                : { outcome: p.outcome.reason }),
+            });
+          })();
           if (p.outcome.reason === "failed")
             emit({
               kind: "executor.failed",

@@ -873,6 +873,16 @@ export const REQUEST_METHODS = {
     "environment",
     ListSubscriptionPayloadSchema,
   ),
+  markThreadRead: defineRequestMethod(
+    "thread.markRead",
+    "thread.view",
+    "thread",
+    v.strictObject({
+      threadId: ThreadIdSchema,
+      subscriptionId: SubscriptionIdSchema,
+      cursor: SyncCursorSchema,
+    }),
+  ),
   readHistoryPage: defineRequestMethod(
     "thread.readHistory",
     "thread.view",

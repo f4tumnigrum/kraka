@@ -135,6 +135,7 @@ export function planListPass({
   const changes: ObjectChange[] = [];
   const old = new Map((base ? knownThreads : []).map((t) => [t.threadId, t.version]));
   const installed = [];
+  const covered = new Set<ThreadId>();
   for (const id of members) {
     const source = view.sources.get(id)!;
     const key = { objectType: "thread" as const, id };
@@ -151,6 +152,7 @@ export function planListPass({
         seen.add(child.summary.threadId);
         descendants.push(child.facts);
       }
+    for (const sourceId of seen) covered.add(sourceId);
     changes.push({
       kind: "attention.facts",
       facts: {
@@ -162,6 +164,27 @@ export function planListPass({
         descendants,
       },
     });
+  }
+  if (!base || !sameHead(base, head)) {
+    for (const [id, source] of view.sources) {
+      if (
+        covered.has(id) ||
+        source.facts.grouping === "archived" ||
+        !source.facts.requests.some((r) => r.answerable && r.request.state.kind === "open")
+      )
+        continue;
+      changes.push({
+        kind: "attention.facts",
+        facts: {
+          ownerId: actor,
+          environmentId: head.environmentId,
+          databaseGeneration: head.databaseGeneration,
+          through: head.through,
+          root: source.facts,
+          descendants: [],
+        },
+      });
+    }
   }
   for (const id of old.keys())
     if (!members.has(id)) changes.push({ kind: "window.leave", key: { objectType: "thread", id } });
