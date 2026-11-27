@@ -4,8 +4,8 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { entry, withState } from "./fixtures/replay-process";
 import { command, identity, replayCounts, sampleReplay } from "./measure-replay";
-import { catalog, metricIds, type Metric, type ProbeSpec, type Unit } from "./perf-catalog";
-import { productionClosure, type DependencyObservation } from "./perf-dependencies";
+import { catalog, type Metric, metricIds, type ProbeSpec, type Unit } from "./perf-catalog";
+import { type DependencyObservation, productionClosure } from "./perf-dependencies";
 
 type Role = "baseline" | "candidate";
 type Counts = Record<string, number>;
@@ -309,6 +309,9 @@ export async function runBudget({
     stub = false,
     replayAttempted = false;
   let capability: Promise<void> | undefined;
+  const inputEndpoint = await Bun.file(
+    join(root, "packages/environment/src/input-command.ts"),
+  ).exists();
   const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
   for (const metric of metricIds.filter((m) => !metrics.length || metrics.includes(m))) {
     const base: ReportBase = {
@@ -331,7 +334,11 @@ export async function runBudget({
       else if (metric === "A2") report = await measureSuite(base, root);
       else if (
         durable &&
-        (metric === "P1" || metric === "P2" || metric === "P7" || metric === "P9")
+        (metric === "P1" ||
+          metric === "P2" ||
+          metric === "P7" ||
+          metric === "P9" ||
+          (metric === "P10" && inputEndpoint))
       ) {
         const { measureFirstSend } = await import("./measure-first-send");
         const series = await measureFirstSend(base, root, metric);

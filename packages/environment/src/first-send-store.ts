@@ -1,28 +1,48 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import * as v from "valibot";
 import {
-  CommandReceiptSchema,
-  RoundSchema,
-  ThreadSchema,
-  MessageSchema,
-  ProjectSchema,
-  DirectoryRecordSchema,
-  type Thread,
-  type Round,
   type CommandId,
-  type PrincipalId,
-  type DeliveryId,
-  type RoundPhase,
+  CommandReceiptSchema,
   canonicalJson,
+  type DeliveryId,
+  DirectoryRecordSchema,
+  MessageSchema,
+  type PrincipalId,
+  ProjectSchema,
+  type Round,
+  type RoundPhase,
+  RoundSchema,
+  type Thread,
+  ThreadSchema,
 } from "@kraka/protocol";
-import { DatabaseHeaderSchema, inspectDatabase, type DirectoryWriter } from "./migrations";
-import { directoryForThread } from "./worktrees";
-import { physicalDirectory } from "./project-directory";
-import { recoverInputDelivery } from "./round";
+import * as v from "valibot";
 import type { FrozenDelivery } from "./executor-records";
+import { type RecoveryScope, recoverQueues } from "./input-store";
+import { DatabaseHeaderSchema, type DirectoryWriter, inspectDatabase } from "./migrations";
+import { physicalDirectory } from "./project-directory";
+import { directoryForThread } from "./worktrees";
 
-const catalog = { initial: 1, steps: [] };
+const step = v.parse(DatabaseHeaderSchema.entries.ledger.item, {
+  id: "input-attempts",
+  from: 1,
+  to: 2,
+});
+const catalog = { initial: 1, steps: [step] };
+const upgrade = `
+ALTER TABLE deliveries RENAME TO first_deliveries;
+DROP INDEX unfinished;
+CREATE TABLE deliveries(id TEXT PRIMARY KEY, round TEXT NOT NULL, pending INTEGER NOT NULL, frozen TEXT);
+INSERT INTO deliveries SELECT * FROM first_deliveries;
+DROP TABLE first_deliveries;
+CREATE INDEX unfinished ON deliveries(round) WHERE pending=1;
+CREATE INDEX round_thread ON rounds(json_extract(data,'$.threadId'));
+CREATE INDEX unfinished_thread ON rounds(json_extract(data,'$.threadId')) WHERE json_extract(data,'$.attempt.phase.kind') NOT IN ('finished','endedEarly','notDelivered');
+CREATE INDEX message_thread ON messages(json_extract(data,'$.threadId'));
+CREATE TABLE queues(thread TEXT PRIMARY KEY,version TEXT NOT NULL);
+CREATE TABLE input_decisions(actor TEXT NOT NULL, command TEXT NOT NULL, thread TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(actor,command));
+CREATE TABLE input_guarantees(delivery TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE turn_work(round TEXT NOT NULL,kind TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(round,kind));
+`;
 const ddl = `
 CREATE TABLE header (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
 CREATE TABLE receipts (position INTEGER PRIMARY KEY, actor TEXT NOT NULL, command TEXT NOT NULL, intent TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(actor, command));
@@ -33,7 +53,7 @@ CREATE TABLE rounds (id TEXT PRIMARY KEY, data TEXT NOT NULL, source TEXT NOT NU
 CREATE TABLE deliveries (id TEXT PRIMARY KEY, round TEXT UNIQUE NOT NULL, pending INTEGER NOT NULL, frozen TEXT);
 CREATE INDEX unfinished ON deliveries(round) WHERE pending=1;
 `;
-export function openStore(writer: DirectoryWriter) {
+export function openStore(writer: DirectoryWriter, recovery?: RecoveryScope) {
   const db = new Database(join(writer.stateDirectory, "environment.sqlite"), {
     create: true,
     strict: true,
@@ -46,7 +66,7 @@ export function openStore(writer: DirectoryWriter) {
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()?.user_version;
     const fresh = tables.length === 0 && format === 0;
-    if (format === undefined || format > catalog.initial) throw new Error("futureFormat");
+    if (format === undefined || format > step.to) throw new Error("futureFormat");
     const header = fresh
       ? { format: 1, ledger: [] }
       : JSON.parse(
@@ -54,10 +74,7 @@ export function openStore(writer: DirectoryWriter) {
             "null",
         );
     const compatibility = inspectDatabase(catalog, v.parse(DatabaseHeaderSchema, header));
-    if (compatibility.kind !== "open")
-      throw new Error(
-        compatibility.kind === "refuse" ? compatibility.reason : "migration required",
-      );
+    if (compatibility.kind === "refuse") throw new Error(compatibility.reason);
     if (!fresh && header.format !== format) throw new Error("invalidLedger");
     db.run("PRAGMA journal_mode=WAL");
     db.run("PRAGMA synchronous=FULL");
@@ -67,16 +84,16 @@ export function openStore(writer: DirectoryWriter) {
         db.run("PRAGMA user_version=1");
         db.run("INSERT INTO header VALUES(1,?)", [JSON.stringify(header)]);
       })();
+    if (compatibility.kind === "migrationRequired")
+      db.transaction(() => {
+        db.exec(upgrade);
+        db.run("UPDATE header SET data=? WHERE id=1", [
+          JSON.stringify({ format: 2, ledger: [step] }),
+        ]);
+        db.run("PRAGMA user_version=2");
+      })();
     const store = new FirstSendStore(db, writer);
-    db.transaction(() => {
-      for (const { round } of db
-        .query<{ round: string }, []>("SELECT round FROM deliveries WHERE pending=1")
-        .all()) {
-        const row = readRound(db, round);
-        if (!row) throw new Error("Delivery missing round");
-        store.setPhase(row, recoverInputDelivery(row.attempt.phase, "person", "none"));
-      }
-    })();
+    recoverQueues(store, recovery);
     return store;
   } catch (e) {
     db.close();
@@ -105,6 +122,18 @@ export function readRound(db: Database, id: string) {
       executorEndedAt: null,
       environmentObservedAt: null,
     };
+  if (round) {
+    const history = round.attempts ?? [];
+    round.attempts = [
+      ...history.filter((a) => a.attemptId !== round.attempt.attemptId),
+      {
+        ...round.attempt,
+        origin: history.find((a) => a.attemptId === round.attempt.attemptId)?.origin ?? {
+          kind: "initial",
+        },
+      },
+    ];
+  }
   return round;
 }
 export function readReceipt(db: Database, actor: PrincipalId, command: CommandId) {
@@ -122,6 +151,7 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
     : null;
 }
 export class FirstSendStore {
+  onQueueChanged?: (thread: Thread["id"]) => void;
   beforeCommit?: (method: string) => void;
   constructor(
     readonly db: Database,
@@ -146,6 +176,10 @@ export class FirstSendStore {
       version: String(BigInt(round.version) + 1n),
       attempt: { ...round.attempt, phase },
     };
+    if (updated.attempts)
+      updated.attempts = updated.attempts.map((a) =>
+        a.attemptId === updated.attempt.attemptId ? { ...a, phase } : a,
+      );
     this.db.transaction(() => {
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(updated), round.id]);
       const pending =

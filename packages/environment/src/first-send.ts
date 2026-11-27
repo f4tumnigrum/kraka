@@ -35,7 +35,7 @@ function reject(
 ): CommandReceipt {
   return { kind: "rejected", commandId, failure: { kind } };
 }
-function record(
+export function record(
   context: Context,
   operation: RequestMethodDefinition,
   payload: unknown,

@@ -1,27 +1,28 @@
-import { SecretPurposeSchema } from "./private-secrets";
-import { ThreadLifecycleSchema } from "./thread-list";
-import { ProjectRootSchema, DirectoryBindingSchema } from "./workspace";
-import { CheckpointResultSchema } from "./checkpoints";
-import { RoundAttemptSchema, TodoStateSchema } from "./lifecycle";
-import { HistoryCoverageSchema } from "./handoffs";
 import * as v from "valibot";
+import { CheckpointResultSchema } from "./checkpoints";
+import { HistoryCoverageSchema } from "./handoffs";
 import {
   AttachmentIdSchema,
   AttemptIdSchema,
   CaptureIdSchema,
+  CommandIdSchema,
   EnvironmentIdSchema,
   ExecutorInstanceIdSchema,
   MessageIdSchema,
   NativeSessionIdSchema,
   ObjectVersionSchema,
-  QueuePositionSchema,
   PrincipalIdSchema,
   ProjectIdSchema,
+  QueuePositionSchema,
   RoundIdSchema,
   ThreadIdSchema,
   TodoRequestIdSchema,
   WorktreeIdSchema,
 } from "./ids";
+import { RoundAttemptSchema, TodoStateSchema } from "./lifecycle";
+import { SecretPurposeSchema } from "./private-secrets";
+import { ThreadLifecycleSchema } from "./thread-list";
+import { DirectoryBindingSchema, ProjectRootSchema } from "./workspace";
 
 export const EnvironmentSchema = v.strictObject({
   id: EnvironmentIdSchema,
@@ -111,6 +112,31 @@ export const RoundSchema = v.strictObject({
   messageId: MessageIdSchema,
   place: QueuePositionSchema,
   attempt: RoundAttemptSchema,
+  attempts: v.optional(
+    v.array(
+      v.strictObject({
+        ...RoundAttemptSchema.entries,
+        origin: v.variant("kind", [
+          v.strictObject({ kind: v.literal("initial") }),
+          v.strictObject({
+            kind: v.literal("userResend"),
+            commandId: CommandIdSchema,
+            target: AttemptIdSchema,
+          }),
+          v.strictObject({ kind: v.literal("automaticContinuation") }),
+        ]),
+      }),
+    ),
+  ),
+  steering: v.optional(
+    v.array(
+      v.strictObject({
+        attemptId: AttemptIdSchema,
+        messageId: MessageIdSchema,
+        state: v.picklist(["pending", "completed"]),
+      }),
+    ),
+  ),
   version: ObjectVersionSchema,
 });
 

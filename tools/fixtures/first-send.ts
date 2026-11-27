@@ -1,7 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import * as v from "valibot";
 import {
   confirmWriter,
   InstancePublicationSchema,
@@ -9,16 +8,23 @@ import {
   readReceipt,
 } from "@kraka/environment";
 import {
-  PrincipalIdSchema,
   CommandIdSchema,
   type CommandReceipt,
+  PrincipalIdSchema,
   type RequestResult,
 } from "@kraka/protocol";
+import * as v from "valibot";
 import { connectFirstSend, fixtureActor, fixtureSigner } from "./first-send-client";
 import { entry, fixture, sampleRequest, terminate, within } from "./replay-process";
 
 export const productRoot = resolve(import.meta.dir, "../..");
-export type Fault = "locked" | "beforeCommit" | "afterCommit" | "externalWrite" | "peer";
+export type Fault =
+  | "locked"
+  | "beforeCommit"
+  | "afterCommit"
+  | "externalWrite"
+  | "peer"
+  | "recovery";
 export function configureLocalOwner(stateDir: string) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const privatePath = join(stateDir, "fixture-private.pem");
@@ -35,15 +41,20 @@ export function configureLocalOwner(stateDir: string) {
       publicKey,
       signer: fixtureSigner,
       principalId: fixtureActor,
-      permissions: ["workspace.change", "thread.send"],
+      permissions: ["workspace.change", "thread.send", "thread.view"],
     }),
     { mode: 0o600, flag: "wx" },
   );
 }
-export function launchWriter(stateDir: string, root: string, point?: Fault) {
+export function launchWriter(
+  stateDir: string,
+  root: string,
+  point?: Fault,
+  recording = join(root, fixture),
+) {
   const args = point
     ? [join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, point]
-    : [join(root, entry), "start", "--state-dir", stateDir, "--recording", join(root, fixture)];
+    : [join(root, entry), "start", "--state-dir", stateDir, "--recording", recording];
   const started = performance.now();
   const child = Bun.spawn([process.execPath, ...args], {
     cwd: root,
@@ -108,17 +119,19 @@ export async function startFirstSendFixture({
   adapter,
   root = productRoot,
   point,
+  recording,
 }: {
   stateDir: string;
   projectDirectory: string;
   adapter: "replay";
   root?: string;
   point?: Fault;
+  recording?: string;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
   configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
-  const launcher = launchWriter(stateDir, root, point);
+  const launcher = launchWriter(stateDir, root, point, recording);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");
@@ -133,6 +146,10 @@ export async function startFirstSendFixture({
         ...launcher,
         instance,
         endpoint: instance.endpoint,
+        async awaitRecovery(instanceId: string) {
+          const observed = await confirmWriter(instance.stateDirectory, performance.now() + 1000);
+          if (observed?.instanceId !== instanceId) throw Error("Recovery publication changed");
+        },
         client,
         project,
         payload,

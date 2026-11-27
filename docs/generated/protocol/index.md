@@ -4831,6 +4831,8 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                     "invalidState",
                     "idConflict",
                     "expired",
+                    "queueHeld",
+                    "notQueueHead",
                     "unsafeToRetry",
                     "cursorExpired",
                     "staleSequence",
@@ -14199,6 +14201,105 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     },
     "attempt": {
       "$ref": "#/$defs/RoundAttempt"
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attemptId": {
+            "$ref": "#/$defs/AttemptId"
+          },
+          "deliveryId": {
+            "$ref": "#/$defs/DeliveryId"
+          },
+          "phase": {
+            "$ref": "#/$defs/RoundPhase"
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "initial"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "userResend"
+                  },
+                  "commandId": {
+                    "$ref": "#/$defs/CommandId"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/AttemptId"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "commandId",
+                  "target"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "automaticContinuation"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "attemptId",
+          "deliveryId",
+          "phase",
+          "origin"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "steering": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attemptId": {
+            "$ref": "#/$defs/AttemptId"
+          },
+          "messageId": {
+            "$ref": "#/$defs/MessageId"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "completed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "attemptId",
+          "messageId",
+          "state"
+        ],
+        "additionalProperties": false
+      }
     },
     "version": {
       "$ref": "#/$defs/ObjectVersion"

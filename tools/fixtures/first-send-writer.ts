@@ -1,9 +1,18 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
-import { startWriter } from "../../packages/daemon/src/first-send";
+import { type FirstSendStore, readMessage, readReceipt, readRound } from "@kraka/environment";
+import {
+  CommandIdSchema,
+  ExecutorInstanceIdSchema,
+  HandoffContextSchema,
+  PrincipalIdSchema,
+} from "@kraka/protocol";
 import * as v from "valibot";
+import { startWriter } from "../../packages/daemon/src/first-send";
+import { attachPeer } from "./input-adapter";
 import { fixture } from "./replay-process";
+
 const [stateDir, root, point] = process.argv.slice(2);
 if (!stateDir || !root) throw new Error("Expected state and product roots");
 const state = stateDir;
@@ -64,19 +73,107 @@ if (point === "peer" || point === "externalWrite") {
     return invoke(...args);
   }) as typeof invoke;
 }
+let openedStore: FirstSendStore | undefined;
+if (point === "recovery") attachPeer(adapter, state);
+const recover = point === "recovery" && existsSync(join(state, "dedup"));
 const writer = await startWriter(
   state,
-  { adapter, expectedText: recording.expectedText, modelId: recording.modelId },
   {
+    adapter,
+    expectedText: recording.expectedText,
+    modelId: recording.modelId,
+    ...(recover
+      ? {
+          recovery: {
+            binding: {
+              family: "replay" as const,
+              instanceId: v.parse(ExecutorInstanceIdSchema, "replay"),
+              nativeSessionId: recording.nativeSessionId,
+              epoch: 1,
+            },
+            input: {
+              receipt: "proof" as const,
+              deduplicate: "acrossRestart" as const,
+              query: "none" as const,
+            },
+          },
+        }
+      : {}),
+  },
+  {
+    async beforeDispatch() {
+      if (point === "recovery") while (existsSync(join(state, "hold-claim"))) await Bun.sleep(3);
+      if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {
+        const input = JSON.parse(readFileSync(join(state, "seed-handoff"), "utf8"));
+        const round = readRound(openedStore.db, input.roundId);
+        const message = round && readMessage(openedStore.db, round.messageId);
+        if (!round || !message) throw Error("Missing handoff source");
+        openedStore.freeze({
+          attemptId: round.attempt.attemptId,
+          deliveryId: round.attempt.deliveryId,
+          target: {
+            family: "replay",
+            instanceId: v.parse(ExecutorInstanceIdSchema, "replay"),
+            nativeSessionId: recording.nativeSessionId,
+            epoch: 1,
+          },
+          messageVersion: message.version,
+          input: {
+            id: message.id,
+            text: message.text,
+            attachments: message.attachments,
+            references: message.references,
+          },
+          parts: [],
+          handoff: v.parse(HandoffContextSchema, input.handoff),
+        });
+        rmSync(join(state, "seed-handoff"));
+      }
+    },
     locked() {
       barrier("locked");
     },
     opened(store) {
+      openedStore = store;
       store.beforeCommit = (method) => {
+        const marker = join(state, "auto-row");
+        if (point === "recovery" && method === "input.send" && existsSync(marker)) {
+          const row = readReceipt(
+            store.db,
+            v.parse(PrincipalIdSchema, "first-send-local-owner"),
+            v.parse(CommandIdSchema, "second"),
+          );
+          const result = row?.receipt.kind === "accepted" ? row.receipt.result : null;
+          if (result?.kind !== "inputScheduled") throw Error("Missing automatic input fixture");
+          store.db.run("UPDATE rounds SET source='automation' WHERE id=?", [result.roundId]);
+          store.db.run("UPDATE messages SET data=json_set(data,'$.author',json(?)) WHERE id=?", [
+            JSON.stringify({ kind: "executor", id: readFileSync(marker, "utf8") }),
+            result.messageId,
+          ]);
+          store.db.run("INSERT INTO input_guarantees VALUES(?,?)", [
+            result.deliveryId,
+            JSON.stringify({
+              binding: {
+                family: "replay",
+                instanceId: "replay",
+                nativeSessionId: recording.nativeSessionId,
+                epoch: 1,
+              },
+              input: { receipt: "proof", deduplicate: "acrossRestart", query: "none" },
+            }),
+          ]);
+          rmSync(marker);
+        }
         if (method === "thread.start") barrier("beforeCommit");
       };
     },
-    committed(req) {
+    committed(req, receipt) {
+      if (
+        point === "recovery" &&
+        existsSync(join(state, "lose-" + req.commandId)) &&
+        receipt.kind === "accepted"
+      )
+        return "disconnect";
       if (req.method === "thread.start") barrier("afterCommit");
     },
     update(event) {

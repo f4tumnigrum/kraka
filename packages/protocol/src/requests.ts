@@ -1171,6 +1171,8 @@ export const CommandReceiptSchema = v.variant("kind", [
           "invalidState",
           "idConflict",
           "expired",
+          "queueHeld",
+          "notQueueHead",
           "unsafeToRetry",
           "cursorExpired",
           "staleSequence",
