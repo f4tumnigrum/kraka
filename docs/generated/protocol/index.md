@@ -10067,7 +10067,6 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "missingSources": {
           "type": "array",
-          "prefixItems": [],
           "minItems": 0,
           "items": false
         },

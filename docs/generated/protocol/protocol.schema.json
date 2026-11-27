@@ -9397,7 +9397,6 @@
             },
             "missingSources": {
               "type": "array",
-              "prefixItems": [],
               "minItems": 0,
               "items": false
             },
