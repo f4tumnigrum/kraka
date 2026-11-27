@@ -1,3 +1,4 @@
+import { stateEnvironmentId } from "./state-identity";
 import { Database } from "bun:sqlite";
 import {
   mkdirSync,
@@ -10,7 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { EnvironmentIdSchema, type HostInstanceId } from "@kraka/protocol";
+import { type HostInstanceId } from "@kraka/protocol";
 import * as v from "valibot";
 import { InstancePublicationSchema, observeWriter, type InstancePublication } from "./migrations";
 
@@ -103,9 +104,7 @@ export async function openWriter(stateDir: string, instanceId: HostInstanceId, d
         await Bun.sleep(Math.max(0, nextPoll - performance.now()));
         continue;
       }
-      const idPath = join(stateDirectory, "environment.id");
-      if (!existsSync(idPath)) writeAtomic(idPath, crypto.randomUUID());
-      const environmentId = v.parse(EnvironmentIdSchema, readFileSync(idPath, "utf8"));
+      const environmentId = stateEnvironmentId(stateDirectory);
       const identity = { instanceId, environmentId, stateDirectory, version: "0.1.0" };
       const decision = observeWriter(identity, { kind: "acquired", owner: identity });
       if (decision.kind !== "writer") throw new Error("Cannot confirm directory writer");

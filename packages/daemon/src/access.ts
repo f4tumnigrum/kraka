@@ -12,9 +12,15 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import * as v from "valibot";
-import { AccessStore, type HostDecision, type TrustedHostPairing } from "@kraka/environment";
+import {
+  AccessStore,
+  stateEnvironmentId,
+  type HostDecision,
+  type TrustedHostPairing,
+} from "@kraka/environment";
 import {
   EnvironmentIdentitySchema,
+  EnvironmentIdSchema,
   DeviceIdSchema,
   DeviceKeyIdSchema,
   CommandIdSchema,
@@ -53,6 +59,7 @@ export async function openAccessHost(
 ) {
   const dir = await ownedDirectory(resolve(stateDir));
   const filename = join(dir, "access.sqlite");
+
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     const stat = await lstat(filename + suffix).catch((e) => {
       if (e.code === "ENOENT") return null;
@@ -71,10 +78,13 @@ export async function openAccessHost(
         const previous = db
           .query<{ id: string; secret: string }, []>("SELECT id,secret FROM host_identity")
           .get();
-        if (previous) return previous;
+        if (previous) {
+          stateEnvironmentId(dir, v.parse(EnvironmentIdSchema, previous.id));
+          return previous;
+        }
         const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
         const row = {
-          id: crypto.randomUUID(),
+          id: stateEnvironmentId(dir),
           secret: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
         };
         db.run("INSERT INTO host_identity VALUES(1,?,?)", [row.id, row.secret]);

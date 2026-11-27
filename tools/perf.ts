@@ -41,7 +41,7 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions";
+  variant?: "access.listSessions" | "browserTLS";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -323,7 +323,11 @@ export async function runBudget({
   const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
   const selected = metricIds.filter((m) => !metrics.length || metrics.includes(m));
   const workloads = selected.flatMap((metric): Pick<ReportBase, "metric" | "variant">[] =>
-    metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
+    metric === "P1"
+      ? [{ metric, variant: "access.listSessions" }, { metric }, { metric, variant: "browserTLS" }]
+      : metric === "P2" || metric === "P9"
+        ? [{ metric }, { metric, variant: "browserTLS" }]
+        : [{ metric }],
   );
   for (const workload of workloads) {
     const { metric, variant } = workload;
@@ -345,7 +349,43 @@ export async function runBudget({
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (variant === "access.listSessions") {
+      else if (
+        variant === "browserTLS" &&
+        (metric === "P1" || metric === "P2" || metric === "P9")
+      ) {
+        base.endpoint = "TLS foreground daemon with a registered P-256 device";
+        base.workload =
+          metric === "P9"
+            ? "Durable thread.rename on eight registered TLS connections"
+            : metric === "P2"
+              ? "Current idle TLS daemon physical footprint at signed acceptance +60 s"
+              : "TLS daemon spawn through protected enrollment and first signed acceptance";
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, "packages/daemon/src/browser-daemon.ts")).exists())
+        ) {
+          const diagnostic = Bun.spawnSync(
+            [
+              process.execPath,
+              join(root, "packages/daemon/src/index.ts"),
+              "daemon",
+              "--tls-cert",
+              "fixture",
+            ],
+            { cwd: root },
+          );
+          if (diagnostic.exitCode === 0 || !diagnostic.stderr.toString().includes("tls-cert"))
+            throw Error("Unrecognized baseline TLS capability");
+          report = unavailable(
+            base,
+            "Parent foreground listener does not accept TLS certificate options",
+          );
+        } else {
+          const { measureBrowser } = await import("./measure-browser");
+          const counts = await measureBrowser(base, root, metric);
+          report = measured(base, counts, metric === "P2" && process.platform !== "darwin");
+        }
+      } else if (variant === "access.listSessions") {
         base.workload =
           "Ten provisioned fresh/reused directory pairs, daemon spawn through first signed access.listSessions acceptance, existing OS cache";
         base.endpoint = "access serve with a registered device";

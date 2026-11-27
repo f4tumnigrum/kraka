@@ -1,0 +1,56 @@
+x-peer: &peer
+  image: "${COMPOSE_PROJECT_NAME}-browser-peer"
+  pull_policy: never
+  cap_add: [NET_ADMIN]
+  volumes: [control:/fixture]
+  init: true
+  healthcheck:
+    test: ["CMD", "test", "-e", "/tmp/ready"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+services:
+  router:
+    <<: *peer
+    build:
+      context: ../..
+      dockerfile: tools/fixtures/browser-network.Dockerfile
+    command: ["bash", "tools/fixtures/browser-network.sh", "router"]
+    networks:
+      lan: { ipv4_address: 10.78.41.2 }
+      mobile: { ipv4_address: 10.78.42.2 }
+    sysctls:
+      net.ipv4.ip_forward: "1"
+  desktop:
+    <<: *peer
+    depends_on:
+      router: { condition: service_healthy }
+      mobile: { condition: service_healthy }
+    command: ["bash", "tools/fixtures/browser-network.sh", "desktop"]
+    environment:
+      NODE_EXTRA_CA_CERTS: /fixture/root.pem
+    dns: [10.78.41.2]
+    networks:
+      lan: { ipv4_address: 10.78.41.10 }
+  mobile:
+    <<: *peer
+    depends_on:
+      router: { condition: service_healthy }
+    command: ["bash", "tools/fixtures/browser-network.sh", "mobile"]
+    dns: [10.78.42.2]
+    networks:
+      lan: { ipv4_address: 10.78.41.11 }
+      mobile: { ipv4_address: 10.78.42.11 }
+networks:
+  lan:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam: { config: [{ subnet: 10.78.41.0/24 }] }
+  mobile:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam: { config: [{ subnet: 10.78.42.0/24 }] }
+volumes:
+  control:

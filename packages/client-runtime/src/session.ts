@@ -13,6 +13,7 @@ import {
   type CommandReceipt,
   type CommandId,
   type RouteDiagnostic,
+  type RouteFailureReason,
 } from "@kraka/protocol";
 
 export function sameEnvironmentIdentity(a: EnvironmentIdentity, b: EnvironmentIdentity): boolean {
@@ -151,6 +152,7 @@ export type SessionSnapshot = { generation: number } & (
       failure:
         | { stage: "preDial"; reason: PreDialFailure }
         | { stage: "credentials"; reason: "storageUnavailable" | "corruptRecord" }
+        | { stage: "route"; reason: RouteFailureReason; diagnostic?: RouteDiagnostic }
         | { stage: "route"; diagnostic: RouteDiagnostic }
         | { stage: "handshake" | "connection" | "configuration"; reason: string };
     }

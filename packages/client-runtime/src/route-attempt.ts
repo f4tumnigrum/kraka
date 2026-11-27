@@ -69,6 +69,7 @@ export class RouteAttempt {
   private socket?: RouteSocket;
   private hello?: ServerHello;
   private expected?: AuthorizationExpectation;
+  private publicReceiver?: (value: unknown) => void;
   private authorization?: SessionAuthorized;
   private configuration?: SessionConfiguration;
   private readonly timer: Deadline;
@@ -76,7 +77,9 @@ export class RouteAttempt {
   constructor(
     readonly route: Route,
     private readonly pin: EnvironmentIdentity,
-    private readonly host: RoutePlatform,
+    private readonly host: Omit<RoutePlatform, "credentials"> & {
+      credentials: RouteCredentials | null;
+    },
     private readonly events: Callbacks,
   ) {
     this.timer = new Deadline(host.clock);
@@ -133,6 +136,7 @@ export class RouteAttempt {
         ? this.fail("noResponse", evidence)
         : this.fail(evidence ?? "noResponse");
     }
+    if (this.publicReceiver) return this.publicReceiver(event.value);
     if (this.phase === "hello") {
       const parsed = v.safeParse(ServerHelloSchema, event.value);
       if (!parsed.success) return this.fail("noResponse", undefined, 1007);
@@ -187,9 +191,14 @@ export class RouteAttempt {
     this.expireIn(limits.authenticationTimeoutMs);
     this.events.verified(hello);
   }
+  stayPublic(receive: (frame: unknown) => void) {
+    if (this.phase !== "verified") return;
+    this.timer.clear();
+    this.publicReceiver = receive;
+  }
   async authenticate() {
     const hello = this.hello;
-    if (!hello || this.phase !== "verified") return;
+    if (!hello || this.phase !== "verified" || !this.host.credentials) return;
     if (this.timer.expired()) return this.fail();
     this.phase = "signing";
     const { principal, signer } = this.host.credentials;

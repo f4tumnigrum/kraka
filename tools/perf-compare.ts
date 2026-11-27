@@ -10,7 +10,7 @@ const series = v.object({
 });
 const report = v.object({
   metric: v.picklist(metricIds),
-  variant: v.optional(v.literal("access.listSessions")),
+  variant: v.optional(v.picklist(["access.listSessions", "browserTLS"])),
   role: v.picklist(["candidate", "baseline"]),
   revision: v.nullable(v.string()),
   digest: v.optional(v.string()),

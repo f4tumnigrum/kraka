@@ -42,3 +42,4 @@ export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
 export * from "./executor-registry";
+export { stateEnvironmentId } from "./state-identity";

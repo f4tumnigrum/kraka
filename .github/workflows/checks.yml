@@ -27,6 +27,26 @@ jobs:
         with:
           bun-version: 1.4.5
       - run: bun install --frozen-lockfile
+      - name: Install the Chromium build for Playwright 1.56.1
+        shell: bash
+        run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/kraka-chromium"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+          bun run playwright install --with-deps chromium
+      - name: Verify four native browser cases
+        shell: bash
+        env:
+          KRAKA_BROWSER_CASES: native
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          bun test tools/browser-https.live.test.ts 2>&1 | tee "$RUNNER_TEMP/browser-native.log"
+          for group in 1 2 3 4; do grep -F "(pass) native $group. " "$RUNNER_TEMP/browser-native.log"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-native-${{ matrix.os }}
+          path: ${{ runner.temp }}/browser-native.log
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck
@@ -50,6 +70,7 @@ jobs:
             --path-ignore-patterns "**/route-switch.live.test.ts" \
             --path-ignore-patterns "**/codex-turn.live.test.ts" \
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
+            --path-ignore-patterns "**/browser-https.live.test.ts" \
             --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done
       - run: bun run build
@@ -93,3 +114,27 @@ jobs:
             ${{ runner.temp }}/budget-*.jsonl
             ${{ runner.temp }}/flow-tests.log
           if-no-files-found: error
+
+  routed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-compose-action@v1
+        with:
+          version: v2.32.4
+      - name: Verify six routed browser cases and path samples
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose=(docker compose -p "kraka-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" -f tools/fixtures/browser-network.compose.yml)
+          trap '"${compose[@]}" down --volumes --remove-orphans' EXIT
+          "${compose[@]}" up -d --build --wait
+          "${compose[@]}" exec -T -e KRAKA_BROWSER_CASES=routed -e NO_COLOR=1 desktop bun test tools/browser-https.live.test.ts 2>&1 | tee "$RUNNER_TEMP/browser-routed.log"
+          for group in 1 2 3 4 5 6; do grep -F "(pass) routed $group. " "$RUNNER_TEMP/browser-routed.log"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-routed
+          path: ${{ runner.temp }}/browser-routed.log

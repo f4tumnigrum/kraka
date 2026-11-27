@@ -125,6 +125,23 @@ export class AccessStore implements PairingStore {
     this.lineage({ kind: "project", projectId: project });
     this.db.run("INSERT INTO objects VALUES('thread',?,?)", [thread, project]);
   }
+  ensureThread(thread: ThreadId, project: ProjectId) {
+    const known = this.db
+      .query<{ parent: string }, [string]>(
+        "SELECT parent FROM objects WHERE kind='thread' AND id=?",
+      )
+      .get(thread);
+    if (known) {
+      if (known.parent !== project) throw Error("Conflicting project for registered thread");
+      return;
+    }
+    this.db
+      .transaction(() => {
+        this.provisionProject(project);
+        this.provisionThread(thread, project);
+      })
+      .immediate();
+  }
   private lineage(target: Target): Target[] {
     if (target.kind === "environment") {
       if (!sameTarget(target, this.target)) refuse("notFound");

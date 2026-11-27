@@ -184,6 +184,14 @@ export class FlowSender {
       }
     }
   }
+  releaseConsumed(id: number) {
+    const queue = this.streams.get(id);
+    if (!queue || queue.frames.length || queue.state.consumedBytes !== queue.state.producedBytes)
+      return false;
+    this.streams.delete(id);
+    queue.dispose?.();
+    return true;
+  }
   end(id: number, reason: EndReason) {
     const q = this.streams.get(id);
     if (!q || q.ending) return;

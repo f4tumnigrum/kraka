@@ -86,3 +86,5 @@ export * from "./session";
 export * from "./registration";
 export * from "./subscription-session";
 export * from "./routes";
+
+export { RouteAttempt } from "./route-attempt";
