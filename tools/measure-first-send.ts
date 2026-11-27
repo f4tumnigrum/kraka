@@ -41,6 +41,7 @@ async function startup(
   base: ReportBase,
   root: string,
   idle: boolean,
+  nextBlock: () => Promise<void>,
 ): Promise<Record<string, number>> {
   const count = idle ? 10 : 20;
   base.workload = idle
@@ -52,7 +53,7 @@ async function startup(
   base.actual = counts;
   await withState(async (installation) => {
     const binary = await buildPeer(installation, root);
-    for (let i = 0; i < 10; i++)
+    for (let i = 0; i < 10; i++) {
       await withState(async (dir) => {
         for (const series of idle ? ["idle"] : ["fresh", "reused"]) {
           const opts = options(dir, root);
@@ -156,10 +157,12 @@ async function startup(
           }
         }
       });
+      await nextBlock();
+    }
   });
   return idle ? { idle: 10 } : { fresh: 10, reused: 10 };
 }
-async function restart(base: ReportBase, root: string) {
+async function restart(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
   base.expected = { seeded: 1020, restarts: 20, recoveries: 5 };
   const counts = { seeded: 0, restarts: 0, recoveries: 0 };
   base.actual = counts;
@@ -205,12 +208,13 @@ async function restart(base: ReportBase, root: string) {
         } finally {
           await f.close();
         }
+        await nextBlock();
       }
       times.sort((a, b) => a - b);
       medians.push(((times[4] ?? NaN) + (times[5] ?? NaN)) / 2);
     });
   sample(base, "medianDifference", (medians[1] ?? NaN) - (medians[0] ?? NaN));
-  for (let i = 0; i < 5; i++)
+  for (let i = 0; i < 5; i++) {
     await withState(async (dir) => {
       const opts = options(dir, root),
         f = await startFirstSendFixture({ ...opts, point: "externalWrite" });
@@ -248,9 +252,11 @@ async function restart(base: ReportBase, root: string) {
         await next.close();
       }
     });
+    await nextBlock();
+  }
   return { large: 10, medianDifference: 1, recovery: 5 };
 }
-async function rename(base: ReportBase, root: string) {
+async function rename(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
   base.expected = { single: 1250, eight: 4000, warmups: 250, reopened: 5500 };
   const counts = { single: 0, eight: 0, warmups: 0, reopened: 0 };
   base.actual = counts;
@@ -288,9 +294,14 @@ async function rename(base: ReportBase, root: string) {
           }
         }
       }
-      for (let r = 0; r < 5; r++) await series(f.client, "single", 300, 50);
-      for (let r = 0; r < 5; r++)
+      for (let r = 0; r < 5; r++) {
+        await series(f.client, "single", 300, 50);
+        await nextBlock();
+      }
+      for (let r = 0; r < 5; r++) {
         await Promise.all(clients.map((client) => series(client, "eight", 100, 0)));
+        await nextBlock();
+      }
       const final = String(1 + number);
       verifyObservation(seen.size === number && seen.has(final), "Missing committed versions");
       for (const client of clients) client.close();
@@ -335,14 +346,15 @@ export async function measureFirstSend(
   base: ReportBase,
   root: string,
   id: "P1" | "P2" | "P7" | "P9",
+  nextBlock: () => Promise<void>,
 ): Promise<Record<string, number>> {
   switch (id) {
     case "P1":
     case "P2":
-      return startup(base, root, id === "P2");
+      return startup(base, root, id === "P2", nextBlock);
     case "P7":
-      return restart(base, root);
+      return restart(base, root, nextBlock);
     case "P9":
-      return rename(base, root);
+      return rename(base, root, nextBlock);
   }
 }
