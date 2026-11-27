@@ -174,3 +174,5 @@ if (import.meta.main && process.argv.length > 2) {
     process.exitCode = 1;
   }
 }
+
+export { listenIdentity, type IdentityPort } from "./identity";
