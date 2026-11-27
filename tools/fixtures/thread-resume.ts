@@ -212,6 +212,9 @@ export async function until(done: () => boolean, label: string) {
     await Bun.sleep(1);
   }
 }
+export function timing(stage:string){
+ if(process.env.D009H_CASE)console.log("D009H "+JSON.stringify({stage,ms:performance.now()}));
+}
 export async function threadFixture<T>(
   body: (f: Awaited<ReturnType<typeof setup>>) => Promise<T>,
   root = productRoot,
@@ -221,16 +224,18 @@ export async function threadFixture<T>(
     try {
       return await body(f);
     } finally {
-      await f.close();
+      timing("cleanup");await f.close();
     }
   });
 }
 async function setup(dir: string, root: string) {
+  timing("pairing");
   const pairing = await startPairedProject({
     stateDir: dir,
     projectId: "project-notes",
     requests: [["thread.view", "thread.send"]],
   });
+  timing("writer setup");
   const stateDir = join(pairing.stateDir, "host");
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   const f = await startFirstSendFixture({

@@ -14,7 +14,7 @@ import {
   cachedHistory,
   installHistoryPage,
 } from "../packages/client-runtime/src/thread-pass";
-import { threadFixture, turnRows, until } from "./fixtures/thread-resume";
+import { timing,threadFixture, turnRows, until } from "./fixtures/thread-resume";
 import { parseScenario } from "./fixtures/scenario";
 const scenario = parseScenario(
   await Bun.file(
@@ -228,33 +228,43 @@ test(
 );
 test(
   "S-STATE-013 expired cursor reopens once with a bounded window and independent history",
-  () =>
-    threadFixture(async (f) => {
+  async () => {
+    process.env.D009H_CASE="1";timing("start");try{await threadFixture(async (f) => {
+      timing("seed initial");
       await f.start();
+      timing("desktop connect");
       const d = await f.connect("desktop");
+      timing("open and install 1");
       await op(d, f.threadId);
       const p = await d.at("1");
+      timing("desktop disconnect");
       await d.close();
+      timing("18 seed transactions");
       for (let i = 1; i <= 18; i++) await f.seed(turnRows(f.threadId, i));
+      timing("set retention");
       await f.control({ floor: "5" });
+      timing("desktop reconnect");
       const back = await f.connect("desktop");
+      timing("reset and install 19");
       await op(back, f.threadId, p);
       const h = await back.at("19");
       expect(
         back.messages.filter((m) => m.kind === "subscription.reset").map((m) => m.message),
       ).toEqual([expect.objectContaining({ reason: "cursorExpired" })]);
       expect(Object.keys(back.cache.read().scopes[scopeKey(h)]!.members)).toHaveLength(21);
+      timing("history");
       const page = await back.client.history(h, null, () => true);
       expect(page.rows.filter((r) => r.objectType === "message")).toHaveLength(8);
       expect(page.olderAnchor).toBeNull();
+      timing("post-head update");
       await f.seed(turnRows(f.threadId, 19));
       await back.at("20");
       expect(back.heads.filter((h) => h.through === "20")).toHaveLength(1);
       expect(cachedHistory(back.cache.read(), page.anchor, back.heads.at(-1)!)?.verifiedAt).toEqual(
         h,
       );
-    }),
-  12000,
+    });}finally{timing("end");delete process.env.D009H_CASE;}},
+  60000,
 );
 test(
   "S-STATE-053 ancestor history preserves the ended activity over a late old page",

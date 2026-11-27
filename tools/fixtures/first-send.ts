@@ -159,12 +159,15 @@ export async function startFirstSendFixture({
   ipc?: (message: unknown) => void;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
+  if(process.env.D009H_CASE)console.log("D009H "+JSON.stringify({stage:"writer credentials",ms:performance.now()}));
   await configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
+  if(process.env.D009H_CASE)console.log("D009H "+JSON.stringify({stage:"writer publication",ms:performance.now()}));
   const launcher = launchWriter(stateDir, root, point, recording, ipc, executable);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");
+    if(process.env.D009H_CASE)console.log("D009H "+JSON.stringify({stage:"writer connect/register",ms:performance.now()}));
     const client = await connectFirstSend(stateDir, instance);
     try {
       const { receipt } = await client.send("project.register", {
