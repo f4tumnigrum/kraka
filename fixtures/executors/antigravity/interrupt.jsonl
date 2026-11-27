@@ -1,0 +1,9 @@
+{"kind":"header","family":"antigravity","protocol":"ACP v1 JSON-RPC 2.0 over stdio","sourceRevision":"agy 1.5.16","scenario":"interrupt","description":"Cancel a live prompt and observe its terminal reason."}
+{"kind":"frame","seq":1,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}}
+{"kind":"frame","seq":2,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{}}}}
+{"kind":"frame","seq":3,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/workspace/sample-almanac","mcpServers":[]}}}
+{"kind":"frame","seq":4,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sample-agy-interrupt","_meta":{"antigravity":{"tier":{"name":"Sample plan","id":"sample-tier","upgradeUri":"https://example.invalid/sample-plan"}}}}}}
+{"kind":"frame","seq":5,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sample-agy-interrupt","prompt":[{"type":"text","text":"Describe the sample notebook in three paragraphs."}]}}}
+{"kind":"frame","seq":6,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-agy-interrupt","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"The first page "}}}}}
+{"kind":"frame","seq":7,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"sample-agy-interrupt"}}}
+{"kind":"frame","seq":8,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}}

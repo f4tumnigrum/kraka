@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/protocol",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns shared wire schemas and protocol-reference generation.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "browser",
+      "electron-main",
+      "bun"
+    ],
+    "role": "protocol"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/protocol.js"
+  },
+  "dependencies": {
+    "valibot": "1.5.0"
+  }
+}

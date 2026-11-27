@@ -1,0 +1,3 @@
+{"kind":"header","family":"replay","protocol":"kraka-replay/1","sourceRevision":"1.0.0","scenario":"echoes-a-host-probe","description":"The replay executor echoes the host probe on its input stream."}
+{"kind":"frame","seq":1,"direction":"toExecutor","channel":"stdio","frame":{"method":"probe","id":"ping","params":{"text":"hello"}}}
+{"kind":"frame","seq":2,"direction":"fromExecutor","channel":"stdio","frame":{"id":"ping","result":{"text":"hello"}}}

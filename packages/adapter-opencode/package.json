@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/adapter-opencode",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns OpenCode transport and native-event conversion.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "OpenCode"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-opencode.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

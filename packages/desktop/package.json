@@ -1,0 +1,22 @@
+{
+  "name": "@kraka/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns the Electron main-process shell.",
+  "kraka": {
+    "kind": "application",
+    "runtime": [
+      "electron-main"
+    ],
+    "role": "desktop"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/desktop-main.js"
+  },
+  "dependencies": {
+    "@kraka/client-runtime": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

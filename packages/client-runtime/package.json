@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/client-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns client-local connection and synchronization logic across browser, Electron main, and Bun.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "browser",
+      "electron-main",
+      "bun"
+    ],
+    "role": "client-runtime"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/client-runtime.js"
+  },
+  "dependencies": {
+    "@kraka/protocol": "workspace:*"
+  }
+}

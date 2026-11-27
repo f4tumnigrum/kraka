@@ -1,0 +1,10 @@
+{"kind":"header","family":"acp","protocol":"ACP v1 JSON-RPC 2.0 over stdio","sourceRevision":"d3ac0e6","scenario":"clear","description":"Create a fresh session with a different native ID."}
+{"kind":"frame","seq":1,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}}
+{"kind":"frame","seq":2,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{}}}}
+{"kind":"frame","seq":3,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/workspace/sample-almanac","mcpServers":[]}}}
+{"kind":"frame","seq":4,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sample-acp-clear"}}}
+{"kind":"frame","seq":5,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/workspace/sample-almanac","mcpServers":[]}}}
+{"kind":"frame","seq":6,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"result":{"sessionId":"sample-acp-clear-fresh"}}}
+{"kind":"frame","seq":7,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"sample-acp-clear-fresh","prompt":[{"type":"text","text":"Start a new notebook."}]}}}
+{"kind":"frame","seq":8,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-acp-clear-fresh","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"A new notebook is open."}}}}}
+{"kind":"frame","seq":9,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}}

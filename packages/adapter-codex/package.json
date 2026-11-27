@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/adapter-codex",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns Codex transport and native-event conversion.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "Codex"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-codex.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

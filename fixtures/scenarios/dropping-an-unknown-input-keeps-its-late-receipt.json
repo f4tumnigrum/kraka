@@ -1,0 +1,1088 @@
+{
+  "format": "kraka-scenario-v2",
+  "name": "dropping-an-unknown-input-keeps-its-late-receipt",
+  "description": "A numbered drop releases the next input while a late receipt remains attached to the abandoned attempt.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-notes",
+            "projectId": "project-notes",
+            "worktreeId": null,
+            "title": "Draft notes",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "message",
+          "value": {
+            "id": "message-draft",
+            "threadId": "thread-notes",
+            "roundId": "round-draft",
+            "author": {
+              "kind": "person",
+              "id": "person-lee"
+            },
+            "text": "Polish the draft.",
+            "references": [],
+            "attachments": [],
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "round",
+          "value": {
+            "id": "round-draft",
+            "threadId": "thread-notes",
+            "messageId": "message-draft",
+            "place": "1",
+            "attempt": {
+              "attemptId": "attempt-round-draft",
+              "deliveryId": "delivery-round-draft",
+              "phase": {
+                "kind": "uncertain",
+                "next": "inspectInput"
+              }
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "message",
+          "value": {
+            "id": "message-next",
+            "threadId": "thread-notes",
+            "roundId": "round-refs",
+            "author": {
+              "kind": "person",
+              "id": "person-lee"
+            },
+            "text": "Check the references.",
+            "references": [],
+            "attachments": [],
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "round",
+          "value": {
+            "id": "round-refs",
+            "threadId": "thread-notes",
+            "messageId": "message-next",
+            "place": "2",
+            "attempt": {
+              "attemptId": "attempt-round-refs",
+              "deliveryId": "delivery-round-refs",
+              "phase": {
+                "kind": "filed",
+                "gate": "held"
+              }
+            },
+            "version": "1"
+          }
+        }
+      ],
+      "queue": [
+        {
+          "roundId": "round-draft",
+          "source": "person",
+          "recovery": "none"
+        },
+        {
+          "roundId": "round-refs",
+          "source": "person",
+          "recovery": "none"
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "desktop-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "abandon-draft",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-abandon-draft",
+              "result": {
+                "kind": "actionAccepted"
+              }
+            }
+          ]
+        },
+        {
+          "after": "abandon-draft",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-draft",
+                      "threadId": "thread-notes",
+                      "messageId": "message-draft",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-draft",
+                        "deliveryId": "delivery-round-draft",
+                        "phase": {
+                          "kind": "notDelivered",
+                          "reason": "userAbandoned",
+                          "lateReceipt": null
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-refs",
+                      "threadId": "thread-notes",
+                      "messageId": "message-next",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-refs",
+                        "deliveryId": "delivery-round-refs",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        },
+        {
+          "after": "claim-references",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-refs",
+                      "threadId": "thread-notes",
+                      "messageId": "message-next",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-refs",
+                        "deliveryId": "delivery-round-refs",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        },
+        {
+          "after": "references-written",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-4",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-4",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-refs",
+                      "threadId": "thread-notes",
+                      "messageId": "message-next",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-refs",
+                        "deliveryId": "delivery-round-refs",
+                        "phase": {
+                          "kind": "handed",
+                          "wroteAt": 1000
+                        }
+                      },
+                      "version": "4"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-4",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              }
+            }
+          ]
+        },
+        {
+          "after": "original-receipt-arrives",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-5",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-5",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-draft",
+                      "threadId": "thread-notes",
+                      "messageId": "message-draft",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-draft",
+                        "deliveryId": "delivery-round-draft",
+                        "phase": {
+                          "kind": "notDelivered",
+                          "reason": "userAbandoned",
+                          "lateReceipt": {
+                            "sessionId": "native-notes",
+                            "itemId": "native-first-input"
+                          }
+                        }
+                      },
+                      "version": "5"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-5",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "tablet-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "abandon-draft",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-draft",
+                      "threadId": "thread-notes",
+                      "messageId": "message-draft",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-draft",
+                        "deliveryId": "delivery-round-draft",
+                        "phase": {
+                          "kind": "notDelivered",
+                          "reason": "userAbandoned",
+                          "lateReceipt": null
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-refs",
+                      "threadId": "thread-notes",
+                      "messageId": "message-next",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-refs",
+                        "deliveryId": "delivery-round-refs",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        },
+        {
+          "after": "claim-references",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-refs",
+                      "threadId": "thread-notes",
+                      "messageId": "message-next",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-refs",
+                        "deliveryId": "delivery-round-refs",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        },
+        {
+          "after": "references-written",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-4",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-4",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-refs",
+                      "threadId": "thread-notes",
+                      "messageId": "message-next",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-refs",
+                        "deliveryId": "delivery-round-refs",
+                        "phase": {
+                          "kind": "handed",
+                          "wroteAt": 1000
+                        }
+                      },
+                      "version": "4"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-4",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              }
+            }
+          ]
+        },
+        {
+          "after": "original-receipt-arrives",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-5",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-5",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-draft",
+                      "threadId": "thread-notes",
+                      "messageId": "message-draft",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-draft",
+                        "deliveryId": "delivery-round-draft",
+                        "phase": {
+                          "kind": "notDelivered",
+                          "reason": "userAbandoned",
+                          "lateReceipt": {
+                            "sessionId": "native-notes",
+                            "itemId": "native-first-input"
+                          }
+                        }
+                      },
+                      "version": "5"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-5",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "later-claim-blocked",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-refs"
+      }
+    },
+    {
+      "label": "abandon-draft",
+      "event": {
+        "kind": "commands",
+        "deviceId": "desktop",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "desktop-studio-first",
+            "challengeId": "challenge-desktop-studio-first",
+            "challenge": "fake-desktop-studio-first-00000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 2,
+            "commandId": "cmd-abandon-draft",
+            "method": "input.dropUnknown",
+            "payload": {
+              "threadId": "thread-notes",
+              "attemptId": "attempt-round-draft"
+            },
+            "signature": "fake-signature-abandon-draft-000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "claim-references",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-refs"
+      }
+    },
+    {
+      "label": "references-written",
+      "event": {
+        "kind": "executor",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "fact": {
+          "family": "replay",
+          "instanceId": "replay",
+          "sessionId": "native-notes",
+          "epoch": 1,
+          "eventId": "event-references-written",
+          "payload": {
+            "kind": "deliveryWritten",
+            "attemptId": "attempt-round-refs",
+            "deliveryId": "delivery-round-refs",
+            "at": 1000
+          }
+        }
+      }
+    },
+    {
+      "label": "original-receipt-arrives",
+      "event": {
+        "kind": "executor",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "fact": {
+          "family": "replay",
+          "instanceId": "replay",
+          "sessionId": "native-notes",
+          "epoch": 1,
+          "eventId": "event-original-receipt-arrives",
+          "payload": {
+            "kind": "deliveryReceived",
+            "attemptId": "attempt-round-draft",
+            "deliveryId": "delivery-round-draft",
+            "receipt": {
+              "kind": "input",
+              "sessionId": "native-notes",
+              "itemId": "native-first-input"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

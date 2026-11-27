@@ -1,0 +1,236 @@
+{
+  "format": "kraka-scenario-v1",
+  "name": "a-lagging-terminal-viewer-gets-an-exact-byte-gap",
+  "description": "One viewer skips exactly the UTF-8 bytes it missed; the other receives the full output of the same shell generation.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-notes",
+            "projectId": "project-notes",
+            "worktreeId": null,
+            "title": "Draft notes",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        }
+      ],
+      "terminals": [
+        {
+          "threadId": "thread-notes",
+          "terminalId": "term-notes",
+          "generation": "1",
+          "previous": null,
+          "head": "4",
+          "kind": "running",
+          "process": {
+            "pid": 100,
+            "startedAt": 900
+          },
+          "grid": {
+            "cols": 80,
+            "rows": 24
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": [
+            {
+              "kind": "terminal",
+              "subscriptionId": "desktop-terminal",
+              "streamId": 1,
+              "flow": {
+                "kind": "manual",
+                "sentBytes": 4096,
+                "window": {
+                  "lane": "window",
+                  "epoch": "desktop-studio-first",
+                  "streamId": 1,
+                  "consumedBytes": 0,
+                  "limitBytes": 4096
+                }
+              },
+              "address": {
+                "threadId": "thread-notes",
+                "terminalId": "term-notes",
+                "generation": "1"
+              },
+              "sentThrough": "4"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "append-large-output",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "terminal.gap",
+              "threadId": "thread-notes",
+              "terminalId": "term-notes",
+              "generation": "1",
+              "subscriptionId": "desktop-terminal",
+              "from": "4",
+              "to": "262152",
+              "missingBytes": "262148",
+              "head": "262152"
+            }
+          ]
+        },
+        {
+          "after": "append-tail",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "terminal.output",
+              "threadId": "thread-notes",
+              "terminalId": "term-notes",
+              "generation": "1",
+              "subscriptionId": "desktop-terminal",
+              "from": "262152",
+              "to": "262155",
+              "content": "content-tail"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": [
+            {
+              "kind": "terminal",
+              "subscriptionId": "tablet-terminal",
+              "streamId": 1,
+              "flow": {
+                "kind": "draining"
+              },
+              "address": {
+                "threadId": "thread-notes",
+                "terminalId": "term-notes",
+                "generation": "1"
+              },
+              "sentThrough": "4"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "append-large-output",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "terminal.output",
+              "threadId": "thread-notes",
+              "terminalId": "term-notes",
+              "generation": "1",
+              "subscriptionId": "tablet-terminal",
+              "from": "4",
+              "to": "262152",
+              "content": "content-large"
+            }
+          ]
+        },
+        {
+          "after": "append-tail",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "terminal.output",
+              "threadId": "thread-notes",
+              "terminalId": "term-notes",
+              "generation": "1",
+              "subscriptionId": "tablet-terminal",
+              "from": "262152",
+              "to": "262155",
+              "content": "content-tail"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "append-large-output",
+      "event": {
+        "kind": "terminalOutput",
+        "environmentId": "studio",
+        "address": {
+          "threadId": "thread-notes",
+          "terminalId": "term-notes",
+          "generation": "1"
+        },
+        "utf8": "\u20ac\n",
+        "repetitions": 65537
+      }
+    },
+    {
+      "label": "slow-viewer-consumes",
+      "event": {
+        "kind": "window",
+        "environmentId": "studio",
+        "deviceId": "desktop",
+        "update": {
+          "lane": "window",
+          "epoch": "desktop-studio-first",
+          "streamId": 1,
+          "consumedBytes": 4096,
+          "limitBytes": 8192
+        }
+      }
+    },
+    {
+      "label": "append-tail",
+      "event": {
+        "kind": "terminalOutput",
+        "environmentId": "studio",
+        "address": {
+          "threadId": "thread-notes",
+          "terminalId": "term-notes",
+          "generation": "1"
+        },
+        "utf8": "ok\n",
+        "repetitions": 1
+      }
+    }
+  ]
+}

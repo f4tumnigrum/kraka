@@ -1,0 +1,10 @@
+{"kind":"header","family":"acp","protocol":"ACP v1 JSON-RPC 2.0 over stdio","sourceRevision":"d3ac0e6","scenario":"compact","description":"Observe native compaction updates during a turn on a capable client."}
+{"kind":"frame","seq":1,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"session":{"compaction":{}}}}}}
+{"kind":"frame","seq":2,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}}}}}
+{"kind":"frame","seq":3,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"method":"session/resume","params":{"sessionId":"sample-acp-saved-compact","cwd":"/workspace/sample-almanac","mcpServers":[]}}}
+{"kind":"frame","seq":4,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"result":{}}}
+{"kind":"frame","seq":5,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sample-acp-saved-compact","prompt":[{"type":"text","text":"Summarize the last reading."}]}}}
+{"kind":"frame","seq":6,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-acp-saved-compact","update":{"sessionUpdate":"compaction_update","compactionId":"sample-summary","status":"in_progress"}}}}
+{"kind":"frame","seq":7,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-acp-saved-compact","update":{"sessionUpdate":"compaction_update","compactionId":"sample-summary","status":"completed"}}}}
+{"kind":"frame","seq":8,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-acp-saved-compact","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"The last reading was moss."}}}}}
+{"kind":"frame","seq":9,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}

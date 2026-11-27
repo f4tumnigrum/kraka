@@ -1,0 +1,24 @@
+{
+  "name": "@kraka/adapter-antigravity",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Uses the shared ACP transport with Antigravity event translation.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "Antigravity"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-antigravity.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*",
+    "@kraka/adapter-acp": "workspace:*"
+  }
+}

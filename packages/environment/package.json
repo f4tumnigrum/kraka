@@ -1,0 +1,21 @@
+{
+  "name": "@kraka/environment",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns environment state and the internal executor-adapter contract.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "environment"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/environment.js"
+  },
+  "dependencies": {
+    "@kraka/protocol": "workspace:*"
+  }
+}

@@ -1,0 +1,622 @@
+{
+  "format": "kraka-scenario-v1",
+  "name": "first-answer-wins",
+  "description": "Both devices answer from the same open question; the second receipt carries the first answer.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-notes",
+            "projectId": "project-notes",
+            "worktreeId": null,
+            "title": "Draft notes",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "message",
+          "value": {
+            "id": "message-plan",
+            "threadId": "thread-notes",
+            "roundId": "round-plan",
+            "author": {
+              "kind": "person",
+              "id": "person-lee"
+            },
+            "text": "Choose a title.",
+            "references": [],
+            "attachments": [],
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "round",
+          "value": {
+            "id": "round-plan",
+            "threadId": "thread-notes",
+            "messageId": "message-plan",
+            "place": "1",
+            "attempt": {
+              "attemptId": "attempt-round-plan",
+              "deliveryId": "delivery-round-plan",
+              "phase": {
+                "kind": "working",
+                "root": {
+                  "sessionId": "native-notes",
+                  "id": "root-notes",
+                  "beganAt": 900
+                },
+                "receipt": null
+              }
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "todoRequest",
+          "value": {
+            "id": "todo-title",
+            "threadId": "thread-notes",
+            "roundId": "round-plan",
+            "body": {
+              "kind": "question",
+              "questions": [
+                {
+                  "key": "title",
+                  "text": "Which title should we use?",
+                  "choices": ["Orchard", "Harbor"]
+                }
+              ]
+            },
+            "state": {
+              "kind": "open",
+              "route": {
+                "kind": "live",
+                "subject": "question",
+                "sessionId": "native-notes",
+                "requestId": "native-title",
+                "fallback": {
+                  "kind": "expire"
+                }
+              }
+            },
+            "version": "1"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "desktop-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "choose-orchard",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-choose-orchard",
+              "result": {
+                "kind": "todoAnswerStored",
+                "todoRequestId": "todo-title"
+              }
+            }
+          ]
+        },
+        {
+          "after": "choose-harbor",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "todoRequest",
+                    "value": {
+                      "id": "todo-title",
+                      "threadId": "thread-notes",
+                      "roundId": "round-plan",
+                      "body": {
+                        "kind": "question",
+                        "questions": [
+                          {
+                            "key": "title",
+                            "text": "Which title should we use?",
+                            "choices": ["Orchard", "Harbor"]
+                          }
+                        ]
+                      },
+                      "state": {
+                        "kind": "answered",
+                        "route": {
+                          "kind": "live",
+                          "subject": "question",
+                          "sessionId": "native-notes",
+                          "requestId": "native-title",
+                          "fallback": {
+                            "kind": "expire"
+                          }
+                        },
+                        "answer": {
+                          "authorId": "person-lee",
+                          "deviceId": "desktop",
+                          "at": 1000,
+                          "attemptId": "attempt-answer",
+                          "deliveryId": "delivery-answer",
+                          "content": {
+                            "kind": "message",
+                            "messageId": "message-orchard"
+                          }
+                        },
+                        "arrival": {
+                          "kind": "recorded"
+                        },
+                        "previousAttempts": []
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-orchard",
+                      "threadId": "thread-notes",
+                      "roundId": "round-plan",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Orchard",
+                      "references": [],
+                      "attachments": [],
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-orchard"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "tablet-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "choose-harbor",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "rejected",
+              "commandId": "cmd-choose-harbor",
+              "failure": {
+                "kind": "todoChanged",
+                "current": {
+                  "id": "todo-title",
+                  "threadId": "thread-notes",
+                  "roundId": "round-plan",
+                  "body": {
+                    "kind": "question",
+                    "questions": [
+                      {
+                        "key": "title",
+                        "text": "Which title should we use?",
+                        "choices": ["Orchard", "Harbor"]
+                      }
+                    ]
+                  },
+                  "state": {
+                    "kind": "answered",
+                    "route": {
+                      "kind": "live",
+                      "subject": "question",
+                      "sessionId": "native-notes",
+                      "requestId": "native-title",
+                      "fallback": {
+                        "kind": "expire"
+                      }
+                    },
+                    "answer": {
+                      "authorId": "person-lee",
+                      "deviceId": "desktop",
+                      "at": 1000,
+                      "attemptId": "attempt-answer",
+                      "deliveryId": "delivery-answer",
+                      "content": {
+                        "kind": "message",
+                        "messageId": "message-orchard"
+                      }
+                    },
+                    "arrival": {
+                      "kind": "recorded"
+                    },
+                    "previousAttempts": []
+                  },
+                  "version": "2"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "after": "choose-harbor",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "todoRequest",
+                    "value": {
+                      "id": "todo-title",
+                      "threadId": "thread-notes",
+                      "roundId": "round-plan",
+                      "body": {
+                        "kind": "question",
+                        "questions": [
+                          {
+                            "key": "title",
+                            "text": "Which title should we use?",
+                            "choices": ["Orchard", "Harbor"]
+                          }
+                        ]
+                      },
+                      "state": {
+                        "kind": "answered",
+                        "route": {
+                          "kind": "live",
+                          "subject": "question",
+                          "sessionId": "native-notes",
+                          "requestId": "native-title",
+                          "fallback": {
+                            "kind": "expire"
+                          }
+                        },
+                        "answer": {
+                          "authorId": "person-lee",
+                          "deviceId": "desktop",
+                          "at": 1000,
+                          "attemptId": "attempt-answer",
+                          "deliveryId": "delivery-answer",
+                          "content": {
+                            "kind": "message",
+                            "messageId": "message-orchard"
+                          }
+                        },
+                        "arrival": {
+                          "kind": "recorded"
+                        },
+                        "previousAttempts": []
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-orchard",
+                      "threadId": "thread-notes",
+                      "roundId": "round-plan",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Orchard",
+                      "references": [],
+                      "attachments": [],
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-orchard"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "choose-orchard",
+      "event": {
+        "kind": "commands",
+        "deviceId": "desktop",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "desktop-studio-first",
+            "challengeId": "challenge-desktop-studio-first",
+            "challenge": "fake-desktop-studio-first-00000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 2,
+            "commandId": "cmd-choose-orchard",
+            "method": "todo.answer",
+            "payload": {
+              "threadId": "thread-notes",
+              "todoRequestId": "todo-title",
+              "answers": [
+                {
+                  "questionKey": "title",
+                  "answer": "Orchard"
+                }
+              ]
+            },
+            "signature": "fake-signature-choose-orchard-00000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "choose-harbor",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "tablet-studio-first",
+            "challengeId": "challenge-tablet-studio-first",
+            "challenge": "fake-tablet-studio-first-000000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 2,
+            "commandId": "cmd-choose-harbor",
+            "method": "todo.answer",
+            "payload": {
+              "threadId": "thread-notes",
+              "todoRequestId": "todo-title",
+              "answers": [
+                {
+                  "questionKey": "title",
+                  "answer": "Harbor"
+                }
+              ]
+            },
+            "signature": "fake-signature-choose-harbor-000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{"kind":"header","family":"antigravity","protocol":"ACP v1 JSON-RPC 2.0 over stdio","sourceRevision":"agy 1.5.16","scenario":"compact","description":"Submit the advertised compact command in an existing conversation."}
+{"kind":"frame","seq":1,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}}
+{"kind":"frame","seq":2,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}}}}}
+{"kind":"frame","seq":3,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"method":"session/resume","params":{"sessionId":"sample-agy-compact","cwd":"/workspace/sample-almanac","mcpServers":[]}}}
+{"kind":"frame","seq":4,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"result":{"_meta":{"antigravity":{"tier":{"name":"Sample plan","id":"sample-tier","upgradeUri":"https://example.invalid/sample-plan"}}}}}}
+{"kind":"frame","seq":5,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-agy-compact","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"compact","description":"Summarize the saved conversation."}]}}}}
+{"kind":"frame","seq":6,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sample-agy-compact","prompt":[{"type":"text","text":"/compact"}]}}}
+{"kind":"frame","seq":7,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}

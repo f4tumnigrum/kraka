@@ -1,0 +1,788 @@
+{
+  "format": "kraka-scenario-v1",
+  "name": "a-slow-subscription-does-not-stall-its-neighbor",
+  "description": "A desktop stream with no remaining credit waits while its neighboring stream and another client receive updates.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-notes",
+            "projectId": "project-notes",
+            "worktreeId": null,
+            "title": "Draft notes",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-news",
+            "projectId": "project-notes",
+            "worktreeId": null,
+            "title": "Team news",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "desktop-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "manual",
+                "sentBytes": 4096,
+                "window": {
+                  "lane": "window",
+                  "epoch": "desktop-studio-first",
+                  "streamId": 1,
+                  "consumedBytes": 0,
+                  "limitBytes": 4096
+                }
+              }
+            },
+            {
+              "kind": "objects",
+              "subscriptionId": "desktop-thread-news",
+              "streamId": 2,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "send-on-paused-stream",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            }
+          ]
+        },
+        {
+          "after": "send-on-draining-stream",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-thread-news",
+              "passId": "desktop-thread-news-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-news",
+              "passId": "desktop-thread-news-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-update",
+                      "threadId": "thread-news",
+                      "roundId": "round-update",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Post the update.",
+                      "references": [],
+                      "attachments": [],
+                      "version": "3"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-update"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-update",
+                      "threadId": "thread-news",
+                      "messageId": "message-update",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-update",
+                        "deliveryId": "delivery-round-update",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-update"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-news",
+              "passId": "desktop-thread-news-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        },
+        {
+          "after": "restore-only-slow-credit",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-outline",
+                      "threadId": "thread-notes",
+                      "roundId": "round-outline",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Revise the outline.",
+                      "references": [],
+                      "attachments": [],
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-outline"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-outline",
+                      "threadId": "thread-notes",
+                      "messageId": "message-outline",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-outline",
+                        "deliveryId": "delivery-round-outline",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-outline"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-thread-notes",
+              "passId": "desktop-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "tablet-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            },
+            {
+              "kind": "objects",
+              "subscriptionId": "tablet-thread-news",
+              "streamId": 2,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "send-on-paused-stream",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-send-on-paused-stream",
+              "result": {
+                "kind": "inputScheduled",
+                "messageId": "message-outline",
+                "roundId": "round-outline",
+                "attemptId": "attempt-round-outline",
+                "deliveryId": "delivery-round-outline"
+              }
+            },
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-outline",
+                      "threadId": "thread-notes",
+                      "roundId": "round-outline",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Revise the outline.",
+                      "references": [],
+                      "attachments": [],
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-outline"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-outline",
+                      "threadId": "thread-notes",
+                      "messageId": "message-outline",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-outline",
+                        "deliveryId": "delivery-round-outline",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-outline"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        },
+        {
+          "after": "send-on-draining-stream",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-send-on-draining-stream",
+              "result": {
+                "kind": "inputScheduled",
+                "messageId": "message-update",
+                "roundId": "round-update",
+                "attemptId": "attempt-round-update",
+                "deliveryId": "delivery-round-update"
+              }
+            },
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-news",
+              "passId": "tablet-thread-news-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-news",
+              "passId": "tablet-thread-news-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-update",
+                      "threadId": "thread-news",
+                      "roundId": "round-update",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Post the update.",
+                      "references": [],
+                      "attachments": [],
+                      "version": "3"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-update"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-update",
+                      "threadId": "thread-news",
+                      "messageId": "message-update",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-update",
+                        "deliveryId": "delivery-round-update",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-update"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-news",
+              "passId": "tablet-thread-news-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-news"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "send-on-paused-stream",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "tablet-studio-first",
+            "challengeId": "challenge-tablet-studio-first",
+            "challenge": "fake-tablet-studio-first-000000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 2,
+            "commandId": "cmd-send-on-paused-stream",
+            "method": "input.send",
+            "payload": {
+              "threadId": "thread-notes",
+              "content": {
+                "text": "Revise the outline.",
+                "references": [],
+                "attachments": []
+              }
+            },
+            "signature": "fake-signature-send-on-paused-stream-0000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "send-on-draining-stream",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "tablet-studio-first",
+            "challengeId": "challenge-tablet-studio-first",
+            "challenge": "fake-tablet-studio-first-000000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 3,
+            "commandId": "cmd-send-on-draining-stream",
+            "method": "input.send",
+            "payload": {
+              "threadId": "thread-news",
+              "content": {
+                "text": "Post the update.",
+                "references": [],
+                "attachments": []
+              }
+            },
+            "signature": "fake-signature-send-on-draining-stream-00000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "restore-only-slow-credit",
+      "event": {
+        "kind": "window",
+        "environmentId": "studio",
+        "deviceId": "desktop",
+        "update": {
+          "lane": "window",
+          "epoch": "desktop-studio-first",
+          "streamId": 1,
+          "consumedBytes": 4096,
+          "limitBytes": 8192
+        }
+      }
+    }
+  ]
+}

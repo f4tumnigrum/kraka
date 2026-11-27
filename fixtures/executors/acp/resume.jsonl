@@ -1,0 +1,8 @@
+{"kind":"header","family":"acp","protocol":"ACP v1 JSON-RPC 2.0 over stdio","sourceRevision":"d3ac0e6","scenario":"resume","description":"Resume a saved session and send another turn on its original ID."}
+{"kind":"frame","seq":1,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}}
+{"kind":"frame","seq":2,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}}}}}
+{"kind":"frame","seq":3,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"method":"session/resume","params":{"sessionId":"sample-acp-resume","cwd":"/workspace/sample-almanac","mcpServers":[]}}}
+{"kind":"frame","seq":4,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":2,"result":{}}}
+{"kind":"frame","seq":5,"direction":"toExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sample-acp-resume","prompt":[{"type":"text","text":"Give the saved label again."}]}}}
+{"kind":"frame","seq":6,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sample-acp-resume","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"moss"}}}}}
+{"kind":"frame","seq":7,"direction":"fromExecutor","channel":"stdio","frame":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}

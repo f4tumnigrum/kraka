@@ -1,0 +1,33 @@
+{
+  "name": "@kraka/daemon",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Starts the environment, exposes the kraka command, and serves same-origin static client files.",
+  "kraka": {
+    "kind": "application",
+    "runtime": [
+      "bun"
+    ],
+    "role": "daemon"
+  },
+  "bin": {
+    "kraka": "./src/index.ts"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build --compile src/index.ts --outfile ../../.build/kraka"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/cli-client": "workspace:*",
+    "@kraka/protocol": "workspace:*",
+    "@kraka/adapter-codex": "workspace:*",
+    "@kraka/adapter-claude-code": "workspace:*",
+    "@kraka/adapter-opencode": "workspace:*",
+    "@kraka/adapter-pi": "workspace:*",
+    "@kraka/adapter-antigravity": "workspace:*",
+    "@kraka/adapter-acp": "workspace:*",
+    "@kraka/adapter-replay": "workspace:*"
+  }
+}

@@ -1,0 +1,716 @@
+{
+  "format": "kraka-scenario-v2",
+  "name": "reconnect-only-replaces-changed-objects",
+  "description": "A reconnecting desktop receives the message and the latest round while the tablet remains subscribed.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-notes",
+            "projectId": "project-notes",
+            "worktreeId": null,
+            "title": "Draft notes",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "desktop-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "resume-from-one",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-resume-from-one",
+              "result": {
+                "kind": "subscriptionOpened",
+                "subscriptionId": "desktop-resumed",
+                "streamId": 1
+              }
+            }
+          ]
+        },
+        {
+          "after": "resume-from-one",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-resumed",
+              "passId": "desktop-resumed-pass-4",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-resumed",
+              "passId": "desktop-resumed-pass-4",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-heading",
+                      "threadId": "thread-notes",
+                      "roundId": "round-heading",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Fix the heading.",
+                      "references": [],
+                      "attachments": [],
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-heading"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-heading",
+                      "threadId": "thread-notes",
+                      "messageId": "message-heading",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-heading",
+                        "deliveryId": "delivery-round-heading",
+                        "phase": {
+                          "kind": "handed",
+                          "wroteAt": 1000
+                        }
+                      },
+                      "version": "4"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-heading"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-resumed",
+              "passId": "desktop-resumed-pass-4",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "tablet-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "send-typo-note",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-send-typo-note",
+              "result": {
+                "kind": "inputScheduled",
+                "messageId": "message-heading",
+                "roundId": "round-heading",
+                "attemptId": "attempt-round-heading",
+                "deliveryId": "delivery-round-heading"
+              }
+            }
+          ]
+        },
+        {
+          "after": "send-typo-note",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "message",
+                    "value": {
+                      "id": "message-heading",
+                      "threadId": "thread-notes",
+                      "roundId": "round-heading",
+                      "author": {
+                        "kind": "person",
+                        "id": "person-lee"
+                      },
+                      "text": "Fix the heading.",
+                      "references": [],
+                      "attachments": [],
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-heading"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-heading",
+                      "threadId": "thread-notes",
+                      "messageId": "message-heading",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-heading",
+                        "deliveryId": "delivery-round-heading",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-heading"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        },
+        {
+          "after": "worker-claims-heading",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-heading",
+                      "threadId": "thread-notes",
+                      "messageId": "message-heading",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-heading",
+                        "deliveryId": "delivery-round-heading",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        },
+        {
+          "after": "heading-written",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-4",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-4",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-heading",
+                      "threadId": "thread-notes",
+                      "messageId": "message-heading",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-heading",
+                        "deliveryId": "delivery-round-heading",
+                        "phase": {
+                          "kind": "handed",
+                          "wroteAt": 1000
+                        }
+                      },
+                      "version": "4"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-thread-notes",
+              "passId": "tablet-thread-notes-pass-4",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "desktop-disconnects",
+      "event": {
+        "kind": "disconnect",
+        "deviceId": "desktop",
+        "environmentId": "studio"
+      }
+    },
+    {
+      "label": "send-typo-note",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "tablet-studio-first",
+            "challengeId": "challenge-tablet-studio-first",
+            "challenge": "fake-tablet-studio-first-000000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 2,
+            "commandId": "cmd-send-typo-note",
+            "method": "input.send",
+            "payload": {
+              "threadId": "thread-notes",
+              "content": {
+                "text": "Fix the heading.",
+                "references": [],
+                "attachments": []
+              }
+            },
+            "signature": "fake-signature-send-typo-note-00000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "worker-claims-heading",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-heading"
+      }
+    },
+    {
+      "label": "heading-written",
+      "event": {
+        "kind": "executor",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "fact": {
+          "family": "replay",
+          "instanceId": "replay",
+          "sessionId": "native-notes",
+          "epoch": 1,
+          "eventId": "event-heading-written",
+          "payload": {
+            "kind": "deliveryWritten",
+            "attemptId": "attempt-round-heading",
+            "deliveryId": "delivery-round-heading",
+            "at": 1000
+          }
+        }
+      }
+    },
+    {
+      "label": "desktop-returns",
+      "event": {
+        "kind": "connect",
+        "deviceId": "desktop",
+        "environmentId": "studio",
+        "connectionId": "desktop-studio-second"
+      }
+    },
+    {
+      "label": "resume-from-one",
+      "event": {
+        "kind": "commands",
+        "deviceId": "desktop",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "desktop-studio-second",
+            "challengeId": "challenge-desktop-studio-second",
+            "challenge": "fake-desktop-studio-second-0000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 2,
+            "commandId": "cmd-resume-from-one",
+            "method": "subscription.openThread",
+            "payload": {
+              "subscriptionId": "desktop-resumed",
+              "streamId": 1,
+              "threadId": "thread-notes",
+              "knownWindow": [
+                {
+                  "key": {
+                    "objectType": "thread",
+                    "id": "thread-notes"
+                  },
+                  "version": "1"
+                }
+              ],
+              "after": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "recheckTodos": []
+            },
+            "signature": "fake-signature-resume-from-one-0000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    }
+  ]
+}

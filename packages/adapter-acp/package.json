@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/adapter-acp",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns shared ACP transport declarations and event translation.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "Agent Client Protocol"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-acp.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

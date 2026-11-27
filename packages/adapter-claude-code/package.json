@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/adapter-claude-code",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns Claude Code transport and native-event conversion.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "Claude Code"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-claude-code.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/adapter-replay",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Emits recorded events through the executor-adapter contract in replay mode.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "Replay"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-replay.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

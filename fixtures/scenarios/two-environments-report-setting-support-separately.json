@@ -1,0 +1,345 @@
+{
+  "format": "kraka-scenario-v1",
+  "name": "two-environments-report-setting-support-separately",
+  "description": "One device writes the same setting in two environments; a second device reads the saved value and the legacy field inventory.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        }
+      ]
+    },
+    {
+      "environmentId": "archive",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "archive",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "archive",
+            "version": "1"
+          }
+        }
+      ],
+      "legacySettingFields": ["defaultModel"]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": []
+        },
+        {
+          "environmentId": "archive",
+          "connectionId": "desktop-archive-first",
+          "subscriptions": []
+        }
+      ],
+      "expected": [
+        {
+          "after": "write-selected-environments",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-write-studio",
+              "result": {
+                "kind": "settingSaved",
+                "supportedFields": ["directoryMode", "defaultModel"],
+                "readback": {
+                  "field": "directoryMode",
+                  "target": {
+                    "kind": "environment",
+                    "environmentId": "studio"
+                  },
+                  "checkout": null,
+                  "atLayer": {
+                    "kind": "set",
+                    "value": "worktree"
+                  },
+                  "fieldVersion": "1",
+                  "readVersion": "2",
+                  "effective": {
+                    "value": "worktree",
+                    "source": {
+                      "kind": "environment",
+                      "environmentId": "studio"
+                    },
+                    "sourceVersion": "1"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "after": "write-selected-environments",
+          "environmentId": "archive",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-write-archive",
+              "result": {
+                "kind": "actionAccepted",
+                "supportedFields": ["defaultModel"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": []
+        },
+        {
+          "environmentId": "archive",
+          "connectionId": "tablet-archive-first",
+          "subscriptions": []
+        }
+      ],
+      "expected": [
+        {
+          "after": "inspect-studio",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-inspect-studio",
+              "result": {
+                "kind": "settingRead",
+                "readback": {
+                  "field": "directoryMode",
+                  "target": {
+                    "kind": "environment",
+                    "environmentId": "studio"
+                  },
+                  "checkout": null,
+                  "atLayer": {
+                    "kind": "set",
+                    "value": "worktree"
+                  },
+                  "fieldVersion": "1",
+                  "readVersion": "2",
+                  "effective": {
+                    "value": "worktree",
+                    "source": {
+                      "kind": "environment",
+                      "environmentId": "studio"
+                    },
+                    "sourceVersion": "1"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "after": "inspect-archive",
+          "environmentId": "archive",
+          "messages": [
+            {
+              "kind": "rejected",
+              "commandId": "cmd-inspect-archive",
+              "failure": {
+                "kind": "unrecognizedSetting",
+                "field": "directoryMode",
+                "target": {
+                  "kind": "environment",
+                  "environmentId": "archive"
+                },
+                "checkout": null,
+                "supportedFields": ["defaultModel"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "write-selected-environments",
+      "event": {
+        "kind": "commands",
+        "deviceId": "desktop",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "desktop-studio-first",
+            "challengeId": "challenge-desktop-studio-first",
+            "challenge": "fake-desktop-studio-first-00000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 2,
+            "commandId": "cmd-write-studio",
+            "method": "settings.write",
+            "payload": {
+              "field": "directoryMode",
+              "target": {
+                "kind": "environment",
+                "environmentId": "studio"
+              },
+              "checkout": null,
+              "baseVersion": "0",
+              "change": {
+                "kind": "set",
+                "value": "worktree"
+              }
+            },
+            "signature": "fake-signature-write-studio-0000000000000000000000000000000000000000000000000000000000"
+          },
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "archive",
+            "connectionId": "desktop-archive-first",
+            "challengeId": "challenge-desktop-archive-first",
+            "challenge": "fake-desktop-archive-first-0000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 2,
+            "commandId": "cmd-write-archive",
+            "method": "settings.write",
+            "payload": {
+              "field": "directoryMode",
+              "target": {
+                "kind": "environment",
+                "environmentId": "archive"
+              },
+              "checkout": null,
+              "baseVersion": "0",
+              "change": {
+                "kind": "set",
+                "value": "worktree"
+              }
+            },
+            "signature": "fake-signature-write-archive-000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "inspect-studio",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "tablet-studio-first",
+            "challengeId": "challenge-tablet-studio-first",
+            "challenge": "fake-tablet-studio-first-000000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 2,
+            "commandId": "cmd-inspect-studio",
+            "method": "settings.read",
+            "payload": {
+              "field": "directoryMode",
+              "target": {
+                "kind": "environment",
+                "environmentId": "studio"
+              },
+              "checkout": null
+            },
+            "signature": "fake-signature-inspect-studio-00000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "inspect-archive",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "archive",
+            "connectionId": "tablet-archive-first",
+            "challengeId": "challenge-tablet-archive-first",
+            "challenge": "fake-tablet-archive-first-00000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 2,
+            "commandId": "cmd-inspect-archive",
+            "method": "settings.read",
+            "payload": {
+              "field": "directoryMode",
+              "target": {
+                "kind": "environment",
+                "environmentId": "archive"
+              },
+              "checkout": null
+            },
+            "signature": "fake-signature-inspect-archive-0000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    }
+  ]
+}

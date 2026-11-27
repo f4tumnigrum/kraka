@@ -1,0 +1,2250 @@
+{
+  "format": "kraka-scenario-v2",
+  "name": "human-queue-waits-for-release-after-restart",
+  "description": "The recovered human head and the automatic row behind it keep their places until explicit release.",
+  "startTime": 1000,
+  "environments": [
+    {
+      "environmentId": "studio",
+      "through": "1",
+      "objects": [
+        {
+          "objectType": "environment",
+          "value": {
+            "id": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "project",
+          "value": {
+            "id": "project-notes",
+            "environmentId": "studio",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "worktree",
+          "value": {
+            "id": "tree-notes",
+            "projectId": "project-notes",
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "thread",
+          "value": {
+            "id": "thread-notes",
+            "projectId": "project-notes",
+            "worktreeId": "tree-notes",
+            "title": "Draft notes",
+            "lineage": {
+              "kind": "root"
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "message",
+          "value": {
+            "id": "message-intro",
+            "threadId": "thread-notes",
+            "roundId": "round-intro",
+            "author": {
+              "kind": "person",
+              "id": "person-lee"
+            },
+            "text": "Review the introduction.",
+            "references": [],
+            "attachments": [],
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "round",
+          "value": {
+            "id": "round-intro",
+            "threadId": "thread-notes",
+            "messageId": "message-intro",
+            "place": "1",
+            "attempt": {
+              "attemptId": "attempt-round-intro",
+              "deliveryId": "delivery-round-intro",
+              "phase": {
+                "kind": "filed",
+                "gate": "eligible"
+              }
+            },
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "message",
+          "value": {
+            "id": "message-index",
+            "threadId": "thread-notes",
+            "roundId": "round-index",
+            "author": {
+              "kind": "executor",
+              "id": "indexer"
+            },
+            "text": "Refresh the index.",
+            "references": [],
+            "attachments": [],
+            "version": "1"
+          }
+        },
+        {
+          "objectType": "round",
+          "value": {
+            "id": "round-index",
+            "threadId": "thread-notes",
+            "messageId": "message-index",
+            "place": "2",
+            "attempt": {
+              "attemptId": "attempt-round-index",
+              "deliveryId": "delivery-round-index",
+              "phase": {
+                "kind": "filed",
+                "gate": "eligible"
+              }
+            },
+            "version": "1"
+          }
+        }
+      ],
+      "queue": [
+        {
+          "roundId": "round-intro",
+          "source": "person",
+          "recovery": "none"
+        },
+        {
+          "roundId": "round-index",
+          "source": "automation",
+          "recovery": "deduplicate"
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "deviceId": "desktop",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "desktop-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "desktop-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "desktop-restores-queue",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-desktop-restores-queue",
+              "result": {
+                "kind": "subscriptionOpened",
+                "subscriptionId": "desktop-queue-after-restart",
+                "streamId": 1
+              }
+            }
+          ]
+        },
+        {
+          "after": "desktop-restores-queue",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "held"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "held"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        },
+        {
+          "after": "release-both",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-release-both",
+              "result": {
+                "kind": "actionAccepted"
+              }
+            }
+          ]
+        },
+        {
+          "after": "release-both",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        },
+        {
+          "after": "claim-intro",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-4",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-4",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "4"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-4",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              }
+            }
+          ]
+        },
+        {
+          "after": "intro-starts",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-5",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-5",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "working",
+                          "root": {
+                            "sessionId": "native-notes",
+                            "id": "root-intro",
+                            "beganAt": 1000
+                          },
+                          "receipt": null
+                        }
+                      },
+                      "version": "5"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-5",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              }
+            }
+          ]
+        },
+        {
+          "after": "intro-completes",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-6",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-6",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "closing",
+                          "root": {
+                            "sessionId": "native-notes",
+                            "id": "root-intro",
+                            "beganAt": 1000
+                          },
+                          "receipt": null,
+                          "endedAt": 1020,
+                          "captureId": "capture-intro"
+                        }
+                      },
+                      "version": "6"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-6",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              }
+            }
+          ]
+        },
+        {
+          "after": "intro-captured",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-7",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-7",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "checkpointCapture",
+                    "value": {
+                      "id": "capture-intro",
+                      "roundId": "round-intro",
+                      "attemptId": "attempt-round-intro",
+                      "result": {
+                        "kind": "ready",
+                        "worktreeId": "tree-notes",
+                        "comparison": {
+                          "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "after": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          "summary": {
+                            "kind": "empty"
+                          }
+                        }
+                      },
+                      "version": "7"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "checkpointCapture",
+                    "id": "capture-intro"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "finished",
+                          "root": {
+                            "sessionId": "native-notes",
+                            "id": "root-intro",
+                            "beganAt": 1000
+                          },
+                          "receipt": null,
+                          "endedAt": 1020,
+                          "captureId": "capture-intro"
+                        }
+                      },
+                      "version": "7"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-7",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              }
+            }
+          ]
+        },
+        {
+          "after": "claim-index",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-8",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-8",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "8"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-8",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              }
+            }
+          ]
+        },
+        {
+          "after": "index-written",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-9",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "9"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-9",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "9"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "handed",
+                          "wroteAt": 1020
+                        }
+                      },
+                      "version": "9"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "desktop-queue-after-restart",
+              "passId": "desktop-queue-after-restart-pass-9",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "9"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "deviceId": "tablet",
+      "principalId": "person-lee",
+      "connections": [
+        {
+          "environmentId": "studio",
+          "connectionId": "tablet-studio-first",
+          "subscriptions": [
+            {
+              "kind": "objects",
+              "subscriptionId": "tablet-thread-notes",
+              "streamId": 1,
+              "installed": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "flow": {
+                "kind": "draining"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "after": "tablet-restores-queue",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "accepted",
+              "commandId": "cmd-tablet-restores-queue",
+              "result": {
+                "kind": "subscriptionOpened",
+                "subscriptionId": "tablet-queue-after-restart",
+                "streamId": 1
+              }
+            }
+          ]
+        },
+        {
+          "after": "tablet-restores-queue",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-2",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-2",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "held"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "held"
+                        }
+                      },
+                      "version": "2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-2",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              }
+            }
+          ]
+        },
+        {
+          "after": "release-both",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-3",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "2"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-3",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "filed",
+                          "gate": "eligible"
+                        }
+                      },
+                      "version": "3"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-3",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              }
+            }
+          ]
+        },
+        {
+          "after": "claim-intro",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-4",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "3"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-4",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "4"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-4",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              }
+            }
+          ]
+        },
+        {
+          "after": "intro-starts",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-5",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "4"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-5",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "working",
+                          "root": {
+                            "sessionId": "native-notes",
+                            "id": "root-intro",
+                            "beganAt": 1000
+                          },
+                          "receipt": null
+                        }
+                      },
+                      "version": "5"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-5",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              }
+            }
+          ]
+        },
+        {
+          "after": "intro-completes",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-6",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "5"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-6",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "closing",
+                          "root": {
+                            "sessionId": "native-notes",
+                            "id": "root-intro",
+                            "beganAt": 1000
+                          },
+                          "receipt": null,
+                          "endedAt": 1020,
+                          "captureId": "capture-intro"
+                        }
+                      },
+                      "version": "6"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-6",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              }
+            }
+          ]
+        },
+        {
+          "after": "intro-captured",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-7",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "6"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-7",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "checkpointCapture",
+                    "value": {
+                      "id": "capture-intro",
+                      "roundId": "round-intro",
+                      "attemptId": "attempt-round-intro",
+                      "result": {
+                        "kind": "ready",
+                        "worktreeId": "tree-notes",
+                        "comparison": {
+                          "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "after": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          "summary": {
+                            "kind": "empty"
+                          }
+                        }
+                      },
+                      "version": "7"
+                    }
+                  }
+                },
+                {
+                  "kind": "window.enter",
+                  "key": {
+                    "objectType": "checkpointCapture",
+                    "id": "capture-intro"
+                  }
+                },
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-intro",
+                      "threadId": "thread-notes",
+                      "messageId": "message-intro",
+                      "place": "1",
+                      "attempt": {
+                        "attemptId": "attempt-round-intro",
+                        "deliveryId": "delivery-round-intro",
+                        "phase": {
+                          "kind": "finished",
+                          "root": {
+                            "sessionId": "native-notes",
+                            "id": "root-intro",
+                            "beganAt": 1000
+                          },
+                          "receipt": null,
+                          "endedAt": 1020,
+                          "captureId": "capture-intro"
+                        }
+                      },
+                      "version": "7"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-7",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              }
+            }
+          ]
+        },
+        {
+          "after": "claim-index",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-8",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "7"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-8",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "armed"
+                        }
+                      },
+                      "version": "8"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-8",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              }
+            }
+          ]
+        },
+        {
+          "after": "index-written",
+          "environmentId": "studio",
+          "messages": [
+            {
+              "kind": "subscription.begin",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-9",
+              "base": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "8"
+              },
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "9"
+              },
+              "mode": "merge"
+            },
+            {
+              "kind": "subscription.page",
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-9",
+              "through": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "9"
+              },
+              "pageNumber": 0,
+              "pageCount": 1,
+              "changes": [
+                {
+                  "kind": "object.replace",
+                  "object": {
+                    "objectType": "round",
+                    "value": {
+                      "id": "round-index",
+                      "threadId": "thread-notes",
+                      "messageId": "message-index",
+                      "place": "2",
+                      "attempt": {
+                        "attemptId": "attempt-round-index",
+                        "deliveryId": "delivery-round-index",
+                        "phase": {
+                          "kind": "handed",
+                          "wroteAt": 1020
+                        }
+                      },
+                      "version": "9"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "subscription.seal",
+              "pages": 1,
+              "subscriptionId": "tablet-queue-after-restart",
+              "passId": "tablet-queue-after-restart-pass-9",
+              "cursor": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "9"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "label": "environment-restarts",
+      "event": {
+        "kind": "restart",
+        "environmentId": "studio"
+      }
+    },
+    {
+      "label": "blocked-head-claim",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-intro"
+      }
+    },
+    {
+      "label": "desktop-reconnects",
+      "event": {
+        "kind": "connect",
+        "environmentId": "studio",
+        "deviceId": "desktop",
+        "connectionId": "desktop-studio-second"
+      }
+    },
+    {
+      "label": "desktop-restores-queue",
+      "event": {
+        "kind": "commands",
+        "deviceId": "desktop",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "desktop-studio-second",
+            "challengeId": "challenge-desktop-studio-second",
+            "challenge": "fake-desktop-studio-second-0000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 2,
+            "commandId": "cmd-desktop-restores-queue",
+            "method": "subscription.openThread",
+            "payload": {
+              "subscriptionId": "desktop-queue-after-restart",
+              "streamId": 1,
+              "threadId": "thread-notes",
+              "knownWindow": [
+                {
+                  "key": {
+                    "objectType": "thread",
+                    "id": "thread-notes"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-intro"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-intro"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-index"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-index"
+                  },
+                  "version": "1"
+                }
+              ],
+              "after": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "recheckTodos": []
+            },
+            "signature": "fake-signature-desktop-restores-queue-000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "tablet-reconnects",
+      "event": {
+        "kind": "connect",
+        "environmentId": "studio",
+        "deviceId": "tablet",
+        "connectionId": "tablet-studio-second"
+      }
+    },
+    {
+      "label": "tablet-restores-queue",
+      "event": {
+        "kind": "commands",
+        "deviceId": "tablet",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "tablet-studio-second",
+            "challengeId": "challenge-tablet-studio-second",
+            "challenge": "fake-tablet-studio-second-00000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "tablet",
+              "keyId": "fake-key-tablet"
+            },
+            "sequence": 2,
+            "commandId": "cmd-tablet-restores-queue",
+            "method": "subscription.openThread",
+            "payload": {
+              "subscriptionId": "tablet-queue-after-restart",
+              "streamId": 1,
+              "threadId": "thread-notes",
+              "knownWindow": [
+                {
+                  "key": {
+                    "objectType": "thread",
+                    "id": "thread-notes"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-intro"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-intro"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "message",
+                    "id": "message-index"
+                  },
+                  "version": "1"
+                },
+                {
+                  "key": {
+                    "objectType": "round",
+                    "id": "round-index"
+                  },
+                  "version": "1"
+                }
+              ],
+              "after": {
+                "environmentId": "studio",
+                "databaseGeneration": "database-main",
+                "visibilityGeneration": "owner-scope",
+                "scope": {
+                  "kind": "thread",
+                  "threadId": "thread-notes"
+                },
+                "shapeVersion": 1,
+                "through": "1"
+              },
+              "recheckTodos": []
+            },
+            "signature": "fake-signature-tablet-restores-queue-0000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "release-both",
+      "event": {
+        "kind": "commands",
+        "deviceId": "desktop",
+        "requests": [
+          {
+            "kind": "signedRequest",
+            "protocolVersion": {
+              "major": 1,
+              "minor": 0
+            },
+            "environmentId": "studio",
+            "connectionId": "desktop-studio-second",
+            "challengeId": "challenge-desktop-studio-second",
+            "challenge": "fake-desktop-studio-second-0000000000000000",
+            "signer": {
+              "kind": "device",
+              "deviceId": "desktop",
+              "keyId": "fake-key-desktop"
+            },
+            "sequence": 3,
+            "commandId": "cmd-release-both",
+            "method": "input.releaseQueue",
+            "payload": {
+              "threadId": "thread-notes"
+            },
+            "signature": "fake-signature-release-both-0000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "claim-intro",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-intro"
+      }
+    },
+    {
+      "label": "intro-starts",
+      "event": {
+        "kind": "executor",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "fact": {
+          "family": "replay",
+          "instanceId": "replay",
+          "sessionId": "native-notes",
+          "epoch": 1,
+          "eventId": "event-intro-starts",
+          "payload": {
+            "kind": "roundStarted",
+            "attemptId": "attempt-round-intro",
+            "nativeRootTurnId": "root-intro",
+            "at": 1000
+          }
+        }
+      }
+    },
+    {
+      "label": "index-waits-for-intro",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-index"
+      }
+    },
+    {
+      "label": "intro-executes",
+      "event": {
+        "kind": "advanceTime",
+        "milliseconds": 20
+      }
+    },
+    {
+      "label": "intro-completes",
+      "event": {
+        "kind": "executor",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "fact": {
+          "family": "replay",
+          "instanceId": "replay",
+          "sessionId": "native-notes",
+          "epoch": 1,
+          "eventId": "event-intro-completes",
+          "payload": {
+            "kind": "roundEnded",
+            "nativeRootTurnId": "root-intro",
+            "endedAt": 1020,
+            "attemptId": "attempt-round-intro",
+            "outcome": {
+              "reason": "completed",
+              "nativeReason": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "intro-captured",
+      "event": {
+        "kind": "checkpointSettled",
+        "environmentId": "studio",
+        "capture": {
+          "id": "capture-intro",
+          "roundId": "round-intro",
+          "attemptId": "attempt-round-intro",
+          "result": {
+            "kind": "ready",
+            "worktreeId": "tree-notes",
+            "comparison": {
+              "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "after": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "summary": {
+                "kind": "empty"
+              }
+            }
+          },
+          "version": "7"
+        }
+      }
+    },
+    {
+      "label": "claim-index",
+      "event": {
+        "kind": "claimInput",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "attemptId": "attempt-round-index"
+      }
+    },
+    {
+      "label": "index-written",
+      "event": {
+        "kind": "executor",
+        "environmentId": "studio",
+        "threadId": "thread-notes",
+        "fact": {
+          "family": "replay",
+          "instanceId": "replay",
+          "sessionId": "native-notes",
+          "epoch": 1,
+          "eventId": "event-index-written",
+          "payload": {
+            "kind": "deliveryWritten",
+            "attemptId": "attempt-round-index",
+            "deliveryId": "delivery-round-index",
+            "at": 1020
+          }
+        }
+      }
+    }
+  ]
+}

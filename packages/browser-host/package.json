@@ -1,0 +1,22 @@
+{
+  "name": "@kraka/browser-host",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Browser composition ports for device credentials and same-origin sessions.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "browser"
+    ],
+    "role": "interface"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --target browser --outfile ../../.build/packages/browser-host.js"
+  },
+  "dependencies": {
+    "@kraka/client-runtime": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

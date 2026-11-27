@@ -1,0 +1,22 @@
+{
+  "name": "@kraka/cli-client",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns command-line client commands and runs in Bun.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "cli-client"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/cli-client.js"
+  },
+  "dependencies": {
+    "@kraka/client-runtime": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}

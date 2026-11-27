@@ -1,0 +1,23 @@
+{
+  "name": "@kraka/adapter-pi",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Owns Pi transport and native-event conversion.",
+  "kraka": {
+    "kind": "library",
+    "runtime": [
+      "bun"
+    ],
+    "role": "executor-adapter",
+    "executor": "Pi"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-pi.js"
+  },
+  "dependencies": {
+    "@kraka/environment": "workspace:*",
+    "@kraka/protocol": "workspace:*"
+  }
+}
