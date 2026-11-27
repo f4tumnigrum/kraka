@@ -1,7 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalDiffService } from "./local-diff";
 import { test, expect } from "bun:test";
 import * as v from "valibot";
 import { transitionRound } from "./round";
 import {
+  WorktreeGenerationSchema,
+  DiffRequestSchema,
   AttemptIdSchema,
   RoundAttemptSchema,
   REQUEST_METHODS,
@@ -286,4 +292,60 @@ test("a newly settled capture can finalize its matching round and joint rollback
   expect(hasMethodPermissions(REQUEST_METHODS.restoreFiles, new Set(["workspace.change"]))).toBe(
     true,
   );
+});
+
+test("a shallow commit retains its verified right endpoint when its actual first parent is absent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kraka-shallow-"));
+  const git = (...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-C", root, ...args], {
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+    });
+    if (r.exitCode !== 0) throw Error(r.stderr.toString());
+    return r.stdout.toString().trim();
+  };
+  try {
+    git("init", "-q", "-b", "main");
+    git("commit", "--allow-empty", "-qm", "root");
+    writeFileSync(join(root, "file"), "tip");
+    git("add", "file");
+    git("commit", "-qm", "tip");
+    const copy = join(root, "shallow");
+    git("clone", "-q", "--depth", "1", "--no-local", root, copy);
+    const query = v.parse(DiffRequestSchema, {
+      kind: "commit",
+      commit: git("rev-parse", "HEAD"),
+      threadId: key.threadId,
+      worktreeId: key.worktreeId,
+    });
+    const service = new LocalDiffService();
+    const diff = service.readLocalDiff({
+      actor: { scope: "viewer", directoryDiff: false },
+      query,
+      cursor: null,
+      resolvedDirectory: {
+        path: copy,
+        address: {
+          kind: "managedWorktree",
+          threadId: key.threadId,
+          worktreeId: key.worktreeId,
+          directoryId: "shallow",
+          generation: v.parse(WorktreeGenerationSchema, "1"),
+        },
+      },
+    });
+    expect(diff).toMatchObject({
+      kind: "unavailable",
+      reason: "missingFirstParent",
+      from: null,
+      to: { relation: "commit", oid: git("rev-parse", "HEAD") },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

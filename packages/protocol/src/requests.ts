@@ -186,6 +186,7 @@ export const PROTOCOL_FEATURES = [
   "privateSecretSubmission",
   "queueEditing",
   "timelineItems",
+  "directoryDiff",
 ] as const;
 export const ProtocolFeatureSchema = v.picklist(PROTOCOL_FEATURES);
 export const ProtocolFeatureSetSchema = v.pipe(

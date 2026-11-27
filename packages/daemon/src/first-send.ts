@@ -42,6 +42,7 @@ import {
   readReceipt,
   readRound,
   readThread,
+  GitStatusCache,
   recordInputEvidence,
   registerProject,
   renameThread,
@@ -112,6 +113,8 @@ export async function startWriter<H extends object>(
     opened?: (store: FirstSendStore) => void;
     committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
     update?: (event: ReplayTurnUpdate) => void;
+    browserFixture?: (path: string) => Response | null;
+    gitProcess?: (directory: string, granularity: "branch" | "detailed") => void;
   },
 ) {
   const lock = await openWriter(
@@ -145,6 +148,7 @@ export async function startWriter<H extends object>(
     const authHost = await openAccessHost(stateDir);
     auth = authHost;
     const reads = inputReads(transaction, actor);
+    const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
 
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
@@ -470,10 +474,16 @@ export async function startWriter<H extends object>(
       port: 0,
       async fetch(req, server) {
         const url = new URL(req.url);
-        if (!accepting || req.headers.has("Origin") || url.hostname !== "127.0.0.1")
-          return new Response(null, { status: 403 });
+        if (!accepting || url.hostname !== "127.0.0.1") return new Response(null, { status: 403 });
+        const origin = req.headers.get("Origin");
+        const fixture = lifecycle?.browserFixture;
         if (url.pathname === "/ws") {
-          const admission = checkBusinessUpgrade(url.pathname + url.search, [], [], URL);
+          const admission = checkBusinessUpgrade(
+            url.pathname + url.search,
+            origin ? [origin] : [],
+            fixture ? [server.url.origin] : [],
+            URL,
+          );
           if (admission.kind === "reject") return new Response(null, { status: admission.status });
           const app = await threadConnection(
             transaction,
@@ -481,6 +491,7 @@ export async function startWriter<H extends object>(
             admission.nonce,
             schedule,
             sendInput,
+            gitStatusCache,
             lifecycle?.threadCommand,
             lifecycle?.inspectPage,
             lifecycle?.beforeTodo,
@@ -490,6 +501,11 @@ export async function startWriter<H extends object>(
           if (!app) return new Response(null, { status: 403 });
           if (server.upgrade(req, { data: { app, flow: null } })) return;
           return new Response(null, { status: 400 });
+        }
+        if (origin !== null) return new Response(null, { status: 403 });
+        if (fixture && req.method === "GET") {
+          const page = fixture(url.pathname);
+          if (page) return page;
         }
         if (/^\/instance\/[0-9a-f]{48}$/.test(url.pathname)) {
           if (url.search === "?idle" && (turns.size || preparing.size))
@@ -776,6 +792,7 @@ export async function startWriter<H extends object>(
         if (!accepting) return;
         accepting = false;
         clearInterval(timer);
+        gitStatusCache.close();
         for (const ws of sockets) ws.close(1001);
         controller.abort();
         try {
