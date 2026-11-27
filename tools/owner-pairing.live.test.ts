@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, onTestFinished, test } from "bun:test";
 import { connect } from "node:net";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -33,6 +33,12 @@ import {
   type Client,
 } from "./fixtures/paired-project";
 export { startPairedProject } from "./fixtures/paired-project";
+function testProject(stateDir: string, requests: PermissionItem[][] = []) {
+  const lifetime = new AbortController();
+  onTestFinished(() => lifetime.abort());
+  return startPairedProject({ stateDir, projectId: "P", requests, signal: lifetime.signal });
+}
+
 const completed = new Set<string>();
 afterAll(() => {
   if (process.env.KRAKA_REQUIRED_PAIRING_CASES === "1")
@@ -102,7 +108,7 @@ test(
   "Admission checks the raw upgrade and releases only the signed hello",
   () =>
     withState(async (stateDir) => {
-      const f = await startPairedProject({ stateDir, projectId: "P", requests: [] });
+      const f = await testProject(stateDir);
       try {
         const target = `/ws?nonce=${randomBytes(32).toString("base64url")}`;
         for (const [path, origins, want] of [
@@ -165,7 +171,7 @@ test(
   "Pair, race and recover the selected application across daemon restart",
   () =>
     withState(async (stateDir) => {
-      const f = await startPairedProject({ stateDir, projectId: "P", requests: [] });
+      const f = await testProject(stateDir);
       const open: Array<() => void> = [];
       try {
         const id = await invite(f.owner, f.projectId),
@@ -296,7 +302,7 @@ test(
   "Revoke closes the connected subscriber while the owner and executor continue",
   () =>
     withState(async (stateDir) => {
-      const f = await startPairedProject({ stateDir, projectId: "P", requests: [["thread.view"]] });
+      const f = await testProject(stateDir, [["thread.view"]]);
       try {
         const target = f.clients[0];
         if (!target) throw Error("Missing subscriber");
@@ -462,11 +468,7 @@ test(
   "First-owner upgrade needs a separate local decision and returns one durable grant",
   () =>
     withState(async (stateDir) => {
-      const f = await startPairedProject({
-        stateDir,
-        projectId: "P",
-        requests: [[...DEFAULT_DEVICE_PERMISSIONS]],
-      });
+      const f = await testProject(stateDir, [[...DEFAULT_DEVICE_PERMISSIONS]]);
       try {
         const target = { kind: "environment" as const, environmentId: f.identity.id },
           d = f.owner.device;

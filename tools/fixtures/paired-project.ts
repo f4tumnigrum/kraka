@@ -96,19 +96,26 @@ export async function connectDevice(
   }
 }
 export type Client = Awaited<ReturnType<typeof connectDevice>>;
-export async function startTestHost(dir: string) {
+export async function startTestHost(dir: string, signal?: AbortSignal) {
+  const publication = Promise.withResolvers<unknown>();
   const events = new Journal<Record<string, unknown>>();
   const p = Bun.spawn([process.execPath, join(import.meta.dir, "pairing-daemon.ts"), dir], {
     stdin: "ignore",
     stdout: "ignore",
     stderr: "pipe",
+    ...(signal && { signal }),
     ipc(message: unknown) {
-      if (message && typeof message === "object") events.push(message as Record<string, unknown>);
+      if (!message || typeof message !== "object") return;
+      events.push(message as Record<string, unknown>);
+      if ("event" in message && message.event === "ready") publication.resolve(message);
     },
   });
   const stderr = new Response(p.stderr).text();
   const ended = p.exited.then(async (code) => ({ event: "exit", code, error: await stderr }));
-  void ended.then((e) => events.push(e));
+  void ended.then((e) => {
+    events.push(e);
+    publication.reject(Error(`Fixture exited (${e.code}): ${e.error}`));
+  });
   async function event(kind: string) {
     const e = await events.until((m) => m.event === kind || m.event === "exit");
     if (e.event === "exit") throw Error(`Fixture exited: ${e.error}`);
@@ -122,11 +129,13 @@ export async function startTestHost(dir: string) {
     return e.value;
   }
   try {
-    const ready = await event("ready");
-    const identity = v.parse(EnvironmentIdentitySchema, ready.identity);
+    const { identity, origin } = v.parse(
+      v.object({ identity: EnvironmentIdentitySchema, origin: v.string() }),
+      await publication.promise,
+    );
     return {
       identity,
-      origin: v.parse(v.string(), ready.origin),
+      origin,
       events,
       event,
       control,
@@ -226,17 +235,19 @@ export async function startPairedProject({
   stateDir: parent,
   projectId,
   requests,
+  signal,
 }: {
   stateDir: string;
   projectId: string;
   requests: readonly (readonly PermissionItem[])[];
+  signal?: AbortSignal;
 }) {
   const project = v.parse(ProjectIdSchema, projectId);
   const threadId = v.parse(ThreadIdSchema, crypto.randomUUID());
   const cleanup: (() => void)[] = [];
   const clients: Client[] = [];
   const stateDir = await mkdtemp(join(parent, "paired-"));
-  let host = await startTestHost(stateDir).catch(async (error) => {
+  let host = await startTestHost(stateDir, signal).catch(async (error) => {
     await rm(stateDir, { recursive: true, force: true });
     throw error;
   });
@@ -307,7 +318,7 @@ export async function startPairedProject({
         owner.close();
         for (const c of clients) c.close();
         await host.stop();
-        host = await startTestHost(stateDir);
+        host = await startTestHost(stateDir, signal);
         if (canonicalJson(host.identity) !== canonicalJson(identity))
           throw Error("Environment identity changed");
         owner = await attach(device, first.principal);
