@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { devNull, tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitStatusCache, gitStatusProcessCount, readGitStatus } from "./git-status";
 import { RemoteStatusCache, type VerifiedRemote, probeRemote } from "./git-remote";
@@ -21,7 +21,8 @@ function git(directory: string, ...args: string[]) {
     stderr: "pipe",
     env: {
       ...process.env,
-      GIT_CONFIG_GLOBAL: devNull,
+      GIT_CONFIG_GLOBAL: join(directory, "..", "gitconfig"),
+      GIT_CONFIG_NOSYSTEM: "1",
       GIT_TERMINAL_PROMPT: "0",
       GIT_AUTHOR_NAME: "S15 fixture",
       GIT_AUTHOR_EMAIL: "s15@example.invalid",
@@ -34,15 +35,21 @@ function git(directory: string, ...args: string[]) {
   return result.stdout.toString().trim();
 }
 function repository() {
-  const path = mkdtempSync(join(tmpdir(), "kraka-s15-git-"));
-  git(path, "init", "-q", "-b", "main");
-  git(path, "config", "user.name", "S15 fixture");
-  git(path, "config", "user.email", "s15@example.invalid");
-  git(path, "config", "core.autocrlf", "false");
-  return {
-    path,
-    close: () => rmSync(path, { recursive: true, force: true }),
-  };
+  const root = mkdtempSync(join(tmpdir(), "kraka-s15-git-"));
+  const path = join(root, "checkout");
+  const close = () => rmSync(root, { recursive: true, force: true });
+  try {
+    writeFileSync(join(root, "gitconfig"), "");
+    mkdirSync(path);
+    git(path, "init", "-q", "-b", "main");
+    git(path, "config", "user.name", "S15 fixture");
+    git(path, "config", "user.email", "s15@example.invalid");
+    git(path, "config", "core.autocrlf", "false");
+    return { path, close };
+  } catch (error) {
+    close();
+    throw error;
+  }
 }
 function rootAddress(directory: string) {
   return {
