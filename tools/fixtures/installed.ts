@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as v from "valibot";
 import { InstancePublicationSchema, readInstancePublication } from "@kraka/environment";
@@ -63,11 +63,14 @@ export async function installedDirectory(dir: string, bin: string) {
   );
   const env = { ...inherited, PATH: paths.join(delimiter), KRAKA_CLIENT_DIR: client };
   if (Bun.which("bun", { PATH: env.PATH, cwd })) throw Error("Bun visible in product PATH");
-  return { bin, cwd, state, client, env };
+  const selected = Bun.which(basename(bin), { PATH: env.PATH, cwd });
+  if (!selected || (await realpath(selected)) !== (await realpath(bin)))
+    throw Error("Installed program missing from product PATH");
+  return { bin: selected, cwd, state, client, env };
 }
 type Installation = Awaited<ReturnType<typeof installedDirectory>>;
 export async function runIdentity(site: Installation) {
-  const child = Bun.spawn([basename(site.bin), "identity", "--state-dir", site.state, "--json"], {
+  const child = Bun.spawn([site.bin, "identity", "--state-dir", site.state, "--json"], {
     cwd: site.cwd,
     env: site.env,
     stdout: "pipe",
@@ -86,22 +89,24 @@ export async function runIdentity(site: Installation) {
 }
 export function startInstalled(site: Installation, mode?: string) {
   const start = performance.now();
-  const child = Bun.spawn(
-    [basename(site.bin), "start", "--state-dir", site.state, ...(mode ? [mode] : [])],
-    {
-      cwd: site.cwd,
-      env: site.env,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
+  const child = Bun.spawn([site.bin, "start", "--state-dir", site.state, ...(mode ? [mode] : [])], {
+    cwd: site.cwd,
+    env: site.env,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const errors = new Response(child.stderr).text();
   const lines = createInterface({ input: Readable.fromWeb(child.stdout), crlfDelay: Infinity });
   const reader = lines[Symbol.asyncIterator]();
   async function next<S extends v.GenericSchema>(schema: S): Promise<v.InferOutput<S>> {
     const result = await within(reader.next(), 15000, "Installed daemon output");
-    if (result.done) throw Error("Daemon exited before record: " + (await errors));
+    if (result.done) {
+      const code = await child.exited;
+      throw Error(
+        `Daemon exited before record (exit ${code}, signal ${child.signalCode ?? "none"}): ${await errors}`,
+      );
+    }
     return v.parse(schema, JSON.parse(result.value));
   }
   async function ready() {
