@@ -1,3 +1,4 @@
+import { ReplayRunRequestSchema, ReplayTurnUpdateSchema } from "./replay";
 import { DeviceRegistrationSchema } from "./device-registration";
 import { AccessChangeSchema, UnusedInviteSchema } from "./access-management";
 import { portSchemas } from "./ports";
@@ -154,6 +155,8 @@ import {
   UpgradeRequestSchema,
 } from "./upgrades";
 export const protocolSchemas = {
+  ReplayRunRequest: ReplayRunRequestSchema,
+  ReplayTurnUpdate: ReplayTurnUpdateSchema,
   DeviceRegistration: DeviceRegistrationSchema,
   ...portSchemas,
   ...previewSchemas,

@@ -230,6 +230,21 @@ function unique<T>(ids: readonly T[], field: string) {
 export function parseScenario(raw: unknown): ReplayScenario {
   assertFakeCredentials(raw);
   const s = v.parse(ScenarioSchema, raw);
+  if (s.format === "kraka-scenario-v2") {
+    for (const env of s.environments) {
+      for (const object of env.objects) {
+        if (object.objectType !== "round") continue;
+        const phase = object.value.attempt.phase;
+        if (phase.kind === "closing" || phase.kind === "finished" || phase.kind === "endedEarly") {
+          phase.endTimeEvidence ??= {
+            source: "unknown",
+            executorEndedAt: null,
+            environmentObservedAt: null,
+          };
+        }
+      }
+    }
+  }
   const envs = unique(
     s.environments.map((e) => e.environmentId),
     "environment",

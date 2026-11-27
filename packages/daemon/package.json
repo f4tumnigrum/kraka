@@ -28,6 +28,7 @@
     "@kraka/adapter-pi": "workspace:*",
     "@kraka/adapter-antigravity": "workspace:*",
     "@kraka/adapter-acp": "workspace:*",
-    "@kraka/adapter-replay": "workspace:*"
+    "@kraka/adapter-replay": "workspace:*",
+    "valibot": "1.5.0"
   }
 }

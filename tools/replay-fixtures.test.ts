@@ -283,3 +283,39 @@ test("locates malformed envelopes and a missing first frame", () => {
   expect(() => parseExecutorSample(jsonl(header))).toThrow("EOF at line 2");
   expect(() => parseExecutorSample("")).toThrow("EOF at line 1");
 });
+
+test("reading a persisted v2 terminal round keeps its time and supplies unknown clock provenance", async () => {
+  const source = await Bun.file(
+    join(scenarioDir, "checkpoint-finishes-after-the-round-ends.json"),
+  ).text();
+  const scenario = parseScenario(JSON.parse(source));
+  const object = scenario.environments[0]?.objects.find((o) => o.objectType === "round");
+  if (object?.objectType !== "round" || object.value.attempt.phase.kind !== "working")
+    throw new Error("Expected fixture working round");
+  const { root, receipt } = object.value.attempt.phase;
+  object.value.attempt.phase = {
+    kind: "endedEarly",
+    root,
+    receipt,
+    endedAt: 1500,
+    reason: "stopped",
+  };
+  const decoded = parseScenario(scenario).environments[0]?.objects.find(
+    (o) => o.objectType === "round",
+  );
+  expect(decoded).toMatchObject({
+    value: {
+      attempt: {
+        phase: {
+          endedAt: 1500,
+          endTimeEvidence: {
+            source: "unknown",
+            executorEndedAt: null,
+            environmentObservedAt: null,
+          },
+        },
+      },
+    },
+  });
+  expect(object.value.attempt.phase).not.toHaveProperty("endTimeEvidence");
+});
