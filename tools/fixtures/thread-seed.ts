@@ -98,7 +98,22 @@ const activity = v.strictObject({
   at: v.number(),
   changes: v.optional(v.array(ToolActivityFileChangeSchema)),
 });
+const sent = new Map<string, Map<number, number>>();
+export function recordFixtureFrame(epoch: string, wire: import("@kraka/protocol").WireMessage) {
+  let streams = sent.get(epoch);
+  if (!streams) {
+    streams = new Map();
+    sent.set(epoch, streams);
+  }
+  if (typeof wire === "string") return;
+  const length = new DataView(wire.buffer, wire.byteOffset).getUint32(0);
+  const frame = JSON.parse(new TextDecoder().decode(wire.subarray(4, 4 + length)));
+  streams.set(frame.streamId, (streams.get(frame.streamId) ?? 0) + wire.length - 4 - length);
+}
 const seedCommand = v.union([
+  v.strictObject({
+    ledger: v.strictObject({ epoch: v.string(), streamId: v.number(), bytes: v.number() }),
+  }),
   v.strictObject({ activity }),
   v.strictObject({
     unattributed: v.strictObject({
@@ -122,7 +137,11 @@ export function serveSeed(store: FirstSendStore) {
     let error: string | null = null;
     try {
       const op = v.parse(seedCommand, command);
-      if ("activity" in op) {
+      if ("ledger" in op) {
+        const streams = sent.get(op.ledger.epoch);
+        if (!streams || (streams.get(op.ledger.streamId) ?? 0) !== op.ledger.bytes)
+          throw Error("Sent-byte ledger mismatch");
+      } else if ("activity" in op) {
         if (store.sync.recordToolActivity(op.activity) === "conflict")
           throw Error("Conflicting activity seed");
       } else if ("unattributed" in op) store.sync.recordUnattributedToolChange(op.unattributed);

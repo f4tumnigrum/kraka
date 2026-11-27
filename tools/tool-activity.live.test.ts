@@ -1,12 +1,7 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
 import * as v from "valibot";
-import {
-  decodeFrame,
-  ThreadIdSchema,
-  ToolActivityHistoryItemSchema,
-  type SyncCursor,
-} from "@kraka/protocol";
+import { decodeFrame, ThreadIdSchema, type SyncCursor } from "@kraka/protocol";
 import { SqliteThreadCache } from "../packages/cli-client/src/thread-cache";
 import { cachedHistory, installHistoryPage, scopeKey } from "../packages/client-runtime/src";
 import { utf8 } from "../packages/daemon/src/flow-socket";
@@ -112,8 +107,12 @@ test(
           const detail = await expand(c, row, row.version);
           const input = (await detail.at("1")).body.input;
           expect(JSON.parse(input.kind === "captured" ? input.json : "null")).toEqual({
+            cwd: "/sample/workspace",
             command: "printf 'amber\\n'",
           });
+          const collapsed = await expand(c, row);
+          expect((await collapsed.at("1")).item.id).toBe(row.id);
+          await collapsed.viewer.close();
           gates.get(13)!.resolve();
           expect((await detail.at("2")).body.output).toMatchObject({
             kind: "partial",
@@ -125,6 +124,7 @@ test(
             exitCode: 0,
             success: true,
           });
+          expect(collapsed.versions.items).toHaveLength(1);
           gates.get(16)!.resolve();
           const delta = await f.events.until((e) => e.kind === "assistant.delta");
           expect(delta).toMatchObject({ roundId: ids.roundId, text: "The marker was " });
@@ -281,102 +281,112 @@ test(
 test(
   "4. Isolation keeps thread summaries moving and denies foreign detail",
   () =>
-    threadFixture(async (f) => {
-      await f.start();
-      const text = "你好\n".repeat(16000);
-      await f.control({ activity: { ...toolFact(f.threadId, "ended", text, 0), inputJson: "{}" } });
-      const installed = Promise.withResolvers<SyncCursor>(),
-        blocked = Promise.withResolvers<void>();
-      let stream = 0,
-        paused = true,
-        pending: (() => void) | undefined,
-        dataBytes = 0;
-      const c = await f.connect("viewer", {
-        installed: installed.resolve,
-        write(w, send) {
-          if (paused && stream && typeof w === "string") {
-            const frame = JSON.parse(w);
-            if (frame.lane === "window" && frame.streamId === stream) {
-              pending = () => send(w);
-              return;
+    threadFixture(
+      async (f) => {
+        await f.start();
+        const text = "你好\n".repeat(16000);
+        await f.control({
+          activity: { ...toolFact(f.threadId, "ended", text, 0), inputJson: "{}" },
+        });
+        const installed = Promise.withResolvers<SyncCursor>(),
+          blocked = Promise.withResolvers<void>();
+        let stream = 0,
+          paused = true,
+          pending: (() => void) | undefined,
+          dataBytes = 0;
+        const c = await f.connect("viewer", {
+          installed: installed.resolve,
+          write(w, send) {
+            if (paused && stream && typeof w === "string") {
+              const frame = JSON.parse(w);
+              if (frame.lane === "window" && frame.streamId === stream) {
+                pending = () => send(w);
+                return;
+              }
             }
-          }
-          send(w);
-        },
-        wire(w) {
-          const frame = decodeFrame(w, utf8);
-          if (frame.lane === "data" && frame.message.kind === "tool.activity.detail")
-            stream = frame.streamId;
-          if (frame.lane === "data" && frame.streamId === stream) {
-            dataBytes += typeof w === "string" ? Buffer.byteLength(w) : w.length;
-            if (dataBytes >= 3800) blocked.resolve();
-          }
-        },
-      });
-      await (await c.client.open(f.threadId, null)).receipt;
-      await installed.promise;
-      const row = installedTool(c);
-      const detail = await expand(c, row);
-      await within(blocked.promise, 5000, "paused detail");
-      const h = new Journal<SyncCursor>();
-      const other = await f.connect("tablet", { installed: (x) => h.push(x) });
-      await (await other.client.open(f.threadId, null)).receipt;
-      await h.until(() => true);
-      const newTitle = "Edited while paused";
-      accepted(
-        await other.client.rpc("thread.rename", { threadId: f.threadId, title: newTitle }),
-        "threadRenamed",
-      );
-      await h.until(() =>
-        Object.values(other.cache.read().rows).some(
-          (r) => r.row?.objectType === "thread" && r.row.value.title === newTitle,
-        ),
-      );
-      expect(detail.versions.items).toBeEmpty();
-      paused = false;
-      pending?.();
-      const body = await detail.at("1");
-      expect(body.body.output).toEqual({ kind: "complete", text });
-      const foreign = v.parse(ThreadIdSchema, "foreign");
-      await f.seed([
-        {
-          objectType: "thread",
-          value: {
-            id: foreign,
-            projectId: "private-project",
-            worktreeId: null,
-            title: "Private",
-            version: "1",
-            lineage: { kind: "root" },
+            send(w);
           },
-        },
-      ]);
-      await f.control({ activity: toolFact(foreign, "ended", "private bytes", 0) });
-      const ready = Promise.withResolvers<SyncCursor>();
-      const owner = await f.connect("foreign-owner", { installed: ready.resolve });
-      const o = await owner.client.open(foreign, null);
-      await o.receipt;
-      const page = await ready.promise;
-      const foreignRow = installedTool(owner);
-      expect(page.scope).toEqual({ kind: "thread", threadId: foreign });
-      const deniedFrames: number[] = [];
-      const denied = await f.connect("tablet", {
-        wire(w) {
-          const frame = decodeFrame(w, utf8);
-          if (frame.lane === "data") deniedFrames.push(frame.streamId);
-        },
-      });
-      await expect(
-        denied.client.readActivity({
-          threadId: foreign,
-          itemId: foreignRow.id,
-          expectedVersion: null,
-          onVersion() {
-            throw Error("Foreign bytes");
+          wire(w) {
+            const frame = decodeFrame(w, utf8);
+            if (frame.lane === "data" && frame.message.kind === "tool.activity.detail")
+              stream = frame.streamId;
+            if (frame.lane === "data" && frame.streamId === stream) {
+              dataBytes += typeof w === "string" ? Buffer.byteLength(w) : w.length;
+              if (dataBytes === 4096) blocked.resolve();
+            }
           },
-        }),
-      ).rejects.toThrow("notFound");
-      expect(deniedFrames).toBeEmpty();
-    }),
+        });
+        await (await c.client.open(f.threadId, null)).receipt;
+        await installed.promise;
+        const row = installedTool(c);
+        const detail = await expand(c, row);
+        await within(blocked.promise, 5000, "paused detail");
+        const h = new Journal<SyncCursor>();
+        const other = await f.connect("tablet", { installed: (x) => h.push(x) });
+        await (await other.client.open(f.threadId, null)).receipt;
+        await h.until(() => true);
+        const newTitle = "Edited while paused";
+        accepted(
+          await other.client.rpc("thread.rename", { threadId: f.threadId, title: newTitle }),
+          "threadRenamed",
+        );
+        await h.until(() =>
+          Object.values(other.cache.read().rows).some(
+            (r) => r.row?.objectType === "thread" && r.row.value.title === newTitle,
+          ),
+        );
+        expect(dataBytes).toBe(4096);
+        expect(detail.versions.items).toBeEmpty();
+        paused = false;
+        pending?.();
+        const body = await detail.at("1");
+        expect(body.body.output).toEqual({ kind: "complete", text });
+        const foreign = v.parse(ThreadIdSchema, "foreign");
+        await f.seed([
+          {
+            objectType: "thread",
+            value: {
+              id: foreign,
+              projectId: "private-project",
+              worktreeId: null,
+              title: "Private",
+              version: "1",
+              lineage: { kind: "root" },
+            },
+          },
+        ]);
+        await f.control({ activity: toolFact(foreign, "ended", "private bytes", 0) });
+        const ready = Promise.withResolvers<SyncCursor>();
+        const owner = await f.connect("foreign-owner", { installed: ready.resolve });
+        const o = await owner.client.open(foreign, null);
+        await o.receipt;
+        const page = await ready.promise;
+        const foreignRow = installedTool(owner);
+        expect(page.scope).toEqual({ kind: "thread", threadId: foreign });
+        const deniedFrames: number[] = [];
+        const denied = await f.connect("tablet", {
+          wire(w) {
+            const frame = decodeFrame(w, utf8);
+            if (frame.lane === "data") deniedFrames.push(frame.streamId);
+          },
+        });
+        await expect(
+          denied.client.readActivity({
+            threadId: foreign,
+            itemId: foreignRow.id,
+            expectedVersion: null,
+            onVersion() {
+              throw Error("Foreign bytes");
+            },
+          }),
+        ).rejects.toThrow("notFound");
+        await f.control({
+          ledger: { epoch: denied.client.hello.connectionId, streamId: 1, bytes: 0 },
+        });
+        expect(deniedFrames).toBeEmpty();
+      },
+      productRoot,
+      true,
+    ),
   30000,
 );

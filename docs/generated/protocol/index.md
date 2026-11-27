@@ -22907,6 +22907,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         }
       ]
     },
+    "fileCoverage": {
+      "const": "unknown"
+    },
     "changes": {
       "type": "array",
       "items": {
@@ -22920,6 +22923,7 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     "status",
     "exitCode",
     "success",
+    "fileCoverage",
     "changes"
   ],
   "additionalProperties": false

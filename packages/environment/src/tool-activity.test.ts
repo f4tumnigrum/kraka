@@ -4,13 +4,24 @@ import * as v from "valibot";
 import {
   EnvironmentIdSchema,
   ThreadIdSchema,
+  AttemptIdSchema,
+  RoundIdSchema,
+  NativeSessionIdSchema,
+  NativeRootTurnIdSchema,
+  ExecutorInstanceIdSchema,
+  NativeItemIdSchema,
   ThreadSchema,
   ObjectVersionSchema,
   TimelineItemIdSchema,
   type ThreadId,
 } from "@kraka/protocol";
 import { ThreadJournal } from "./thread-journal";
-import { readActivity, type ToolActivityActor, type ToolActivityEvent } from "./tool-activity";
+import {
+  recordAdapterActivity,
+  readActivity,
+  type ToolActivityActor,
+  type ToolActivityEvent,
+} from "./tool-activity";
 
 const environmentId = v.parse(EnvironmentIdSchema, "environment");
 const actor = (canRead: (threadId: ThreadId) => boolean): ToolActivityActor => ({
@@ -75,6 +86,10 @@ function read(
   });
 }
 
+function stored(journal: ThreadJournal, ...args: Parameters<ThreadJournal["activityTransfer"]>) {
+  const version = journal.activityTransfer(...args);
+  return version && { ...version, body: journal.activityBody(version) };
+}
 test("stores one stable call across progress, preserves exact bytes, and ignores stale finals", () => {
   const f = store(),
     threadId = f.recordThread("thread");
@@ -128,13 +143,14 @@ test("stores one stable call across progress, preserves exact bytes, and ignores
     ),
   ).toBe("stored");
 
-  const ended = f.journal.toolActivityVersion(threadId, itemId, "4");
+  const ended = stored(f.journal, threadId, itemId, "4");
   expect(ended?.body).toEqual({
     input: { kind: "captured", json: JSON.stringify({ command: "printf 'amber\\n'" }) },
     output: { kind: "complete", text: "😀\n" },
     status: "completed",
     exitCode: 0,
     success: true,
+    fileCoverage: "unknown",
     changes: [],
   });
   const stale = event({
@@ -145,7 +161,7 @@ test("stores one stable call across progress, preserves exact bytes, and ignores
     exitCode: 1,
   });
   expect(f.journal.recordToolActivity(stale)).toBe("unchanged");
-  expect(f.journal.toolActivityVersion(threadId, itemId, "4")?.body.output).toEqual({
+  expect(stored(f.journal, threadId, itemId, "4")?.body.output).toEqual({
     kind: "complete",
     text: "😀\n",
   });
@@ -175,7 +191,7 @@ test("isolates reused native IDs by thread and attempt, and does not assign free
   f.journal.recordToolActivity(
     event({
       threadId: firstThread,
-      eventId: "event-attempt-2",
+      eventId: "event-start",
       callId: "reused",
       attemptId: "attempt-2",
       nativeRootTurnId: "root-2",
@@ -197,11 +213,7 @@ test("isolates reused native IDs by thread and attempt, and does not assign free
     destination: null,
     patch: "+line",
   });
-  const detail = f.journal.toolActivityVersion(
-    firstThread,
-    v.parse(TimelineItemIdSchema, ids[1]),
-    "1",
-  );
+  const detail = stored(f.journal, firstThread, v.parse(TimelineItemIdSchema, ids[1]), "1");
   expect(detail?.body.changes).toEqual([]);
   expect(
     f.db.query("SELECT data FROM tool_activity_scoped_changes WHERE thread_id=?").all(firstThread),
@@ -261,4 +273,139 @@ test("opens exact old versions, returns a replacement for an expired version, an
     }),
   ).toEqual({ kind: "notFound" });
   f.db.close();
+});
+
+test("a failed body commit rolls back its blocks, event and summary and permits retry", () => {
+  const f = store();
+  try {
+    const threadId = f.recordThread("thread");
+    f.journal.recordToolActivity(event());
+    const prior = f.db
+      .query<{ item_id: string }, []>("SELECT item_id FROM tool_activity_sources")
+      .get();
+    const id = v.parse(TimelineItemIdSchema, prior?.item_id);
+    const count = () =>
+      f.db.query<{ n: number }, []>("SELECT COUNT(*) n FROM tool_activity_blocks").get()?.n;
+    const blocks = count();
+    f.db.exec(
+      "CREATE TEMP TRIGGER reject_version BEFORE INSERT ON tool_activity_versions BEGIN SELECT RAISE(ABORT,'interrupted'); END",
+    );
+    const end = event({ eventId: "end", phase: "ended", outputText: "", exitCode: null });
+    expect(() => f.journal.recordToolActivity(end)).toThrow("interrupted");
+    expect(count()).toBe(blocks);
+    expect(read(f.journal, threadId, id)).toMatchObject({
+      current: { version: "1", phase: "started" },
+    });
+    f.db.exec("DROP TRIGGER reject_version");
+    expect(f.journal.recordToolActivity(end)).toBe("stored");
+    expect(stored(f.journal, threadId, id, "2")?.body).toMatchObject({
+      output: { kind: "complete", text: "" },
+      status: "unknown",
+      exitCode: null,
+    });
+  } finally {
+    f.db.close();
+  }
+});
+
+test("session evidence promotes in place and a parent end cannot invent the tool exit", () => {
+  const f = store();
+  try {
+    const threadId = f.recordThread("thread"),
+      attemptId = v.parse(AttemptIdSchema, "attempt"),
+      roundId = v.parse(RoundIdSchema, "round"),
+      sessionId = v.parse(NativeSessionIdSchema, "native"),
+      root = v.parse(NativeRootTurnIdSchema, "root");
+    const binding = {
+      threadId,
+      attemptId,
+      nativeSessionId: sessionId,
+      instanceId: v.parse(ExecutorInstanceIdSchema, "instance"),
+      family: "codex" as const,
+      epoch: 1,
+    };
+    const envelope = {
+      instanceId: binding.instanceId,
+      family: binding.family,
+      epoch: 1,
+      sessionId,
+    };
+    const observation = {
+      ...envelope,
+      eventId: "obs",
+      payload: {
+        kind: "sessionObservation" as const,
+        sourceId: "native-observation",
+        category: "toolActivity" as const,
+        redactedSummary: "read",
+        observedAt: 1,
+      },
+    };
+    recordAdapterActivity(f.journal, binding, roundId, observation, null);
+    recordAdapterActivity(f.journal, binding, roundId, observation, null);
+    const rows = () =>
+      f.journal
+        .read(
+          { threadId, environmentId, canRead: () => true, timelineItems: true, protocolMinor: 1 },
+          "visibility",
+        )
+        .rows.flatMap((r) => (r.row.objectType === "timelineItem" ? [r.row.value] : []));
+    const prior = rows()[0]!;
+    expect(rows()).toHaveLength(1);
+    expect(prior.assignment).toEqual({ kind: "session" });
+    const tool = {
+      ...envelope,
+      eventId: "start",
+      payload: {
+        kind: "toolActivity" as const,
+        callId: v.parse(NativeItemIdSchema, "call"),
+        attemptId,
+        phase: "started" as const,
+        input: { command: "test" },
+        output: null,
+        relationship: { kind: "root" as const, nativeRootTurnId: root },
+        observation: { sourceId: "native-observation", eventId: "obs" },
+      },
+    };
+    expect(() =>
+      recordAdapterActivity(f.journal, binding, roundId, { ...tool, epoch: 2 }, root),
+    ).toThrow("Foreign");
+    recordAdapterActivity(f.journal, binding, roundId, tool, root);
+    expect(rows().find((r) => r.kind === "executorObservation")).toMatchObject({
+      id: prior.id,
+      createdPosition: prior.createdPosition,
+      assignment: { kind: "attempt", attemptId },
+      version: "2",
+    });
+    recordAdapterActivity(
+      f.journal,
+      binding,
+      roundId,
+      {
+        ...envelope,
+        eventId: "parent-end",
+        payload: {
+          kind: "roundEnded",
+          attemptId,
+          nativeRootTurnId: root,
+          endedAt: 10,
+          endTimeEvidence: {
+            source: "executorReported",
+            executorEndedAt: 10,
+            environmentObservedAt: null,
+          },
+          outcome: { reason: "completed", nativeReason: null },
+        },
+      },
+      root,
+    );
+    const active = rows().find((r) => r.kind === "toolActivity")!;
+    expect(stored(f.journal, threadId, active.id, "1")?.body).toMatchObject({
+      status: "running",
+      exitCode: null,
+      output: { kind: "unobserved" },
+    });
+  } finally {
+    f.db.close();
+  }
 });

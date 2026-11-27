@@ -56,8 +56,7 @@ export type ToolActivityActor = {
 export type StoredToolActivityVersion = {
   item: ToolActivityHistoryItem;
   reference: ToolActivityReference;
-  body: ToolActivityBody;
-  bytes: Uint8Array;
+  read: (offset: number, length: number) => Uint8Array;
 };
 
 export type ActivityRead =
@@ -66,18 +65,19 @@ export type ActivityRead =
   | { kind: "unsupported" }
   | { kind: "notFound" };
 
+function summary(text: string) {
+  return text.slice(0, 240).replace(/[\uD800-\uDFFF]/gu, "�");
+}
 function inputSummary(inputJson: string | null) {
   if (inputJson === null) return null;
   const value: unknown = JSON.parse(inputJson);
   if (value && typeof value === "object" && !Array.isArray(value) && "command" in value)
-    return typeof value.command === "string"
-      ? value.command.slice(0, 240)
-      : inputJson.slice(0, 240);
-  return inputJson.slice(0, 240);
+    return typeof value.command === "string" ? summary(value.command) : summary(inputJson);
+  return summary(inputJson);
 }
 
 function outputSummary(body: ToolActivityBody) {
-  return body.output.kind === "unobserved" ? null : body.output.text.slice(0, 240);
+  return body.output.kind === "unobserved" ? null : summary(body.output.text);
 }
 
 function nextPhase(
@@ -149,7 +149,15 @@ function updateBody(current: ToolActivityBody, event: ToolActivityEvent) {
         ),
       ]
     : current.changes;
-  return v.parse(ToolActivityBodySchema, { input, output, status, exitCode, success, changes });
+  return v.parse(ToolActivityBodySchema, {
+    input,
+    output,
+    status,
+    exitCode,
+    success,
+    fileCoverage: "unknown",
+    changes,
+  });
 }
 
 export function evolveToolActivity(
@@ -173,6 +181,7 @@ export function evolveToolActivity(
       status: "running",
       exitCode: null,
       success: null,
+      fileCoverage: "unknown",
       changes: [],
     });
   const body = updateBody(priorBody, event);
@@ -242,9 +251,9 @@ export function readActivity(options: {
 
   const current = found.row.value;
   const requested = expectedVersion ?? current.version;
-  const version = journal.toolActivityVersion(current.threadId, current.id, requested);
+  const version = journal.activityTransfer(current.threadId, current.id, requested);
   if (version) return { kind: "ready", current, version };
-  const replacement = journal.toolActivityVersion(current.threadId, current.id, current.version);
+  const replacement = journal.activityTransfer(current.threadId, current.id, current.version);
   return replacement
     ? { kind: "expired", current, replacement: replacement.reference }
     : { kind: "notFound" };

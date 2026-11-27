@@ -21487,6 +21487,9 @@
             }
           ]
         },
+        "fileCoverage": {
+          "const": "unknown"
+        },
         "changes": {
           "type": "array",
           "items": {
@@ -21500,6 +21503,7 @@
         "status",
         "exitCode",
         "success",
+        "fileCoverage",
         "changes"
       ],
       "additionalProperties": false

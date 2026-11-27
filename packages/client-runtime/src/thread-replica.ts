@@ -19,7 +19,6 @@ import {
   type TransportFrame,
   type SyncCursor,
   type SubscriptionId,
-  ToolActivityContentSchema,
   ToolActivityDetailFrameSchema,
   type ToolActivityDetailFrame,
 } from "@kraka/protocol";
@@ -32,7 +31,11 @@ import {
   type ThreadCache,
   type ThreadCacheStore,
 } from "./thread-pass";
-import type { ToolActivityReadOutcome, ToolActivityView } from "./tool-activity";
+import {
+  decodeActivityBody,
+  type ToolActivityReadOutcome,
+  type ToolActivityView,
+} from "./tool-activity";
 
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: unknown) => void;
@@ -50,15 +53,13 @@ type ActivityReadState = {
   onVersion: (view: ToolActivityView) => void;
   onError?: (error: Error) => void;
   frame: ToolActivityDetailFrame | null;
-  receiving: boolean;
   chain: Promise<void>;
-  opened: boolean;
+  bound: ReturnType<typeof deferred<boolean>>;
   detached: boolean;
   lastVersion: string | null;
 };
 type Host = {
   store: ThreadCacheStore;
-  sha256?: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>;
   read: () => ThreadCache;
   sign: (
     method: SignedRequest["method"],
@@ -292,9 +293,8 @@ export class ThreadReplica {
       onVersion: options.onVersion,
       ...(options.onError ? { onError: options.onError } : {}),
       frame: null,
-      receiving: false,
       chain: Promise.resolve(),
-      opened: false,
+      bound: deferred<boolean>(),
       detached: false,
       lastVersion: null,
     };
@@ -325,7 +325,7 @@ export class ThreadReplica {
         receipt.result.subscriptionId !== subscriptionId
       )
         throw Error("Mismatched activity stream receipt");
-      state.opened = true;
+      state.bound.resolve(true);
       return {
         kind: "opened",
         subscriptionId,
@@ -337,6 +337,7 @@ export class ThreadReplica {
     }
   }
   private closeActivityLocal(streamId: number, state: ActivityReadState) {
+    state.bound.resolve(false);
     state.detached = true;
     this.activityReads.delete(streamId);
     this.parts.delete(streamId);
@@ -360,21 +361,11 @@ export class ThreadReplica {
     frame: ToolActivityDetailFrame,
     bytes: Uint8Array<ArrayBuffer>,
   ) {
+    if (!(await state.bound.promise) || state.detached) return;
     const ref = frame.reference;
-    if (
-      !this.host.sha256 ||
-      (await this.host.sha256(bytes)) !== ref.sha256 ||
-      bytes.length !== ref.byteLength
-    )
-      throw Error("Tool activity body digest mismatch");
-    const { item, body } = v.parse(
-      ToolActivityContentSchema,
-      JSON.parse(this.peer.port.utf8.decode(bytes)),
-    );
-    if (item.id !== ref.itemId || item.threadId !== ref.threadId || item.version !== ref.version)
-      throw Error("Unexpected body identity");
+    const view = await decodeActivityBody(ref, bytes, this.peer.port.utf8);
+    const { item } = view;
     if (state.detached || this.activityReads.get(streamId) !== state) return;
-    const view = { item, reference: ref, body };
     await this.host.store.transact((old) => {
       if (state.detached) return { next: old, result: undefined };
       const key = JSON.stringify([ref.threadId, ref.itemId]);
@@ -448,15 +439,9 @@ export class ThreadReplica {
       return;
     }
     if (m.kind === "transport.content") {
-      const activity = this.activityReads.get(m.streamId);
-      const currentFrame = activity?.frame;
       if (
-        (!activity && !this.streams.has(m.streamId) && !this.reads.has(m.streamId)) ||
-        (!activity && m.byteLength > TRANSPORT_LIMITS.maxPendingDataBytes) ||
-        (activity &&
-          (!currentFrame ||
-            currentFrame.transferId !== m.transferId ||
-            currentFrame.reference.byteLength !== m.byteLength))
+        (!this.streams.has(m.streamId) && !this.reads.has(m.streamId)) ||
+        m.byteLength > TRANSPORT_LIMITS.maxPendingDataBytes
       )
         throw Error("Unexpected logical page");
       this.peer.receive.declare(m.streamId, m.transferId, m.byteLength);
@@ -466,7 +451,6 @@ export class ThreadReplica {
         chunks: [],
         transferId: m.transferId,
       });
-      if (activity) activity.receiving = true;
       return;
     }
     this.host.received?.(m.kind, m);
@@ -524,7 +508,6 @@ export class ThreadReplica {
         const frame = activity.frame;
         if (!frame) throw Error("Missing activity detail header");
         activity.frame = null;
-        activity.receiving = false;
         this.peer.control(this.peer.receive.consume(f.streamId, size));
         activity.chain = activity.chain
           .then(() => this.installActivityBody(f.streamId, activity, frame, data))
@@ -544,7 +527,6 @@ export class ThreadReplica {
         frame.subscriptionId !== activity.subscriptionId ||
         frame.reference.itemId !== activity.request.payload.itemId ||
         activity.frame ||
-        activity.receiving ||
         (activity.lastVersion !== null &&
           BigInt(frame.reference.version) <= BigInt(activity.lastVersion)) ||
         (activity.lastVersion === null &&
@@ -552,6 +534,13 @@ export class ThreadReplica {
           frame.reference.version !== activity.request.payload.expectedVersion)
       )
         throw Error("Unexpected tool activity detail version");
+      this.peer.receive.declare(f.streamId, frame.transferId, frame.reference.byteLength);
+      this.parts.set(f.streamId, {
+        chunks: [],
+        length: frame.reference.byteLength,
+        received: 0,
+        transferId: frame.transferId,
+      });
       activity.frame = frame;
       activity.lastVersion = frame.reference.version;
       return;

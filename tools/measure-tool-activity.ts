@@ -31,11 +31,28 @@ export async function measureToolActivity(
         start = 0,
         end = 0;
       const hash = new Bun.CryptoHasher("sha256");
+      const sentAt = new Map<string, number>(),
+        gotAt = new Map<string, number>();
       const c = await f.connect("desktop", {
         installed: installed.resolve,
+        write(w, send) {
+          if (active && typeof w === "string") {
+            const { message } = JSON.parse(w);
+            if (message?.method === "thread.rename")
+              sentAt.set(message.commandId, performance.now());
+          }
+          send(w);
+        },
         wire(w) {
           if (!active) return;
+          const now = performance.now();
           const frame = decodeFrame(w, utf8);
+          if (
+            frame.lane === "control" &&
+            frame.message.kind === "accepted" &&
+            frame.message.result.kind === "threadRenamed"
+          )
+            gotAt.set(frame.message.commandId, now);
           if (frame.lane === "data" && frame.message.kind === "tool.activity.detail")
             declared = frame.message.reference.byteLength;
           if (!("payload" in frame)) return;
@@ -58,14 +75,16 @@ export async function measureToolActivity(
       active = true;
       const timer = setInterval(() => {
         if (!start || end) return;
-        const sent = performance.now();
         const r = c.client
           .rpc("thread.rename", {
             threadId: f.threadId,
             title: "transfer-" + trial + "-" + receipts.length,
           })
           .then((receipt) => {
-            const received = performance.now();
+            const sent = sentAt.get(receipt.commandId),
+              received = gotAt.get(receipt.commandId);
+            if (sent === undefined || received === undefined)
+              throw Error("Missing command wire timestamps");
             accepted(receipt, "threadRenamed");
             return { id: receipt.commandId.toString(), sent, received };
           });
@@ -75,7 +94,9 @@ export async function measureToolActivity(
       try {
         const v = await (await expand(c, item)).at("1");
         clearInterval(timer);
-        const matched = await Promise.all(receipts);
+        const matched = (await Promise.all(receipts)).filter(
+          (r) => r.sent >= start && r.sent <= end,
+        );
         if (
           !matched.length ||
           !start ||

@@ -31,6 +31,7 @@ export const ToolActivityBodySchema = v.strictObject({
   status: v.picklist(["running", "completed", "failed", "unknown"]),
   exitCode: v.nullable(v.pipe(v.number(), v.safeInteger())),
   success: v.nullable(v.boolean()),
+  fileCoverage: v.literal("unknown"),
   changes: v.array(ToolActivityFileChangeSchema),
 });
 

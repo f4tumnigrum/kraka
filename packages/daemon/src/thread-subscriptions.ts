@@ -186,20 +186,34 @@ export class ThreadSubscriptions {
       dirty = false;
     let header: ToolActivityDetailFrame | null = null,
       chunk: PullFrame | null = null;
+    let recheck = false;
     const off = this.store.sync.subscribe(() => {
+      recheck = true;
       dirty = true;
       this.wake();
     });
     sub.off = off;
     pull = (offset, capacity) => {
+      if (recheck) {
+        recheck = false;
+        if (
+          !this.access.canRead(threadId) ||
+          (source !== threadId &&
+            readActivity({
+              actor: this.activityActor(),
+              journal: this.store.sync,
+              ...request.payload,
+              expectedVersion: null,
+            }).kind !== "ready")
+        ) {
+          if (sub) this.endActivity(sub, "authorizationRevoked");
+          return null;
+        }
+      }
       if (terminal) return null;
       if (!stored) {
         if (!dirty) return null;
-        const version = this.store.sync.toolActivityVersion(
-          source,
-          itemId,
-          String(BigInt(last) + 1n),
-        );
+        const version = this.store.sync.activityTransfer(source, itemId, String(BigInt(last) + 1n));
         if (!version) {
           dirty = false;
           return null;
@@ -226,32 +240,24 @@ export class ThreadSubscriptions {
         return frame;
       }
       if (!chunk) {
-        const { bytes, item } = stored;
-        this.peer.control({
-          kind: "transport.content",
-          streamId,
-          transferId: header.transferId,
-          byteLength: bytes.length,
-          encoding: "utf8Json",
-        });
+        const { reference, item, read } = stored;
         chunk = binarySource({
           epoch: this.peer.epoch,
           streamId,
           transferId: header.transferId,
-          length: bytes.length,
+          length: reference.byteLength,
           utf8: this.peer.port.utf8,
           read: (start, n) => {
-            if (start + n === bytes.length) {
+            if (start + n === reference.byteLength) {
               stored = null;
               chunk = null;
               header = null;
               terminal = item.phase === "ended";
               dirty = true;
             }
-            return bytes.subarray(start, start + n);
+            return read(start, n);
           },
         });
-        return null;
       }
       return chunk(offset, capacity);
     };

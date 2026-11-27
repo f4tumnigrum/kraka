@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import * as v from "valibot";
 import {
+  TRANSPORT_LIMITS,
   HistoryPageSchema,
   ExecutorSessionObservationSchema,
   type ExecutorSessionObservation,
@@ -90,8 +91,9 @@ export class ThreadJournal {
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
      CREATE TABLE IF NOT EXISTS tool_activity_sources(thread_id TEXT NOT NULL,instance_id TEXT NOT NULL,session_id TEXT NOT NULL,epoch INTEGER NOT NULL,call_id TEXT NOT NULL,attempt_id TEXT NOT NULL,item_id TEXT NOT NULL,PRIMARY KEY(thread_id,instance_id,session_id,epoch,call_id,attempt_id));
-     CREATE TABLE IF NOT EXISTS tool_activity_events(thread_id TEXT NOT NULL,instance_id TEXT NOT NULL,session_id TEXT NOT NULL,epoch INTEGER NOT NULL,event_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(thread_id,instance_id,session_id,epoch,event_id));
-     CREATE TABLE IF NOT EXISTS tool_activity_versions(thread_id TEXT NOT NULL,item_id TEXT NOT NULL,version TEXT NOT NULL,body BLOB NOT NULL,summary TEXT NOT NULL,byte_length INTEGER NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(thread_id,item_id,version));
+     CREATE TABLE IF NOT EXISTS tool_activity_events(thread_id TEXT NOT NULL,instance_id TEXT NOT NULL,session_id TEXT NOT NULL,epoch INTEGER NOT NULL,attempt_id TEXT NOT NULL,event_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(thread_id,instance_id,session_id,epoch,attempt_id,event_id));
+     CREATE TABLE IF NOT EXISTS tool_activity_versions(thread_id TEXT NOT NULL,item_id TEXT NOT NULL,version TEXT NOT NULL,summary TEXT NOT NULL,byte_length INTEGER NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(thread_id,item_id,version));
+     CREATE TABLE IF NOT EXISTS tool_activity_blocks(digest TEXT NOT NULL,part INTEGER NOT NULL,data BLOB NOT NULL, PRIMARY KEY(digest,part));
      CREATE TABLE IF NOT EXISTS tool_activity_scoped_changes(thread_id TEXT NOT NULL,event_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread_id,event_id));`);
       if (this.meta()) return;
       db.run("INSERT INTO sync_meta VALUES(1,?,'0','0')", [crypto.randomUUID()]);
@@ -222,10 +224,17 @@ export class ThreadJournal {
         const { at: _at, ...fact } = event;
         const eventPayload = createHash("sha256").update(JSON.stringify(fact)).digest("hex");
         const priorEvent = this.db
-          .query<{ payload: string }, [string, string, string, number, string]>(
-            "SELECT payload FROM tool_activity_events WHERE thread_id=? AND instance_id=? AND session_id=? AND epoch=? AND event_id=?",
+          .query<{ payload: string }, [string, string, string, number, string, string]>(
+            "SELECT payload FROM tool_activity_events WHERE thread_id=? AND instance_id=? AND session_id=? AND epoch=? AND attempt_id=? AND event_id=?",
           )
-          .get(event.threadId, event.instanceId, event.nativeSessionId, event.epoch, event.eventId);
+          .get(
+            event.threadId,
+            event.instanceId,
+            event.nativeSessionId,
+            event.epoch,
+            event.attemptId,
+            event.eventId,
+          );
         if (priorEvent) return priorEvent.payload === eventPayload ? "unchanged" : "conflict";
 
         const source = this.db
@@ -243,22 +252,15 @@ export class ThreadJournal {
         const id = source
           ? v.parse(TimelineItemIdSchema, source.item_id)
           : v.parse(TimelineItemIdSchema, crypto.randomUUID());
-        const latest = source
-          ? this.db
-              .query<{ body: Uint8Array; summary: string }, [string, string]>(
-                "SELECT body,summary FROM tool_activity_versions WHERE thread_id=? AND item_id=? ORDER BY length(version) DESC,version DESC LIMIT 1",
-              )
-              .get(event.threadId, id)
-          : undefined;
-        const previous = latest
-          ? {
-              item: v.parse(ToolActivityHistoryItemSchema, JSON.parse(latest.summary)),
-              body: v.parse(
-                ToolActivityBodySchema,
-                JSON.parse(Buffer.from(latest.body).toString("utf8")).body,
-              ),
-            }
-          : null;
+        const latest =
+          source &&
+          this.db
+            .query<{ version: string }, [string, string]>(
+              "SELECT version FROM tool_activity_versions WHERE thread_id=? AND item_id=? ORDER BY length(version) DESC,version DESC LIMIT 1",
+            )
+            .get(event.threadId, id);
+        const stored = latest && this.activityTransfer(event.threadId, id, latest.version);
+        const previous = stored ? { item: stored.item, body: this.activityBody(stored) } : null;
         const meta = this.meta();
         if (!meta) throw Error("Missing sync clock");
         const next = evolveToolActivity(previous, event, {
@@ -266,11 +268,12 @@ export class ThreadJournal {
           createdPosition: v.parse(SyncPositionSchema, String(BigInt(meta.head) + 1n)),
         });
 
-        this.db.run("INSERT INTO tool_activity_events VALUES(?,?,?,?,?,?)", [
+        this.db.run("INSERT INTO tool_activity_events VALUES(?,?,?,?,?,?,?)", [
           event.threadId,
           event.instanceId,
           event.nativeSessionId,
           event.epoch,
+          event.attemptId,
           event.eventId,
           eventPayload,
         ]);
@@ -285,11 +288,18 @@ export class ThreadJournal {
           byteLength: bodyBytes.length,
           sha256,
         });
-        this.db.run("INSERT INTO tool_activity_versions VALUES(?,?,?,?,?,?,?)", [
+        const blockSize = TRANSPORT_LIMITS.initialFlowWindowBytes;
+        const insert = this.db.query("INSERT INTO tool_activity_blocks VALUES(?,?,?)");
+        for (let offset = 0; offset < bodyBytes.length; offset += blockSize)
+          insert.run(
+            reference.sha256,
+            offset / blockSize,
+            bodyBytes.subarray(offset, offset + blockSize),
+          );
+        this.db.run("INSERT INTO tool_activity_versions VALUES(?,?,?,?,?,?)", [
           event.threadId,
           next.item.id,
           next.item.version,
-          bodyBytes,
           JSON.stringify(next.item),
           reference.byteLength,
           reference.sha256,
@@ -333,21 +343,17 @@ export class ThreadJournal {
       JSON.stringify(event),
     ]);
   }
-  toolActivityVersion(
+  activityTransfer(
     threadId: ThreadId,
     itemId: TimelineItemId,
     version: string,
   ): StoredToolActivityVersion | null {
     const row = this.db
-      .query<
-        { body: Uint8Array; summary: string; byte_length: number; sha256: string },
-        [string, string, string]
-      >(
-        "SELECT body,summary,byte_length,sha256 FROM tool_activity_versions WHERE thread_id=? AND item_id=? AND version=?",
+      .query<{ summary: string; byte_length: number; sha256: string }, [string, string, string]>(
+        "SELECT summary,byte_length,sha256 FROM tool_activity_versions WHERE thread_id=? AND item_id=? AND version=?",
       )
       .get(threadId, itemId, version);
     if (!row) return null;
-    const bytes = new Uint8Array(row.body);
     const item = v.parse(ToolActivityHistoryItemSchema, JSON.parse(row.summary));
     const reference = v.parse(ToolActivityReferenceSchema, {
       threadId,
@@ -356,12 +362,39 @@ export class ThreadJournal {
       byteLength: row.byte_length,
       sha256: row.sha256,
     });
+    const blockSize = TRANSPORT_LIMITS.initialFlowWindowBytes;
+    const get = this.db.query<{ data: Uint8Array }, [string, number]>(
+      "SELECT data FROM tool_activity_blocks WHERE digest=? AND part=?",
+    );
+    let block: Uint8Array = new Uint8Array(0),
+      loaded = -1;
     return {
       item,
       reference,
-      body: v.parse(ToolActivityBodySchema, JSON.parse(Buffer.from(bytes).toString("utf8")).body),
-      bytes,
+      read(start, length) {
+        const result = new Uint8Array(length);
+        for (let written = 0; written < length; ) {
+          const offset = start + written,
+            part = Math.floor(offset / blockSize);
+          if (part !== loaded) {
+            const found = get.get(row.sha256, part);
+            if (!found) throw Error("Missing activity body block");
+            block = found.data;
+            loaded = part;
+          }
+          const from = offset % blockSize,
+            n = Math.min(block.length - from, length - written);
+          if (n <= 0) throw Error("Incomplete activity body block");
+          result.set(block.subarray(from, from + n), written);
+          written += n;
+        }
+        return result;
+      },
     };
+  }
+  activityBody(stored: StoredToolActivityVersion) {
+    const bytes = stored.read(0, stored.reference.byteLength);
+    return v.parse(ToolActivityBodySchema, JSON.parse(Buffer.from(bytes).toString("utf8")).body);
   }
   read(scope: AuthorizedScope, visibility: string): ThreadReadView {
     return this.db.transaction((): ThreadReadView => {

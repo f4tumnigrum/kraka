@@ -30,6 +30,7 @@ export type Fault =
   | "registered"
   | "beforeSetup"
   | "setupExited"
+  | "activity-ledger"
   | "resume"
   | "recovery";
 export async function configureLocalOwner(

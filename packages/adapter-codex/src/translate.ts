@@ -140,7 +140,7 @@ export function translateCodexFrame(
             callId: item.id,
             relationship: { kind: "root", nativeRootTurnId: root },
             phase: start ? "started" : "ended",
-            input: start ? { command: item.command } : null,
+            input: start ? { command: item.command, ...(item.cwd ? { cwd: item.cwd } : {}) } : null,
             output: start
               ? null
               : {

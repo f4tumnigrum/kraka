@@ -93,6 +93,7 @@ const item = v.variant("type", [
     type: v.literal("commandExecution"),
     id: NativeItemIdSchema,
     command: v.string(),
+    cwd: v.optional(v.string()),
     status: v.optional(v.string()),
     truncated: v.optional(v.boolean()),
     aggregatedOutput: v.nullable(v.string()),

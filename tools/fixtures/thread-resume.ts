@@ -147,7 +147,6 @@ export async function connectReplica(
                   },
                 }
               : cache),
-          sha256: async (bytes) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
           read: () => cache.read(),
           id: () => v.parse(SubscriptionIdSchema, crypto.randomUUID()),
           async sign(method, payload) {
@@ -223,9 +222,10 @@ export async function until(done: () => boolean, label: string) {
 export async function threadFixture<T>(
   body: (f: Awaited<ReturnType<typeof setup>>) => Promise<T>,
   root = productRoot,
+  recordSentBytes = false,
 ) {
   return withState(async (dir) => {
-    const f = await setup(dir, root);
+    const f = await setup(dir, root, recordSentBytes);
     try {
       return await body(f);
     } finally {
@@ -233,7 +233,7 @@ export async function threadFixture<T>(
     }
   });
 }
-async function setup(dir: string, root: string) {
+async function setup(dir: string, root: string, recordSentBytes: boolean) {
   const pairing = await startPairedProject({
     stateDir: dir,
     projectId: "project-notes",
@@ -247,7 +247,7 @@ async function setup(dir: string, root: string) {
       projectDirectory: join(dir, "work"),
       adapter: "replay",
       root,
-      point: "resume",
+      point: recordSentBytes ? "activity-ledger" : "resume",
       ipc(message) {
         const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
         const waiter = pending.get(reply.id);

@@ -90,6 +90,7 @@ export async function startWriter<H extends object>(
   } | null,
   lifecycle?: {
     preparation?: PreparationHook;
+    observeFrame?: (epoch: string, wire: import("@kraka/protocol").WireMessage) => void;
     inspectPage?: (
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
@@ -302,6 +303,13 @@ export async function startWriter<H extends object>(
             lifecycle?.inspectPage,
           );
           if (!app) return new Response(null, { status: 403 });
+          const observe = lifecycle?.observeFrame;
+          if (observe)
+            app.write = (wire, send) => {
+              const result = send(wire);
+              if (result !== 0) observe(app.epoch, wire);
+              return result;
+            };
           if (server.upgrade(req, { data: { app, flow: null } })) return;
           return new Response(null, { status: 400 });
         }
