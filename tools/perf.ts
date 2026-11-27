@@ -83,7 +83,12 @@ function measured(base: ReportBase, seriesCounts: Counts, observationOnly = fals
       throw new Error(`Expected ${name}=${expected}, got ${base.actual[name]}`);
   }
   const summary = base.thresholds.map((t) =>
-    summarize(base.samples, t.series, t.unit, seriesCounts[t.series] ?? 0),
+    summarize(
+      base.samples.filter((s) => s.unit === t.unit),
+      t.series,
+      t.unit,
+      seriesCounts[t.series] ?? 0,
+    ),
   );
   const breach = base.thresholds.some((t, i) => {
     const s = summary[i];
@@ -321,6 +326,9 @@ export async function runBudget({
   let capability: Promise<string> | undefined;
   const commandSurface = () => (capability ??= checkCommandSurface(root));
   const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
+  const subscriptions = await Bun.file(
+    join(root, "packages/daemon/src/thread-connection.ts"),
+  ).exists();
   const selected = metricIds.filter((m) => !metrics.length || metrics.includes(m));
   const workloads = selected.flatMap((metric): Pick<ReportBase, "metric" | "variant">[] =>
     metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
@@ -376,6 +384,10 @@ export async function runBudget({
             );
           report = measured(base, { fresh: 10, reused: 10 });
         }
+      } else if ((metric === "P3" || metric === "P4") && subscriptions) {
+        const { measureThreadResume } = await import("./measure-thread-resume");
+        const series = await measureThreadResume(base, root, metric);
+        report = measured(base, series as Record<string, number>);
       } else if (
         durable &&
         role === "baseline" &&

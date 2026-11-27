@@ -18,7 +18,7 @@ import { connectFirstSend, fixtureActor, fixtureSigner } from "./first-send-clie
 import { entry, fixture, sampleRequest, terminate, within } from "./replay-process";
 
 export const productRoot = resolve(import.meta.dir, "../..");
-export type Fault = "locked" | "beforeCommit" | "afterCommit" | "externalWrite" | "peer";
+export type Fault = "locked" | "beforeCommit" | "afterCommit" | "externalWrite" | "peer" | "resume";
 export function configureLocalOwner(
   stateDir: string,
   permissions = ["workspace.change", "thread.send"],

@@ -1,3 +1,4 @@
+import { scenarioInput, serveSeed } from "./thread-seed";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
@@ -68,10 +69,22 @@ const writer = await startWriter(
   state,
   { adapter, expectedText: recording.expectedText, modelId: recording.modelId },
   {
+    ...(point === "resume"
+      ? {
+          threadCommand: scenarioInput,
+          inspectPage(page: import("@kraka/protocol").SubscriptionPage) {
+            if (!existsSync(join(state, "unknown-change"))) return page;
+            return JSON.parse(
+              JSON.stringify({ ...page, changes: [{ kind: "future.required" }, ...page.changes] }),
+            );
+          },
+        }
+      : {}),
     locked() {
       barrier("locked");
     },
     opened(store) {
+      if (point === "resume") serveSeed(store, state);
       store.beforeCommit = (method) => {
         if (method === "thread.start") barrier("beforeCommit");
       };

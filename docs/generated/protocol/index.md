@@ -11698,6 +11698,26 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "type": "object",
       "properties": {
         "objectType": {
+          "const": "timelineItem"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "id": {
+          "$ref": "#/$defs/TimelineItemId"
+        }
+      },
+      "required": [
+        "objectType",
+        "threadId",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "objectType": {
           "const": "environment"
         },
         "id": {

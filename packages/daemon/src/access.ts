@@ -12,7 +12,12 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import * as v from "valibot";
-import { AccessStore, type HostDecision, type TrustedHostPairing } from "@kraka/environment";
+import {
+  directoryEnvironmentId,
+  AccessStore,
+  type HostDecision,
+  type TrustedHostPairing,
+} from "@kraka/environment";
 import {
   EnvironmentIdentitySchema,
   DeviceIdSchema,
@@ -74,7 +79,7 @@ export async function openAccessHost(
         if (previous) return previous;
         const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
         const row = {
-          id: crypto.randomUUID(),
+          id: directoryEnvironmentId(dir),
           secret: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
         };
         db.run("INSERT INTO host_identity VALUES(1,?,?)", [row.id, row.secret]);

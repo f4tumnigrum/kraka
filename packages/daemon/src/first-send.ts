@@ -1,3 +1,7 @@
+import { openAccessHost } from "./access";
+import { threadConnection, type FixtureThreadCommand } from "./thread-connection";
+import { attachFlow, type SocketApplication } from "./flow-socket";
+import { checkBusinessUpgrade } from "@kraka/protocol";
 import { CodexInstances, type CodexSelection } from "./codex-instances";
 import { dispatchCodex } from "./durable-codex";
 import { createPublicKey, verify, randomBytes } from "node:crypto";
@@ -41,11 +45,16 @@ export const localOwnerSchema = v.strictObject({
   publicKey: v.string(),
   permissions: v.array(PermissionItemSchema),
 });
-type Session = { connectionId: string; challengeId: string; challenge: string; sequence: number };
+type Commands = { connectionId: string; challengeId: string; challenge: string; sequence: number };
+type Session = Commands | { app: SocketApplication; flow: ReturnType<typeof attachFlow> | null };
 export async function startWriter<H extends object>(
   stateDir: string,
   replay: { adapter: ProviderAdapter<"replay", H>; expectedText: string; modelId: string } | null,
   lifecycle?: {
+    inspectPage?: (
+      page: import("@kraka/protocol").SubscriptionPage,
+    ) => import("@kraka/protocol").SubscriptionPage;
+    threadCommand?: FixtureThreadCommand;
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
     committed?: (request: SignedRequest, receipt: CommandReceipt) => void;
@@ -59,6 +68,7 @@ export async function startWriter<H extends object>(
   );
   if (lock.kind !== "writer") return lock;
   let store: FirstSendStore | undefined;
+  let auth: Awaited<ReturnType<typeof openAccessHost>> | undefined;
   try {
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease);
@@ -78,6 +88,8 @@ export async function startWriter<H extends object>(
       environmentId: lock.lease.environmentId,
       allows: (permission: PermissionItem) => granted.has(permission),
     };
+    const authHost = await openAccessHost(stateDir);
+    auth = authHost;
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
     const controller = new AbortController();
@@ -85,10 +97,24 @@ export async function startWriter<H extends object>(
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(req, server) {
+      async fetch(req, server) {
         const url = new URL(req.url);
         if (!accepting || req.headers.has("Origin") || url.hostname !== "127.0.0.1")
           return new Response(null, { status: 403 });
+        if (url.pathname === "/ws") {
+          const admission = checkBusinessUpgrade(url.pathname + url.search, [], [], URL);
+          if (admission.kind === "reject") return new Response(null, { status: admission.status });
+          const app = await threadConnection(
+            transaction,
+            authHost,
+            admission.nonce,
+            lifecycle?.threadCommand,
+            lifecycle?.inspectPage,
+          );
+          if (!app) return new Response(null, { status: 403 });
+          if (server.upgrade(req, { data: { app, flow: null } })) return;
+          return new Response(null, { status: 400 });
+        }
         if (/^\/instance\/[0-9a-f]{48}$/.test(url.pathname)) {
           if (url.search === "?idle" && turns.size) return new Response(null, { status: 409 });
           const answer = lock.confirm(url.pathname.slice(10) + url.search);
@@ -113,6 +139,10 @@ export async function startWriter<H extends object>(
         data: {} as Session,
         open(ws) {
           sockets.add(ws);
+          if ("app" in ws.data) {
+            ws.data.flow = attachFlow(ws.data.app, ws);
+            return;
+          }
           const { sequence, ...challenge } = ws.data;
           ws.send(
             JSON.stringify({
@@ -124,6 +154,12 @@ export async function startWriter<H extends object>(
         },
         async message(ws, frame) {
           try {
+            if ("app" in ws.data) {
+              if (!accepting) throw Error("Writer closed");
+              ws.data.flow?.peer.input(frame);
+              ws.data.flow?.wake();
+              return;
+            }
             if (!accepting || typeof frame !== "string") {
               ws.close(1008);
               return;
@@ -272,7 +308,14 @@ export async function startWriter<H extends object>(
             ws.close(1007);
           }
         },
+        drain(ws) {
+          if ("app" in ws.data) {
+            ws.data.flow?.peer.drain();
+            ws.data.flow?.wake();
+          }
+        },
         close(ws) {
+          if ("app" in ws.data) ws.data.flow?.dispose();
           sockets.delete(ws);
         },
       },
@@ -298,6 +341,7 @@ export async function startWriter<H extends object>(
           await codex.close();
         } finally {
           try {
+            authHost.close();
             transaction.db.close();
           } finally {
             lock.close();
@@ -307,6 +351,7 @@ export async function startWriter<H extends object>(
     };
   } catch (e) {
     try {
+      auth?.close();
       store?.db.close();
     } finally {
       lock.close();

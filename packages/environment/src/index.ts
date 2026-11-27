@@ -42,3 +42,6 @@ export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
 export * from "./executor-registry";
+
+export * from "./thread-pass";
+export * from "./environment-identity";

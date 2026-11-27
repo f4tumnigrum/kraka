@@ -20,6 +20,7 @@ import {
   RoundIdSchema,
   ThreadIdSchema,
   TodoRequestIdSchema,
+  TimelineItemIdSchema,
   WorktreeIdSchema,
 } from "./ids";
 
@@ -191,6 +192,11 @@ export type WorkRelationship = v.InferOutput<typeof WorkRelationshipSchema>;
 export type ExecutorHandoff = Extract<WorkRelationship, { kind: "providerHandoff" }>;
 
 export const ObjectKeySchema = v.variant("objectType", [
+  v.strictObject({
+    objectType: v.literal("timelineItem"),
+    threadId: ThreadIdSchema,
+    id: TimelineItemIdSchema,
+  }),
   v.strictObject({ objectType: v.literal("environment"), id: EnvironmentIdSchema }),
   v.strictObject({ objectType: v.literal("project"), id: ProjectIdSchema }),
   v.strictObject({ objectType: v.literal("worktree"), id: WorktreeIdSchema }),
