@@ -85,3 +85,4 @@ export type { QueueEditDraft } from "./queue-draft";
 export * from "./session";
 export * from "./registration";
 export * from "./subscription-session";
+export * from "./routes";

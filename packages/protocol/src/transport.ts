@@ -94,10 +94,9 @@ export type AuthorizationExpectation = Pick<
   v.InferOutput<typeof SessionAuthorizedSchema>,
   "principal" | "signer" | "protocolVersion" | "features"
 >;
-export function matchesAuthorizedConfiguration(
+export function matchesAuthorization(
   hello: ServerHello,
   authorized: v.InferOutput<typeof SessionAuthorizedSchema>,
-  configuration: v.InferOutput<typeof SessionConfigurationSchema>,
   expected: AuthorizationExpectation,
 ): boolean {
   const { principal, signer, protocolVersion, features } = authorized;
@@ -122,10 +121,7 @@ export function matchesAuthorizedConfiguration(
   const selected = new Set(expected.features);
   return (
     hello.connectionId === authorized.connectionId &&
-    authorized.connectionId === configuration.connectionId &&
     hello.identity.id === authorized.environmentId &&
-    authorized.environmentId === configuration.environment.id &&
-    authorized.environmentSessionId === configuration.environmentSessionId &&
     identityMatches &&
     principal.id === expected.principal.id &&
     signer.keyId === expected.signer.keyId &&
@@ -136,6 +132,19 @@ export function matchesAuthorizedConfiguration(
     features.length === selected.size &&
     new Set(features).size === features.length &&
     features.every((feature) => selected.has(feature) && hello.features.includes(feature))
+  );
+}
+export function matchesAuthorizedConfiguration(
+  hello: ServerHello,
+  authorized: v.InferOutput<typeof SessionAuthorizedSchema>,
+  configuration: v.InferOutput<typeof SessionConfigurationSchema>,
+  expected: AuthorizationExpectation,
+): boolean {
+  return (
+    matchesAuthorization(hello, authorized, expected) &&
+    authorized.connectionId === configuration.connectionId &&
+    authorized.environmentId === configuration.environment.id &&
+    authorized.environmentSessionId === configuration.environmentSessionId
   );
 }
 
