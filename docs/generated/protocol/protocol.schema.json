@@ -12408,6 +12408,321 @@
         }
       ]
     },
+    "ReplayRunRequest": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "replay.run"
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "permission": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "input": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "references": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MessageReference"
+              }
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AttachmentReference"
+              }
+            }
+          },
+          "required": [
+            "text",
+            "references",
+            "attachments"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "kind",
+        "commandId",
+        "permission",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "ReplayTurnUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "round.started"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "nativeSessionId": {
+              "$ref": "#/$defs/NativeSessionId"
+            },
+            "nativeRootTurnId": {
+              "$ref": "#/$defs/NativeRootTurnId"
+            },
+            "startedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "phase": {
+              "const": "working"
+            },
+            "selectedMode": {
+              "const": "ask"
+            },
+            "effectiveMode": {
+              "const": "ask"
+            },
+            "supportedModes": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "ask"
+                }
+              ],
+              "minItems": 1,
+              "items": false
+            },
+            "enforcement": {
+              "const": "adapter"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "nativeSessionId",
+            "nativeRootTurnId",
+            "startedAt",
+            "phase",
+            "selectedMode",
+            "effectiveMode",
+            "supportedModes",
+            "enforcement"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tool.started"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "callId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "callId",
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tool.output"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "callId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "callId",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tool.ended"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "callId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "exitCode": {
+              "type": "integer"
+            },
+            "output": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "callId",
+            "exitCode",
+            "output"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "assistant.delta"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "itemId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "role": {
+              "const": "assistant"
+            },
+            "streaming": {
+              "const": true
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "itemId",
+            "role",
+            "streaming",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "assistant.final"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "itemId": {
+              "$ref": "#/$defs/NativeItemId"
+            },
+            "role": {
+              "const": "assistant"
+            },
+            "streaming": {
+              "const": false
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "itemId",
+            "role",
+            "streaming",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "round.ended"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "attemptId": {
+              "$ref": "#/$defs/AttemptId"
+            },
+            "nativeRootTurnId": {
+              "$ref": "#/$defs/NativeRootTurnId"
+            },
+            "endedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "outcome": {
+              "const": "completed"
+            },
+            "phase": {
+              "const": "closing"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "attemptId",
+            "nativeRootTurnId",
+            "endedAt",
+            "outcome",
+            "phase"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "RepositoryIdentity": {
       "type": "object",
       "properties": {

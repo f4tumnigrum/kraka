@@ -36,3 +36,4 @@ export * from "./tool-scope";
 export * from "./listener";
 
 export * from "./forge-recovery";
+export { runReplayTurn } from "./replay-turn";

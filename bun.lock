@@ -6,6 +6,7 @@
       "name": "kraka",
       "devDependencies": {
         "@biomejs/biome": "2.6.9",
+        "@kraka/adapter-replay": "workspace:*",
         "@kraka/environment": "workspace:*",
         "@kraka/protocol": "workspace:*",
         "@valibot/to-json-schema": "1.8.0",
@@ -68,6 +69,7 @@
       "dependencies": {
         "@kraka/environment": "workspace:*",
         "@kraka/protocol": "workspace:*",
+        "valibot": "1.5.0",
       },
     },
     "packages/browser-host": {
@@ -110,6 +112,7 @@
         "@kraka/cli-client": "workspace:*",
         "@kraka/environment": "workspace:*",
         "@kraka/protocol": "workspace:*",
+        "valibot": "1.5.0",
       },
     },
     "packages/desktop": {
@@ -125,6 +128,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@kraka/protocol": "workspace:*",
+        "valibot": "1.5.0",
       },
     },
     "packages/protocol": {

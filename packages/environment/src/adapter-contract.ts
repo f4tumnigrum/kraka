@@ -403,6 +403,20 @@ export type AdapterSession<F extends AdapterFamily, Handle extends object> = {
   handle: Handle;
 };
 
+export type SessionInvocationResult<C extends AdapterCommand> = C extends InstanceServiceCommand
+  ? InstanceServiceResult<C>
+  : C extends { capability: "compactContext" }
+    ? {
+        kind: "contextOperation";
+        result: Extract<ContextOperationObservation, { action: "compact" }>;
+      }
+    : C extends { action: "clear" }
+      ? {
+          kind: "contextOperation";
+          result: Extract<ContextOperationObservation, { action: "clear" }>;
+        }
+      : InvocationResult;
+
 /** The control plane owns stable delivery IDs, attempts, todos and capability versions. */
 export interface ProviderAdapter<F extends AdapterFamily, Handle extends object> {
   capabilities(instance: AdapterInstance<F>): Promise<AdapterCallResult<CapabilityDeclaration<F>>>;
@@ -417,23 +431,7 @@ export interface ProviderAdapter<F extends AdapterFamily, Handle extends object>
     session: AdapterSession<F, Handle>,
     permit: ActionPermit<F, NoInfer<C["capability"]>>,
     command: C,
-  ): Promise<
-    AdapterCallResult<
-      C extends InstanceServiceCommand
-        ? InstanceServiceResult<C>
-        : C extends { capability: "compactContext" }
-          ? {
-              kind: "contextOperation";
-              result: Extract<ContextOperationObservation, { action: "compact" }>;
-            }
-          : C extends { action: "clear" }
-            ? {
-                kind: "contextOperation";
-                result: Extract<ContextOperationObservation, { action: "clear" }>;
-              }
-            : InvocationResult
-    >
-  >;
+  ): Promise<AdapterCallResult<SessionInvocationResult<C>>>;
   events(
     session: AdapterSession<F, Handle>,
     after: string | null,
