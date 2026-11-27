@@ -69,7 +69,7 @@ function median(values: number[], unit: string, limit: number) {
   console.log(JSON.stringify({ unit, median: value, samples: values.length, limit }));
   if (!Number.isFinite(value) || value > limit) throw new Error(`${unit} median exceeds budget`);
 }
-function noChildren(pid: number) {
+export function noChildren(pid: number) {
   if (process.platform === "win32") {
     const children = powershell(
       `@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}').Count`,
@@ -96,7 +96,7 @@ function powershell(expression: string) {
     `$ErrorActionPreference='Stop'; ${expression}`,
   ]).trim();
 }
-async function currentFootprint(pid: number) {
+export async function currentFootprint(pid: number) {
   if (process.platform === "linux" || process.platform === "win32") {
     const linux = process.platform === "linux";
     const reading = linux

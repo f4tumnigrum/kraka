@@ -7,6 +7,7 @@ import { runReplayTurn, type ProviderAdapter } from "@kraka/environment";
 import { ReplayRunRequestSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import { listenFlow } from "./flow-socket";
+import { startWriter } from "./first-send";
 
 type SocketState = { claimed: boolean; controller: AbortController; terminal: boolean };
 async function replay(args: string[]) {
@@ -146,9 +147,10 @@ export async function listenReplay<H extends object>({
 }
 if (import.meta.main && process.argv.length > 2) {
   try {
-    if (process.argv[2] === "daemon") {
+    const [command, ...args] = process.argv.slice(2);
+    if (command === "daemon") {
       const { values } = parseArgs({
-        args: process.argv.slice(3),
+        args,
         options: {
           "state-dir": { type: "string" },
           listen: { type: "string" },
@@ -165,8 +167,28 @@ if (import.meta.main && process.argv.length > 2) {
       process.once("SIGTERM", listener.shutdown);
       process.once("SIGINT", listener.shutdown);
       process.stdout.write(`${JSON.stringify(listener.ready)}\n`);
-    } else if (process.argv[2] === "replay") await replay(process.argv.slice(3));
-    else throw new Error("Unknown command, expected replay or daemon");
+    } else if (command === "start") {
+      const { values } = parseArgs({
+        args,
+        options: { "state-dir": { type: "string" }, recording: { type: "string" } },
+        strict: true,
+      });
+      if (!values["state-dir"] || !values.recording)
+        throw new Error("Expected start --state-dir DIR --recording FILE");
+      const recording = parseReplayRecording(await Bun.file(values.recording).text());
+      const writer = await startWriter(values["state-dir"], {
+        adapter: createReplayAdapter(recording),
+        modelId: recording.modelId,
+        expectedText: recording.expectedText,
+      });
+      if (writer.kind === "unconfirmed") throw new Error(writer.reason);
+      if (writer.kind === "ready") {
+        process.once("SIGTERM", writer.close);
+        process.once("SIGINT", writer.close);
+      }
+      console.log(JSON.stringify({ kind: writer.kind, instance: writer.instance }));
+    } else if (command === "replay") await replay(args);
+    else throw new Error("Unknown command, expected replay, start or daemon");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
