@@ -41,6 +41,14 @@ export * from "./listener";
 
 export * from "./forge-recovery";
 export { runReplayTurn } from "./replay-turn";
+export {
+  readActivity,
+  recordAdapterActivity,
+  type ActivityRead,
+  type StoredToolActivityVersion,
+  type ToolActivityActor,
+  type ToolActivityEvent,
+} from "./tool-activity";
 export * from "./access-store";
 export * from "./writer";
 export * from "./first-send-store";

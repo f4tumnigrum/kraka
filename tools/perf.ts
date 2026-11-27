@@ -49,7 +49,7 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions" | "worktree.recovery" | "browserTLS" | "codex.recovery";
+  variant?: "access.listSessions" | "tool.readActivity" | "worktree.recovery" | "browserTLS" | "codex.recovery";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -332,6 +332,8 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
                 { metric, variant: "worktree.recovery" },
                 { metric, variant: "codex.recovery" },
               ]
+        : metric === "P11"
+          ? [{ metric }, { metric, variant: "tool.readActivity" }]
             : [{ metric }],
     );
 }
@@ -383,7 +385,19 @@ export async function prepareBudget(root: string, role: Role) {
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (variant === "codex.recovery") {
+      else if (variant === "tool.readActivity") {
+        base.workload =
+          "Ten tool detail downloads, each containing 20,000,000 output bytes, with signed same-socket renames every 20 ms";
+        base.endpoint = "tool.readActivity";
+        base.thresholds = base.thresholds.filter((t) => t.series === "download");
+        if (!(await Bun.file(join(root, "packages/protocol/src/tool-activity.ts")).exists())) {
+          if (role === "candidate") throw Error("Missing tool.readActivity");
+          report = unavailable(base, "Parent lacks the versioned tool.readActivity endpoint");
+        } else {
+          const { measureToolActivity } = await import("./measure-tool-activity");
+          report = measured(base, await measureToolActivity(base, root, nextBlock));
+        }
+      } else if (variant === "codex.recovery") {
         base.workload = "Five interrupted Codex approvals on isolated persistent threads";
         base.endpoint =
           "Same request expired and same attempt reconciled to the verified native root end";

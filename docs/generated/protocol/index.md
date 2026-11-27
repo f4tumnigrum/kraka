@@ -87,6 +87,7 @@ Supply a fresh public nonce in the upgrade query and verify its signed echo with
 | `subscription.openThread` | `thread.view` | thread |
 | `subscription.openList` | `thread.view` | environment |
 | `thread.readHistory` | `thread.view` | thread |
+| `tool.readActivity` | `thread.view` | thread |
 | `history.pageSaved` | `thread.view` | thread |
 | `subscription.close` | `thread.view` | subscription |
 | `subscription.pageSaved` | `thread.view` | subscription |
@@ -3793,6 +3794,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "result": {
           "oneOf": [
             {
+              "$ref": "#/$defs/ToolActivityReadResult"
+            },
+            {
               "type": "object",
               "properties": {
                 "kind": {
@@ -6529,6 +6533,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     },
     {
       "$ref": "#/$defs/HistoryPage"
+    },
+    {
+      "$ref": "#/$defs/ToolActivityDetailFrame"
     },
     {
       "$ref": "#/$defs/ContentChunkHeader"
@@ -21105,6 +21112,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/thread.readHistory"
     },
     {
+      "$ref": "#/$defs/tool.readActivity"
+    },
+    {
       "$ref": "#/$defs/history.pageSaved"
     },
     {
@@ -23295,6 +23305,251 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## ToolActivityBody
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unobserved"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "captured"
+            },
+            "json": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "json"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unobserved"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "partial"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "text",
+            "truncated"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "complete"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "success": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fileCoverage": {
+      "const": "unknown"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ToolActivityFileChange"
+      }
+    }
+  },
+  "required": [
+    "input",
+    "output",
+    "status",
+    "exitCode",
+    "success",
+    "fileCoverage",
+    "changes"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityContent
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "item": {
+      "$ref": "#/$defs/ToolActivityHistoryItem"
+    },
+    "body": {
+      "$ref": "#/$defs/ToolActivityBody"
+    }
+  },
+  "required": [
+    "item",
+    "body"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityDetailFrame
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "tool.activity.detail"
+    },
+    "subscriptionId": {
+      "$ref": "#/$defs/SubscriptionId"
+    },
+    "reference": {
+      "$ref": "#/$defs/ToolActivityReference"
+    },
+    "transferId": {
+      "$ref": "#/$defs/ContentTransferId"
+    }
+  },
+  "required": [
+    "kind",
+    "subscriptionId",
+    "reference",
+    "transferId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityFileChange
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "change": {
+      "enum": [
+        "created",
+        "modified",
+        "deleted",
+        "moved"
+      ],
+      "type": "string"
+    },
+    "destination": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "patch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "path",
+    "change",
+    "destination",
+    "patch"
+  ],
+  "additionalProperties": false
+}
+```
+
 ## ToolActivityHistoryItem
 
 ```json
@@ -23483,6 +23738,101 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     "createdAt",
     "createdPosition",
     "version"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityReadResult
+
+```json
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "activityReadStarted"
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "streamId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "kind",
+        "subscriptionId",
+        "streamId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "activityVersionExpired"
+        },
+        "replacement": {
+          "$ref": "#/$defs/ToolActivityReference"
+        }
+      },
+      "required": [
+        "kind",
+        "replacement"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "activityUnsupported"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
+```
+
+## ToolActivityReference
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "threadId": {
+      "$ref": "#/$defs/ThreadId"
+    },
+    "itemId": {
+      "$ref": "#/$defs/TimelineItemId"
+    },
+    "version": {
+      "$ref": "#/$defs/ObjectVersion"
+    },
+    "byteLength": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "threadId",
+    "itemId",
+    "version",
+    "byteLength",
+    "sha256"
   ],
   "additionalProperties": false
 }
@@ -34878,6 +35228,145 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
   ],
   "additionalProperties": false,
   "description": "Requires owner.decide on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
+## tool.readActivity
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "tool.readActivity"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "itemId": {
+          "$ref": "#/$defs/TimelineItemId"
+        },
+        "expectedVersion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "streamId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "threadId",
+        "itemId",
+        "expectedVersion",
+        "subscriptionId",
+        "streamId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
 }
 ```
 

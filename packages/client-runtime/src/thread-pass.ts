@@ -212,6 +212,7 @@ type SavedPage = Pick<HistoryPage, "threadId" | "anchor" | "verifiedAt" | "older
 };
 export interface ThreadCache {
   format: 1;
+  activities?: Record<string, import("./tool-activity").ToolActivityView>;
   rows: Record<string, SavedRow>;
   scopes: Record<string, Membership>;
   history: Record<string, SavedPage>;

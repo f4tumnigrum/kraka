@@ -10,6 +10,7 @@ import {
   ServerHelloSchema,
   SessionAuthorizedSchema,
   TRANSPORT_LIMITS,
+  TOOL_ACTIVITY_DETAIL_MINOR,
   RequestUploads,
   type SubscriptionPage,
   type SessionAuthorized,
@@ -75,7 +76,7 @@ export async function threadConnection(
     challengeId: crypto.randomUUID(),
     challenge: randomBytes(32).toString("base64url"),
     clientNonce: nonce,
-    protocolVersion: { major: 1, minor: 1 },
+    protocolVersion: { major: 1, minor: TOOL_ACTIVITY_DETAIL_MINOR },
     features: [
       "strictSchemas",
       "signedRequests",

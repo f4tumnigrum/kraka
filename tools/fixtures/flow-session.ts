@@ -7,11 +7,20 @@ import {
   TRANSPORT_LIMITS,
 } from "@kraka/protocol";
 
-export function fixtureSession(device: string, epoch: string, key = `fake-key-${device}`) {
+export function fixtureSession(
+  device: string,
+  epoch: string,
+  key = `fake-key-${device}`,
+  detail = false,
+) {
   const principal = { kind: "device", id: "person-lee", ownerId: "person-lee", deviceId: device };
   const signer = { kind: "device", deviceId: device, keyId: key };
-  const version = { major: 1, minor: 0 },
-    features = ["perStreamFlowControl", "binaryContentChunks"];
+  const version = { major: 1, minor: detail ? 2 : 0 },
+    features = [
+      "perStreamFlowControl",
+      "binaryContentChunks",
+      ...(detail ? ["timelineItems"] : []),
+    ];
   const hello = v.parse(ServerHelloSchema, {
     kind: "server.hello",
     connectionId: epoch,

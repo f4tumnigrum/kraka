@@ -1,6 +1,7 @@
 import { AppNoteReadSchema } from "./executor-tools";
 import { TextReturnedEventSchema } from "./handoffs";
 import { ContextOperationChangeSchema } from "./context-operations";
+import { ToolActivityDetailFrameSchema } from "./tool-activity";
 import {
   ExecutorSessionObservationSchema,
   ToolActivityHistoryItemSchema,
@@ -348,6 +349,7 @@ export const DataMessageSchema = v.union([
   TerminalOutputSchema,
   SubscriptionPageSchema,
   HistoryPageSchema,
+  ToolActivityDetailFrameSchema,
   ContentChunkHeaderSchema,
 ]);
 export type DataMessage = v.InferOutput<typeof DataMessageSchema>;

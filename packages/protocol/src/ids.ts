@@ -127,6 +127,7 @@ export type PreviewTabId = v.InferOutput<typeof PreviewTabIdSchema>;
 export type EnvironmentGeneration = v.InferOutput<typeof EnvironmentGenerationSchema>;
 
 export type NativeSessionId = v.InferOutput<typeof NativeSessionIdSchema>;
+export type TimelineItemId = v.InferOutput<typeof TimelineItemIdSchema>;
 export type NativeItemId = v.InferOutput<typeof NativeItemIdSchema>;
 export type NativeRequestId = v.InferOutput<typeof NativeRequestIdSchema>;
 export type NativeRootTurnId = v.InferOutput<typeof NativeRootTurnIdSchema>;

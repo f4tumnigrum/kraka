@@ -8,6 +8,9 @@ import {
   RoundPhaseSchema,
   MessageSchema,
   SyncPositionSchema,
+  ThreadIdSchema,
+  RoundIdSchema,
+  ToolActivityFileChangeSchema,
 } from "@kraka/protocol";
 import { type FirstSendStore, readRound } from "@kraka/environment";
 const schema = HistoryPageSchema.entries.rows.item;
@@ -78,7 +81,48 @@ export function scenarioInput(
     },
   };
 }
+const activity = v.strictObject({
+  threadId: ThreadIdSchema,
+  roundId: v.optional(RoundIdSchema),
+  instanceId: v.string(),
+  nativeSessionId: v.string(),
+  epoch: v.number(),
+  eventId: v.string(),
+  callId: v.string(),
+  attemptId: v.string(),
+  nativeRootTurnId: v.string(),
+  phase: v.picklist(["started", "progress", "ended"]),
+  inputJson: v.nullable(v.string()),
+  outputText: v.nullable(v.string()),
+  exitCode: v.nullable(v.number()),
+  at: v.number(),
+  changes: v.optional(v.array(ToolActivityFileChangeSchema)),
+});
+const sent = new Map<string, Map<number, number>>();
+export function recordFixtureFrame(epoch: string, wire: import("@kraka/protocol").WireMessage) {
+  let streams = sent.get(epoch);
+  if (!streams) {
+    streams = new Map();
+    sent.set(epoch, streams);
+  }
+  if (typeof wire === "string") return;
+  const length = new DataView(wire.buffer, wire.byteOffset).getUint32(0);
+  const frame = JSON.parse(new TextDecoder().decode(wire.subarray(4, 4 + length)));
+  streams.set(frame.streamId, (streams.get(frame.streamId) ?? 0) + wire.length - 4 - length);
+}
 const seedCommand = v.union([
+  v.strictObject({
+    ledger: v.strictObject({ epoch: v.string(), streamId: v.number(), bytes: v.number() }),
+  }),
+  v.strictObject({ activity }),
+  v.strictObject({
+    unattributed: v.strictObject({
+      ...ToolActivityFileChangeSchema.entries,
+      threadId: ThreadIdSchema,
+      eventId: v.string(),
+      attemptId: v.string(),
+    }),
+  }),
   v.strictObject({ transactions: v.array(v.array(schema)) }),
   v.strictObject({ rows: v.array(schema) }),
   v.strictObject({ floor: SyncPositionSchema }),
@@ -93,7 +137,15 @@ export function serveSeed(store: FirstSendStore) {
     let error: string | null = null;
     try {
       const op = v.parse(seedCommand, command);
-      if ("transactions" in op) {
+      if ("ledger" in op) {
+        const streams = sent.get(op.ledger.epoch);
+        if (!streams || (streams.get(op.ledger.streamId) ?? 0) !== op.ledger.bytes)
+          throw Error("Sent-byte ledger mismatch");
+      } else if ("activity" in op) {
+        if (store.sync.recordToolActivity(op.activity) === "conflict")
+          throw Error("Conflicting activity seed");
+      } else if ("unattributed" in op) store.sync.recordUnattributedToolChange(op.unattributed);
+      else if ("transactions" in op) {
         for (const rows of op.transactions) persist(store, rows);
       } else if ("rows" in op) persist(store, op.rows);
       else if ("floor" in op) store.db.run("UPDATE sync_meta SET floor=?", [op.floor]);
