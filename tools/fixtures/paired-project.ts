@@ -105,7 +105,12 @@ export interface BrowserPeerOptions {
   certificate?: string;
   privateKey?: string;
 }
-export async function startTestHost(dir: string, browser?: BrowserPeerOptions) {
+export async function startTestHost(
+  dir: string,
+  signal?: AbortSignal,
+  browser?: BrowserPeerOptions,
+) {
+  const publication = Promise.withResolvers<unknown>();
   const events = new Journal<Record<string, unknown>>();
   const p = Bun.spawn(
     [
@@ -118,14 +123,20 @@ export async function startTestHost(dir: string, browser?: BrowserPeerOptions) {
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
+      ...(signal && { signal }),
       ipc(message: unknown) {
-        if (message && typeof message === "object") events.push(message as Record<string, unknown>);
+        if (!message || typeof message !== "object") return;
+        events.push(message as Record<string, unknown>);
+        if ("event" in message && message.event === "ready") publication.resolve(message);
       },
     },
   );
   const stderr = new Response(p.stderr).text();
   const ended = p.exited.then(async (code) => ({ event: "exit", code, error: await stderr }));
-  void ended.then((e) => events.push(e));
+  void ended.then((e) => {
+    events.push(e);
+    publication.reject(Error(`Fixture exited (${e.code}): ${e.error}`));
+  });
   async function event(kind: string) {
     const e = await events.until((m) => m.event === kind || m.event === "exit");
     if (e.event === "exit") throw Error(`Fixture exited: ${e.error}`);
@@ -139,11 +150,13 @@ export async function startTestHost(dir: string, browser?: BrowserPeerOptions) {
     return e.value;
   }
   try {
-    const ready = await event("ready");
-    const identity = v.parse(EnvironmentIdentitySchema, ready.identity);
+    const { identity, origin } = v.parse(
+      v.object({ identity: EnvironmentIdentitySchema, origin: v.string() }),
+      await publication.promise,
+    );
     return {
       identity,
-      origin: v.parse(v.string(), ready.origin),
+      origin,
       events,
       event,
       control,
@@ -244,18 +257,20 @@ export async function startPairedProject({
   projectId,
   requests,
   browser,
+  signal,
 }: {
   stateDir: string;
   projectId: string;
   browser?: BrowserPeerOptions;
   requests: readonly (readonly PermissionItem[])[];
+  signal?: AbortSignal;
 }) {
   const project = v.parse(ProjectIdSchema, projectId);
   const threadId = v.parse(ThreadIdSchema, crypto.randomUUID());
   const cleanup: (() => void)[] = [];
   const clients: Client[] = [];
   const stateDir = await mkdtemp(join(parent, "paired-"));
-  let host = await startTestHost(stateDir, browser).catch(async (error) => {
+  let host = await startTestHost(stateDir, signal, browser).catch(async (error) => {
     await rm(stateDir, { recursive: true, force: true });
     throw error;
   });
@@ -326,7 +341,7 @@ export async function startPairedProject({
         owner.close();
         for (const c of clients) c.close();
         await host.stop();
-        host = await startTestHost(stateDir, browser);
+        host = await startTestHost(stateDir, signal, browser);
         if (canonicalJson(host.identity) !== canonicalJson(identity))
           throw Error("Environment identity changed");
         owner = await attach(device, first.principal);
