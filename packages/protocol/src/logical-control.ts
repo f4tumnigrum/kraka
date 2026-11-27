@@ -1,3 +1,10 @@
+import {
+  readPrivateSecretRequest,
+  type PrivateSecretRequest,
+  type CommandReceipt,
+  type SignedRequest,
+  type SessionAuthorized,
+} from "./requests";
 import * as v from "valibot";
 import { ContentTransferIdSchema, SubscriptionIdSchema } from "./ids";
 import { binarySource } from "./stream-codec";
@@ -8,11 +15,14 @@ import type { FlowPeer } from "./flow-peer";
 // Large signed requests remain one logical control message, with independent byte credit.
 export function sendLogicalRequest(
   peer: FlowPeer,
-  request: Extract<ControlMessage, { kind: "signedRequest" }>,
+  request: SignedRequest | PrivateSecretRequest | CommandReceipt,
 ) {
   const utf8 = peer.port.utf8;
   const data = utf8.encode(JSON.stringify(request));
-  if (data.length + utf8.encode(peer.epoch).length + 88 <= TRANSPORT_LIMITS.maxControlFrameBytes) {
+  if (
+    !(request.kind === "signedRequest" && request.method === "todo.submitSecret") &&
+    data.length + utf8.encode(peer.epoch).length + 88 <= TRANSPORT_LIMITS.maxControlFrameBytes
+  ) {
     peer.control(request);
     return;
   }
@@ -41,6 +51,7 @@ export function sendLogicalRequest(
     encoding: "utf8Json",
     byteLength: data.length,
   });
+  return id;
 }
 export class RequestUploads {
   private streams = new Map<number, { parts: Uint8Array[]; length: number; received: number }>();
@@ -54,7 +65,11 @@ export class RequestUploads {
     this.streams.set(m.streamId, { parts: [], length: m.byteLength, received: 0 });
     this.allocated += m.byteLength;
   }
-  data(f: Extract<TransportFrame, { lane: "data" }>, size: number) {
+  data(
+    f: Extract<TransportFrame, { lane: "data" }>,
+    size: number,
+    features: SessionAuthorized["features"] = [],
+  ) {
     const s = this.streams.get(f.streamId);
     if (!s || !("payload" in f)) throw Error("Undeclared request");
     s.parts.push(f.payload.slice());
@@ -68,7 +83,14 @@ export class RequestUploads {
       offset += part.length;
     }
     this.drop(f.streamId);
-    const m = v.parse(ControlMessageSchema, JSON.parse(this.peer.port.utf8.decode(bytes)));
+    const raw: unknown = JSON.parse(this.peer.port.utf8.decode(bytes));
+    if (raw && typeof raw === "object" && "method" in raw && raw.method === "todo.submitSecret") {
+      const parsed = readPrivateSecretRequest(raw, features);
+      if (parsed.kind !== "request" || parsed.request.commandId !== String(f.message.transferId))
+        throw Error("Invalid confidential request");
+      return parsed.request;
+    }
+    const m = v.parse(ControlMessageSchema, raw);
     if (m.kind !== "signedRequest" || m.commandId !== String(f.message.transferId))
       throw Error("Invalid logical request binding");
     return m;

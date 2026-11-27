@@ -1,3 +1,4 @@
+import { TodoLedger } from "./todo-ledger";
 import { ThreadJournal } from "./thread-journal";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
@@ -153,6 +154,7 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
 }
 export class FirstSendStore {
   readonly sync: ThreadJournal;
+  readonly todos: TodoLedger;
   onQueueChanged?: (thread: Thread["id"]) => void;
   beforeCommit?: (method: string) => void;
   constructor(
@@ -160,6 +162,7 @@ export class FirstSendStore {
     readonly writer: DirectoryWriter,
   ) {
     this.sync = new ThreadJournal(db, writer.environmentId);
+    this.todos = new TodoLedger(this);
   }
   projectDirectory(id: string) {
     const row = this.db

@@ -2,6 +2,9 @@ import { createPublicKey, randomBytes, verify } from "node:crypto";
 import * as v from "valibot";
 import {
   canonicalJson,
+  sendLogicalRequest,
+  type PermissionItem,
+  type PrivateSecretRequest,
   PAIRING_LIMITS,
   ConnectionIdSchema,
   ServerHelloSchema,
@@ -18,6 +21,7 @@ import {
 } from "@kraka/protocol";
 import {
   applyInputCommand,
+  acceptTodoReply,
   readThread,
   renameThread,
   type FirstSendStore,
@@ -38,6 +42,7 @@ export async function threadConnection(
   schedule: (threadId: ThreadId, commandId: CommandId) => void,
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
+  beforeTodo?: (id: CommandId, proceed: () => void) => void,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -55,6 +60,7 @@ export async function threadConnection(
       "perStreamFlowControl",
       "binaryContentChunks",
       "timelineItems",
+      "privateSecretSubmission",
     ],
     identity: host.identity,
   };
@@ -72,6 +78,10 @@ export async function threadConnection(
         session: SessionAuthorized | null = null,
         subs: ThreadSubscriptions | null = null;
       const uploads = new RequestUploads(peer);
+      const disclosures = new Map<
+        CommandId,
+        { stream: number | undefined; allowed: () => boolean }
+      >();
       let boundKey: ReturnType<typeof createPublicKey> | null = null;
       function usable(signer: ClientAuthentication["signer"]) {
         const d = host.port.registration(signer);
@@ -83,7 +93,7 @@ export async function threadConnection(
           ? d
           : null;
       }
-      const allows = (threadId: ThreadId, permission: "thread.view" | "thread.send") => {
+      const allows = (threadId: ThreadId, permission: PermissionItem) => {
         if (!session || !usable(session.signer)) return false;
         const thread = readThread(store.db, threadId);
         if (!thread) return false;
@@ -99,7 +109,7 @@ export async function threadConnection(
         }
         return !!host.store.ceiling(session.principal.id, { kind: "thread", threadId }, permission);
       };
-      function accept(m: SignedRequest | ClientAuthentication) {
+      function accept(m: SignedRequest | PrivateSecretRequest | ClientAuthentication) {
         const actor = usable(m.signer);
         if (
           !actor ||
@@ -192,6 +202,63 @@ export async function threadConnection(
           );
         } else {
           if (!session || !subs) throw Error("Configuration required");
+          if (
+            m.method === "todo.answer" ||
+            m.method === "todo.decide" ||
+            m.method === "todo.readAnswer" ||
+            m.method === "todo.readSecretReceipt" ||
+            m.method === "todo.submitSecret"
+          ) {
+            const proceed = () => {
+              const result = host.store.db
+                .transaction(() =>
+                  acceptTodoReply({
+                    verifiedActor: {
+                      id: actor.principal.id,
+                      deviceId: actor.deviceId,
+                      environmentId: host.identity.id,
+                      allows: (permission, target) =>
+                        target.kind === "thread" && allows(target.threadId, permission),
+                    },
+                    signedCommand: m,
+                    writer: store,
+                  }),
+                )
+                .immediate();
+              const stream = sendLogicalRequest(peer, result);
+              const thread =
+                m.method === "todo.submitSecret" ? m.payload.target.threadId : m.payload.threadId;
+              if (
+                result.kind === "accepted" &&
+                (result.result.kind === "todoAnswerRead" || result.result.kind === "secretReceipt")
+              ) {
+                const right =
+                  result.result.kind === "secretReceipt" ? "owner.decide" : "thread.view";
+                disclosures.set(m.commandId, { stream, allowed: () => allows(thread, right) });
+              } else if (result.kind === "rejected" && result.failure.kind === "todoChanged") {
+                const required = m.method === "todo.answer" ? "thread.reply" : "owner.decide";
+                const action = store.todos.get(result.failure.current.id)?.binding.approval
+                  ?.permission;
+                disclosures.set(m.commandId, {
+                  stream,
+                  allowed: () =>
+                    allows(thread, "thread.view") &&
+                    allows(thread, required) &&
+                    (!action || allows(thread, action)),
+                });
+              }
+              if (result.kind === "accepted" && result.result.kind === "todoAnswerStored") {
+                const todo = store.todos.get(result.result.todoRequestId)?.todo;
+                if (todo?.state.kind === "answered" && todo.state.route.kind === "message")
+                  schedule(todo.threadId, m.commandId);
+              }
+              wake();
+            };
+            if (beforeTodo && (m.method === "todo.answer" || m.method === "todo.decide"))
+              beforeTodo(m.commandId, proceed);
+            else proceed();
+            return;
+          }
           let result = subs.handle(m);
           if (!result && m.method === "thread.rename")
             result = renameThread({
@@ -235,6 +302,13 @@ export async function threadConnection(
       check = () => {
         if (!session) return;
         const next = version.get()?.data_version;
+        for (const [id, d] of disclosures) {
+          if (
+            d.stream === undefined ? peer.send.pending.control === 0 : !peer.send.snapshot(d.stream)
+          )
+            disclosures.delete(id);
+          else if (next !== last && !d.allowed()) throw Error("Todo read authority expired");
+        }
         if (next === last && Date.now() < expires && expires !== Infinity) return;
         const device = usable(session.signer);
         if (!device || device.deviceKey.state.kind !== "usable")
@@ -256,7 +330,7 @@ export async function threadConnection(
           else if (m.kind !== "stream.reset") throw Error("Unexpected thread control");
         },
         data(frame, size) {
-          const req = uploads.data(frame, size);
+          const req = uploads.data(frame, size, session?.features);
           if (req) accept(req);
         },
         discarded(id) {

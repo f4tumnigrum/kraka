@@ -2,6 +2,10 @@ import {
   AdapterFamilySchema,
   AttachmentReferenceSchema,
   AttemptIdSchema,
+  RoundSchema,
+  type RoundId,
+  type MessageId,
+  type RoundAttempt,
   type DeliveryId,
   DeliveryIdSchema,
   ExecutorInstanceIdSchema,
@@ -27,6 +31,38 @@ import {
 } from "./queue";
 import { reject } from "./result";
 import type { DeliveryRecovery, RoundReport } from "./round";
+
+export function fileInputRound(
+  transaction: FirstSendStore,
+  queue: InputQueue,
+  roundId: RoundId,
+  messageId: MessageId,
+  ticket: Pick<RoundAttempt, "attemptId" | "deliveryId">,
+) {
+  const head = firstPending(queue.rows);
+  const { attemptId, deliveryId } = ticket;
+  const held =
+    head &&
+    (head.attempt.phase.kind === "uncertain" ||
+      ("gate" in head.attempt.phase && head.attempt.phase.gate === "held"));
+  const round = v.parse(RoundSchema, {
+    id: roundId,
+    threadId: queue.threadId,
+    messageId,
+    place: String(
+      queue.rows.reduce((max, r) => (BigInt(r.place) > max ? BigInt(r.place) : max), 0n) + 1n,
+    ),
+    version: "1",
+    attempt: {
+      attemptId,
+      deliveryId,
+      phase: { kind: "filed", gate: held ? "held" : "eligible" },
+    },
+  });
+  transaction.db.run("INSERT INTO rounds VALUES(?,?,'person')", [round.id, JSON.stringify(round)]);
+  transaction.db.run("INSERT INTO deliveries VALUES(?,?,1,NULL)", [deliveryId, round.id]);
+  return round;
+}
 
 export const nextVersion = (version: string) =>
   v.parse(ObjectVersionSchema, String(BigInt(version) + 1n));

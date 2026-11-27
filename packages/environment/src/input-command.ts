@@ -13,7 +13,7 @@ import {
 import * as v from "valibot";
 import { type LocalActor, recordCommand } from "./first-send";
 import { type FirstSendStore, readMessage, readRound, readThread } from "./first-send-store";
-import { advanceQueue, loadQueue, nextVersion, persistQueue } from "./input-store";
+import { fileInputRound, advanceQueue, loadQueue, nextVersion, persistQueue } from "./input-store";
 import {
   firstPending,
   planQueuedChange,
@@ -142,30 +142,10 @@ export function applyInputCommand({
             head.id,
           ]);
         } else {
-          const held =
-            head &&
-            (head.attempt.phase.kind === "uncertain" ||
-              ("gate" in head.attempt.phase && head.attempt.phase.gate === "held"));
-          round = v.parse(RoundSchema, {
-            id: roundId,
-            threadId,
-            messageId: message.id,
-            place: String(
-              queue.rows.reduce((max, r) => (BigInt(r.place) > max ? BigInt(r.place) : max), 0n) +
-                1n,
-            ),
-            version: "1",
-            attempt: {
-              attemptId,
-              deliveryId,
-              phase: { kind: "filed", gate: held ? "held" : "eligible" },
-            },
+          round = fileInputRound(transaction, queue, roundId, message.id, {
+            attemptId,
+            deliveryId,
           });
-          transaction.db.run("INSERT INTO rounds VALUES(?,?,'person')", [
-            round.id,
-            JSON.stringify(round),
-          ]);
-          transaction.db.run("INSERT INTO deliveries VALUES(?,?,1,NULL)", [deliveryId, round.id]);
         }
         transaction.sync.record([
           { objectType: "message", value: message },
