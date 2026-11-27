@@ -3,7 +3,7 @@ import { certificate } from "./fixtures/browser-cert";
 import { join } from "node:path";
 import { within, withState, terminate } from "./fixtures/replay-process";
 import { invite, approve } from "./fixtures/paired-project";
-import { startBrowserFixture, pin, phase, readInvites, snapshot } from "./fixtures/browser";
+import { openBrowserFixture, pin, phase, readInvites, snapshot } from "./fixtures/browser";
 import { ProjectIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
 
@@ -11,13 +11,13 @@ export { startBrowserFixture } from "./fixtures/browser";
 const native = (process.env.KRAKA_BROWSER_CASES ?? "native") === "native";
 const run = (
   name: string,
-  fn: (f: Awaited<ReturnType<typeof startBrowserFixture>>, dir: string) => Promise<void>,
+  fn: (f: Awaited<ReturnType<typeof openBrowserFixture>>, dir: string) => Promise<void>,
 ) =>
   test(
     name,
     () =>
       withState(async (dir) => {
-        const f = await startBrowserFixture({
+        const f = await openBrowserFixture({
           stateDir: dir,
           profileDir: join(dir, "profile"),
           network: "loopback",
@@ -369,13 +369,13 @@ if (native) {
 if (process.env.KRAKA_BROWSER_CASES === "routed") {
   const networkCase = (
     name: string,
-    fn: (f: Awaited<ReturnType<typeof startBrowserFixture>>) => Promise<void>,
+    fn: (f: Awaited<ReturnType<typeof openBrowserFixture>>) => Promise<void>,
   ) =>
     test(
       name,
       () =>
         withState(async (dir) => {
-          const f = await startBrowserFixture({
+          const f = await openBrowserFixture({
             stateDir: dir,
             profileDir: join(dir, "profile"),
             network: "routed",
@@ -512,11 +512,39 @@ if (process.env.KRAKA_BROWSER_CASES === "routed") {
             const path = "/assets/browser-host.js",
               m = await import(path),
               commandId = "insecure-read";
+            const credentials = m.createBrowserCredentials({ origin, environmentId: identity.id });
+            const platform = m.createBrowserPlatform(credentials, m.browserSocketFactory);
+            const routeCatalog = {
+              formatVersion: 1,
+              environments: [
+                {
+                  environmentId: identity.id,
+                  pinnedIdentity: identity,
+                  preferredRouteId: "prior",
+                  routes: [
+                    {
+                      environmentId: identity.id,
+                      id: "prior",
+                      kind: "lan",
+                      endpoint: origin,
+                      status: { kind: "untested" },
+                      lastObservedSecureContext: true,
+                    },
+                  ],
+                },
+              ],
+            };
+            await platform.state.commit([
+              {
+                key: "routeCatalog",
+                value: new TextEncoder().encode(JSON.stringify(routeCatalog)),
+              },
+            ]);
             const handle = m.openBrowserSession({
               pageOrigin: origin,
               expectedIdentity: identity,
-              routeCatalog: { formatVersion: 1, environments: [] },
-              credentials: m.createBrowserCredentials({ origin, environmentId: identity.id }),
+              routeCatalog,
+              credentials,
               socketFactory: m.browserSocketFactory,
             });
             await Promise.resolve();

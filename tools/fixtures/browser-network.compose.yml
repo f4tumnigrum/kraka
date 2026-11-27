@@ -28,6 +28,7 @@ services:
       mobile: { condition: service_healthy }
     command: ["bash", "tools/fixtures/browser-network.sh", "desktop"]
     environment:
+      KRAKA_FIXTURE_DESKTOP: "1"
       NODE_EXTRA_CA_CERTS: /fixture/root.pem
     dns: [10.78.41.2]
     networks:

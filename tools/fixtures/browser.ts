@@ -49,7 +49,7 @@ export async function readInvites(page: Page, projectId: ProjectId) {
   } else if (result.commandId !== commandId) throw Error("Lost command ID");
   return { commandId, result };
 }
-export async function startBrowserFixture({
+export async function openBrowserFixture({
   stateDir,
   profileDir,
   network,
@@ -166,4 +166,15 @@ export async function startBrowserFixture({
     }
     throw error;
   }
+}
+
+export async function startBrowserFixture(options: Parameters<typeof openBrowserFixture>[0]) {
+  if (options.network === "routed" && process.env.KRAKA_FIXTURE_DESKTOP !== "1") {
+    const { provisionBrowserNetwork } = await import("./browser-compose");
+    return provisionBrowserNetwork(options);
+  }
+  const fixture = await openBrowserFixture(options);
+  return Object.assign(fixture, {
+    seedInvite: () => invite(fixture.project.owner, fixture.project.projectId),
+  });
 }

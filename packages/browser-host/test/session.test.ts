@@ -1,13 +1,13 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
 import { withState } from "../../../tools/fixtures/replay-process";
-import { startBrowserFixture } from "../../../tools/fixtures/browser";
+import { openBrowserFixture } from "../../../tools/fixtures/browser";
 
 test(
   "actual browser origin, atomic pins, route selection and per-connection configuration",
   () =>
     withState(async (dir) => {
-      const f = await startBrowserFixture({
+      const f = await openBrowserFixture({
         stateDir: dir,
         profileDir: join(dir, "profile"),
         network: "loopback",
