@@ -92,7 +92,15 @@ export function launchWriter(
       out += new TextDecoder().decode(data);
       if (out.includes("\n")) line.resolve(out.split("\n")[0] ?? "");
     }
-    line.reject(new Error(`Writer exited: ${await stderr}`));
+    if (!out.includes("\n")) {
+      const code = await child.exited;
+      const details = (await stderr).trim();
+      line.reject(
+        Error(
+          `Writer exited before publishing readiness (${child.signalCode ?? code})${details ? `: ${details}` : ""}`,
+        ),
+      );
+    }
   })();
   void line.promise.catch(() => {});
   const ready = async () => {
@@ -149,6 +157,7 @@ export async function startFirstSendFixture({
   executable,
   recording,
   ipc,
+  onStage,
 }: {
   stateDir: string;
   projectDirectory: string;
@@ -157,15 +166,19 @@ export async function startFirstSendFixture({
   point?: Fault;
   executable?: string;
   recording?: string;
+  onStage?: (name: string) => void;
   ipc?: (message: unknown) => void;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
+  onStage?.("preparing writer credentials");
   await configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
+  onStage?.("waiting for the writer to publish and confirm its endpoint");
   const launcher = launchWriter(stateDir, root, point, recording, ipc, executable);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");
+    onStage?.("connecting to the writer and registering the project");
     const client = await connectFirstSend(stateDir, instance);
     try {
       const { receipt } = await client.send("project.register", {
