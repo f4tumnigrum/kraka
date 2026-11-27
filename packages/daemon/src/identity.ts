@@ -1,9 +1,13 @@
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer as createTLS } from "node:https";
+import { browserPage, type preflight } from "./browser-listener";
+import { createServer, type IncomingMessage, type RequestListener } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import * as v from "valibot";
 import { exchangeVerified, type AccessStore } from "@kraka/environment";
 import {
   BUSINESS_CLOSE_CODES,
+  ControlStream,
+  type WireMessage,
   checkBusinessUpgrade,
   canonicalHttpOrigin,
   ClientAuthenticationSchema,
@@ -55,13 +59,27 @@ export interface IdentityPort {
   access?: AccessStore;
   claimListener?: () => () => void;
   observed?: (event: {
-    kind: "hello" | "proof" | "applied" | "selected" | "exchanged" | "accepted" | "revoked";
+    kind:
+      | "hello"
+      | "proof"
+      | "applied"
+      | "selected"
+      | "exchanged"
+      | "accepted"
+      | "revoked"
+      | "receivedProof"
+      | "receivedBusiness";
     deviceId?: DeviceId;
     commandId?: CommandId;
+    connectionId?: ServerHello["connectionId"];
+    address?: string;
+    sequence?: number;
   }) => void;
+  beforeConfiguration?: (session: SessionAuthorized) => Promise<void>;
   beforePairingReply?: (result: DevicePairingResult) => Promise<void>;
 }
 type Peer = {
+  flow?: ControlStream;
   socket: WebSocket;
   hello: Omit<ServerHello, "identityProof">;
   issued: number;
@@ -96,6 +114,7 @@ export function listenIdentity(
   port = 0,
   allowedOrigins: readonly string[] = [],
   publishedOrigin?: string,
+  browser?: { binding: Awaited<ReturnType<typeof preflight>>; asset: string; fixturePage?: string },
 ) {
   if (host.configuration.environment.id !== host.identity.id)
     throw Error("Configuration belongs to a different environment");
@@ -118,11 +137,16 @@ export function listenIdentity(
     p.closed = true;
     p.challenge = null;
     p.subscriptions.clear();
-    peers.delete(p);
+    p.flow?.close();
     p.socket.close(code);
   }
   function send(p: Peer, message: unknown) {
-    if (!p.closed) p.socket.send(JSON.stringify(message));
+    if (p.closed) return;
+    if (!p.flow) {
+      p.socket.send(JSON.stringify(message));
+      return;
+    }
+    p.flow.send(v.parse(ControlMessageSchema, message));
   }
   function reject(p: Peer, reason: SessionRejected["reason"]) {
     send(p, { kind: "session.rejected", reason } satisfies SessionRejected);
@@ -290,6 +314,13 @@ export function listenIdentity(
       : v.safeParse(ClientAuthenticationSchema, raw);
     if (!parsed.success) return close(p, 1007);
     const m = parsed.output;
+    host.observed?.({
+      kind: m.kind === "client.authenticate" ? "receivedProof" : "receivedBusiness",
+      connectionId: hello.connectionId,
+      sequence: m.sequence,
+      ...(m.signer.kind === "device" ? { deviceId: m.signer.deviceId } : {}),
+      ...(m.kind === "signedRequest" ? { commandId: m.commandId } : {}),
+    });
     const commandId = m.kind === "signedRequest" ? m.commandId : undefined;
     const registered = p.session ? current(p, p.session.signer, commandId) : null;
     if (p.session && !registered) return;
@@ -327,7 +358,12 @@ export function listenIdentity(
       return close(p, BUSINESS_CLOSE_CODES.revoked);
     }
     p.sequence = m.sequence;
-    host.observed?.({ kind: "proof", deviceId: device.deviceId });
+    host.observed?.({
+      kind: "proof",
+      deviceId: device.deviceId,
+      connectionId: hello.connectionId,
+      sequence: m.sequence,
+    });
     if (m.kind === "client.authenticate") {
       if (now() - p.issued >= PAIRING_LIMITS.challengeMs) return reject(p, "challengeExpired");
       if (
@@ -348,6 +384,8 @@ export function listenIdentity(
       };
       p.session = session;
       send(p, session);
+      if (host.beforeConfiguration) await host.beforeConfiguration(session);
+      if (p.closed) return;
       send(p, {
         ...host.configuration,
         kind: "session.configuration",
@@ -360,7 +398,13 @@ export function listenIdentity(
       const receipt = pending instanceof Promise ? await pending : pending;
       if (p.closed || !current(p, m.signer) || receipt.commandId !== m.commandId) return;
       if (receipt.kind === "accepted") {
-        host.observed?.({ kind: "accepted", deviceId: device.deviceId, commandId: m.commandId });
+        host.observed?.({
+          kind: "accepted",
+          deviceId: device.deviceId,
+          commandId: m.commandId,
+          connectionId: hello.connectionId,
+          sequence: m.sequence,
+        });
         if (
           m.method === "subscription.openThread" &&
           receipt.result.kind === "subscriptionOpened" &&
@@ -381,11 +425,35 @@ export function listenIdentity(
       if (req.rawHeaders[i]?.toLowerCase() === "origin") incoming.push(req.rawHeaders[i + 1] ?? "");
     return checkBusinessUpgrade(req.url ?? "", incoming, [...origins], URL);
   }
-  const server = createServer((req, res) => {
+  const serve: RequestListener = (req, res) => {
+    if (browser && (req.method === "GET" || req.method === "HEAD")) {
+      const js = req.url === "/assets/browser-host.js";
+      const content = js
+        ? browser.asset
+        : req.url === "/"
+          ? browserPage()
+          : req.url === "/__fixture__/browser.html"
+            ? browser.fixturePage
+            : undefined;
+      if (content !== undefined) {
+        res.writeHead(200, {
+          "Content-Type": js ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8",
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.end(req.method === "HEAD" ? undefined : content);
+        return;
+      }
+      if (req.url === "/ws" && !req.headers.upgrade) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+    }
     const d = admission(req);
     res.writeHead(d.kind === "reject" ? d.status : 400);
     res.end();
-  });
+  };
+  const server = browser?.binding.tls ? createTLS(browser.binding.tls, serve) : createServer(serve);
   server.on("upgrade", (req, socket, head) => {
     const d = admission(req);
     for (const [n, end] of seen) {
@@ -422,17 +490,38 @@ export function listenIdentity(
         challenge: null,
         subscriptions: new Map(),
       };
+      if (browser && req.headers["sec-websocket-protocol"] === "kraka.flow.v1") {
+        const utf8 = {
+          encode: (s: string) => new TextEncoder().encode(s),
+          decode: (b: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(b),
+        };
+        peer.flow = new ControlStream(
+          hello.connectionId,
+          {
+            utf8,
+            now: () => performance.now(),
+            write(data: WireMessage) {
+              ws.send(data);
+              return 1;
+            },
+          },
+          () => !!peer.session,
+          (message) => enqueue(JSON.stringify(message)),
+        );
+      }
       peers.add(peer);
       peer.work = host
         .sign(canonicalJson(hello))
         .then((identityProof) => {
           send(peer, { ...hello, identityProof });
-          host.observed?.({ kind: "hello" });
+          host.observed?.({
+            kind: "hello",
+            connectionId: hello.connectionId,
+            ...(req.socket.remoteAddress ? { address: req.socket.remoteAddress } : {}),
+          });
         })
         .catch(() => close(peer, 1011));
-      ws.on("message", (data, binary) => {
-        if (binary) return close(peer, 1007);
-        const text = data.toString();
+      function enqueue(text: string) {
         const size = Buffer.byteLength(text);
         peer.pendingBytes += size;
         if (peer.pendingBytes > TRANSPORT_LIMITS.maxPendingControlBytes) return close(peer, 1009);
@@ -442,11 +531,34 @@ export function listenIdentity(
           .finally(() => {
             peer.pendingBytes -= size;
           });
+      }
+      ws.on("message", (data, binary) => {
+        if (binary) {
+          if (!peer.flow || !Buffer.isBuffer(data)) return close(peer, 1007);
+          try {
+            peer.flow.input(data);
+          } catch {
+            close(peer, 1007);
+          }
+          return;
+        }
+        const text = data.toString();
+        if (!peer.flow) {
+          enqueue(text);
+          return;
+        }
+        try {
+          readFrame(text);
+          peer.flow.input(text);
+        } catch {
+          close(peer, 1007);
+        }
       });
       ws.on("close", () => {
         peer.closed = true;
         peer.subscriptions.clear();
-        peers.delete(peer);
+        peer.flow?.close();
+        void peer.work.finally(() => peers.delete(peer));
       });
       ws.on("error", () => close(peer, 1011));
     });
@@ -454,7 +566,7 @@ export function listenIdentity(
   const release = host.claimListener?.();
   const address = (() => {
     try {
-      server.listen(port, "127.0.0.1");
+      server.listen(port, browser?.binding.host ?? "127.0.0.1");
       const bound = server.address();
       if (!bound || typeof bound === "string") throw Error("Loopback bind failed");
       return bound;
@@ -463,7 +575,14 @@ export function listenIdentity(
       throw e;
     }
   })();
-  const origin = `http://127.0.0.1:${address.port}`;
+  const name = browser?.binding.publishedHost ?? "127.0.0.1";
+  const origin = new URL(
+    (browser?.binding.protocol ?? "http") +
+      "://" +
+      (name.includes(":") && !name.startsWith("[") ? `[${name}]` : name) +
+      ":" +
+      address.port,
+  ).origin;
   if (publishedOrigin === undefined) origins.add(origin);
   function publish(
     threadId: ThreadId,
@@ -481,6 +600,7 @@ export function listenIdentity(
   }
   return {
     origin,
+    ready: { kind: "ready", host: address.address, port: address.port, origin },
     publish,
     async close() {
       const work = [...peers].map((p) => {

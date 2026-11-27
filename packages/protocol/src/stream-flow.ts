@@ -207,6 +207,13 @@ export class FlowSender {
       if (frame.lane === "window") this.control(frame);
     }
   }
+  releaseConsumed(id: number) {
+    const queue = this.streams.get(id);
+    if (!queue || queue.frames.length || queue.state.consumedBytes !== queue.state.producedBytes)
+      return false;
+    this.finish(id);
+    return true;
+  }
   finish(id: number) {
     const q = this.streams.get(id);
     if (!q) return;

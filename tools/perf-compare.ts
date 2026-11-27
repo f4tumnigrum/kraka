@@ -19,7 +19,9 @@ const threshold = v.object({
 });
 const metadata = {
   metric: v.picklist(metricIds),
-  variant: v.optional(v.picklist(["access.listSessions", "worktree.recovery", "codex.recovery"])),
+  variant: v.optional(
+    v.picklist(["access.listSessions", "worktree.recovery", "browserTLS", "codex.recovery"]),
+  ),
   role: v.picklist(["candidate", "baseline"]),
   revision: v.nullable(v.string()),
   digest: v.optional(v.string()),
