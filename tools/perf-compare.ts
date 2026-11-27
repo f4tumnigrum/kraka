@@ -4,6 +4,7 @@ import { budgetValue, exceedsBudget, metricIds } from "./perf-catalog";
 const series = v.object({
   series: v.string(),
   unit: v.string(),
+  count: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
   median: v.number(),
   p99: v.number(),
   min: v.number(),
@@ -35,6 +36,11 @@ const report = v.variant("status", [
     result: v.picklist(["pass", "breach", "observation"]),
     thresholds: v.pipe(v.array(threshold), v.minLength(1)),
     summary: v.array(series),
+    expected: v.record(v.string(), v.number()),
+    observations: v.pipe(v.array(v.unknown()), v.minLength(1)),
+    samples: v.array(
+      v.object({ series: v.string(), unit: v.string(), value: v.pipe(v.number(), v.finite()) }),
+    ),
   }),
   v.object({ ...metadata, status: v.literal("failed"), error: v.string() }),
   v.object({ ...metadata, status: v.literal("unavailable"), reason: v.string() }),
@@ -78,7 +84,9 @@ function reading(r: Measured, t: Threshold, i: number) {
   if (
     r.thresholds.length !== r.summary.length ||
     summary?.series !== t.series ||
-    summary.unit !== t.unit
+    summary.unit !== t.unit ||
+    r.samples.filter((sample) => sample.series === t.series && sample.unit === t.unit).length !==
+      summary.count
   )
     throw new Error(`Invalid ${r.role} summary for ${r.metric} ${t.series} (${t.unit})`);
   return { summary, value: budgetValue(t, summary) };
@@ -113,6 +121,8 @@ export function compare(
       reason: candidate.status === "failed" ? candidate.error : candidate.reason,
     };
   }
+  if (Object.entries(candidate.expected).some(([key, count]) => candidate.actual[key] !== count))
+    throw new Error(`Incomplete candidate observations for ${candidate.metric}`);
   const readings = candidate.thresholds.map((t, i) => ({
     threshold: t,
     ...reading(candidate, t, i),
@@ -121,20 +131,15 @@ export function compare(
     ...meta,
     status: "not comparable",
     reason,
-    decision:
-      candidate.result === "breach"
-        ? "fail"
-        : candidate.result === "observation"
-          ? "observe"
-          : "pass",
+    decision: "observe",
+    note: "First baseline. See the local reference-machine measurement for the absolute budget.",
     firstCompleteBaseline: candidate.digest ?? candidate.revision,
     delta: readings.map(({ threshold: t, value }) => ({
       ...t,
       baselineValue: null,
       candidateValue: value,
       candidateMinusBase: null,
-      decision:
-        candidate.result === "observation" ? "observe" : exceedsBudget(t, value) ? "fail" : "pass",
+      decision: "observe",
     })),
   });
   if (!base) return gap(missingReason);
@@ -153,23 +158,34 @@ export function compare(
     const allowed = tolerance(t, baselineValue);
     const regression = t.direction === "min" ? -difference : difference;
     const newlyBreached = !exceedsBudget(t, baselineValue) && exceedsBudget(t, candidateValue);
+    const proximityBoundary = t.direction === "min" ? 2 * t.limit : t.limit / 2;
+    const nearBudget =
+      t.direction === "min"
+        ? candidateValue <= proximityBoundary
+        : candidateValue >= proximityBoundary;
+    const beyondTolerance = regression > allowed;
     const reason = newlyBreached
       ? "new budget breach"
-      : regression > allowed
-        ? "regression beyond tolerance"
-        : "within tolerance";
+      : !beyondTolerance
+        ? "within tolerance"
+        : nearBudget
+          ? "regression beyond tolerance"
+          : "beyond tolerance with ample budget headroom";
     const decision =
       candidate.result === "observation"
         ? "observe"
-        : newlyBreached || regression > allowed
+        : newlyBreached || (nearBudget && beyondTolerance)
           ? "fail"
-          : "pass";
+          : beyondTolerance
+            ? "observe"
+            : "pass";
     return {
       ...t,
       baselineValue,
       candidateValue,
       candidateMinusBase: difference,
       tolerance: allowed,
+      proximityBoundary,
       observedRangesOverlap: a.min <= b.max && b.min <= a.max,
       decision,
       reason,

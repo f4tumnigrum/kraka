@@ -61,7 +61,8 @@ jobs:
           set -euo pipefail
           bun tools/stream-flow-bench.ts --shaped | tee "$RUNNER_TEMP/budget-shaped.jsonl"
           grep -Fx '{"group":4,"completed":true}' "$RUNNER_TEMP/budget-shaped.jsonl"
-      - name: Measure budgets on the PR base
+      - name: Prepare PR budget baseline
+        id: baseline
         continue-on-error: true
         if: runner.os == 'macOS' && github.event_name == 'pull_request'
         shell: bash
@@ -69,17 +70,24 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          BASE_ROOT="$(mktemp -d)"
-          trap 'rm -rf "$BASE_ROOT"' EXIT
+          BASE_ROOT="$(mktemp -d "$RUNNER_TEMP/kraka-perf-XXXXXX")"
           git archive "$BASE_SHA" | tar -xf - -C "$BASE_ROOT"
           (cd "$BASE_ROOT" && bun install --frozen-lockfile)
-          bun run perf --report-only --baseline-root "$BASE_ROOT" | tee "$RUNNER_TEMP/budget-baseline.jsonl"
-      - name: Measure candidate budgets
+          echo "root=$BASE_ROOT" >> "$GITHUB_OUTPUT"
+      - name: Measure budget workloads
         if: ${{ !cancelled() && runner.os == 'macOS' }}
+        env:
+          BASE_ROOT: ${{ steps.baseline.outputs.root }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          bun run perf --report-only --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
+          if [[ -n "$BASE_ROOT" ]]; then
+            trap 'rm -rf "$BASE_ROOT"' EXIT
+            bun tools/perf-pair.ts "$BASE_ROOT" "$RUNNER_TEMP"
+          else
+            bun run perf --report-only --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
+          fi
       - name: Compare budget observations
         if: ${{ !cancelled() && runner.os == 'macOS' && github.event_name == 'pull_request' }}
         shell: bash
