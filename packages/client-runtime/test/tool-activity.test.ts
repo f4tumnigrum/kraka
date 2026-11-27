@@ -18,7 +18,7 @@ import { Journal } from "../../../tools/fixtures/route-network";
 import { ThreadReplica, emptyThreadCache, type ToolActivityView } from "../src";
 
 test("only complete authorized bodies install across split UTF-8, stale blocks and collapse", async () => {
-  const f = fixtureSession("phone", "epoch");
+  const f = fixtureSession("phone", "epoch", undefined, true);
   const epoch = f.hello.connectionId;
   const utf8 = {
     encode: (s: string) => new TextEncoder().encode(s),

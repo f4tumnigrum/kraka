@@ -23,7 +23,7 @@ import { within, withState } from "./replay-process";
 
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
-  minor?: 0 | 1;
+  minor?: 0 | 1 | 2;
   wire?: (data: import("@kraka/protocol").WireMessage) => void;
   write?: (
     data: import("@kraka/protocol").WireMessage,

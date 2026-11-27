@@ -20,6 +20,7 @@ import {
   type SyncCursor,
   type SubscriptionId,
   ToolActivityDetailFrameSchema,
+  TOOL_ACTIVITY_DETAIL_MINOR,
   type ToolActivityDetailFrame,
 } from "@kraka/protocol";
 import { ThreadInstallation } from "./thread-installation";
@@ -277,6 +278,12 @@ export class ThreadReplica {
     onVersion: (view: ToolActivityView) => void;
     onError?: (error: Error) => void;
   }): Promise<ToolActivityReadOutcome> {
+    if (!this.configured || this.closed) throw Error("Session unavailable");
+    if (
+      this.expected.protocolVersion.minor < TOOL_ACTIVITY_DETAIL_MINOR ||
+      !this.expected.features.includes("timelineItems")
+    )
+      return { kind: "unsupported" };
     const streamId = ++this.lastId;
     const subscriptionId = this.host.id();
     const request = await this.sign("tool.readActivity", {

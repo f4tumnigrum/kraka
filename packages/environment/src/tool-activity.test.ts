@@ -28,7 +28,7 @@ const actor = (canRead: (threadId: ThreadId) => boolean): ToolActivityActor => (
   environmentId,
   visibility: "visible",
   timelineItems: true,
-  protocolMinor: 1,
+  protocolMinor: 2,
   allows: canRead,
 });
 const thread = (id: string) =>
@@ -104,7 +104,7 @@ test("stores one stable call across progress, preserves exact bytes, and ignores
         environmentId,
         canRead: () => true,
         timelineItems: true,
-        protocolMinor: 1,
+        protocolMinor: 2,
       },
       "visible",
     )
@@ -174,7 +174,7 @@ test("stores one stable call across progress, preserves exact bytes, and ignores
         environmentId,
         canRead: () => true,
         timelineItems: true,
-        protocolMinor: 1,
+        protocolMinor: 2,
       },
       "visible",
     )
@@ -234,7 +234,7 @@ test("opens exact old versions, returns a replacement for an expired version, an
       environmentId,
       canRead: () => true,
       timelineItems: true,
-      protocolMinor: 1,
+      protocolMinor: 2,
     },
     "visible",
   ).rows;
@@ -346,7 +346,7 @@ test("session evidence promotes in place and a parent end cannot invent the tool
     const rows = () =>
       f.journal
         .read(
-          { threadId, environmentId, canRead: () => true, timelineItems: true, protocolMinor: 1 },
+          { threadId, environmentId, canRead: () => true, timelineItems: true, protocolMinor: 2 },
           "visibility",
         )
         .rows.flatMap((r) => (r.row.objectType === "timelineItem" ? [r.row.value] : []));

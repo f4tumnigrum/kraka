@@ -19,7 +19,7 @@ import type { AdapterEventEnvelope } from "./adapter-contract";
 import { matchesAdapterEvent } from "./adapter-contract";
 import type { ThreadSessionBinding } from "./executor-records";
 import { promoteSessionObservation } from "./session-observations";
-import { ToolActivityHistoryItemSchema } from "@kraka/protocol";
+import { TOOL_ACTIVITY_DETAIL_MINOR, ToolActivityHistoryItemSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import type { ThreadJournal } from "./thread-journal";
 import { visibleThreadRows, type AuthorizedScope } from "./thread-pass";
@@ -247,7 +247,8 @@ export function readActivity(options: {
   if (found?.row.objectType !== "timelineItem" || found.row.value.kind !== "toolActivity")
     return { kind: "notFound" };
   if (!actor.allows(found.row.value.threadId, "thread.view")) return { kind: "notFound" };
-  if (!actor.timelineItems) return { kind: "unsupported" };
+  if (!actor.timelineItems || actor.protocolMinor < TOOL_ACTIVITY_DETAIL_MINOR)
+    return { kind: "unsupported" };
 
   const current = found.row.value;
   const requested = expectedVersion ?? current.version;

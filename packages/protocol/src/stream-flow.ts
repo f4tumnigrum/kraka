@@ -59,6 +59,7 @@ interface Queue {
   pull: PullFrame;
   frames: Reservation[];
   ending: EndReason | null;
+  finishOnConsumption?: boolean;
   accepted?: (frame: TransportFrame) => void;
   dispose?: () => void;
 }
@@ -127,7 +128,11 @@ export class FlowSender {
       return "stale";
     }
     const result = applyWindow(q.state, w, nowMs);
-    if (result.kind === "updated") q.state = result.stream;
+    if (result.kind === "updated") {
+      q.state = result.stream;
+      if (q.finishOnConsumption && q.state.consumedBytes === q.state.sentBytes)
+        this.finish(w.streamId);
+    }
     return result.kind;
   }
   control(message: ControlMessage | FlowWindow) {
@@ -206,6 +211,12 @@ export class FlowSender {
       if (frame.lane === "control") this.control(frame.message);
       if (frame.lane === "window") this.control(frame);
     }
+  }
+  finishAfterConsumption(id: number) {
+    const q = this.streams.get(id);
+    if (!q) return;
+    if (!q.state.reservedBytes && q.state.sentBytes === q.state.consumedBytes) this.finish(id);
+    else q.finishOnConsumption = true;
   }
   finish(id: number) {
     const q = this.streams.get(id);

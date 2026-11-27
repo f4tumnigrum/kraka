@@ -10,7 +10,7 @@ import { codexFixture } from "./fixtures/codex-turn";
 import { connectReplica, threadFixture, turnRows } from "./fixtures/thread-resume";
 import { startPairedProject, commandId } from "./fixtures/paired-project";
 import { Journal } from "./fixtures/route-network";
-import { withState, within } from "./fixtures/replay-process";
+import { fixture, withState, within } from "./fixtures/replay-process";
 import { installedTool, expand, toolFact, type ActivityClient } from "./fixtures/tool-activity";
 
 test(
@@ -84,7 +84,7 @@ test(
             );
             caches.push(cache);
             const c = await connectReplica(f.instance.endpoint, pair.identity, device, cache, {
-              minor: 1,
+              minor: 2,
               installed: (h) => {
                 if (i === 0) installs.push(h);
               },
@@ -132,6 +132,53 @@ test(
           expect(f.updates.some((e) => e.kind === "round.ended")).toBe(false);
           gates.get(19)!.resolve();
           await f.events.until((e) => e.kind === "round.ended");
+          const recording = join(dir, "failed-command.jsonl");
+          const lines = (await Bun.file(join(productRoot, fixture)).text()).trimEnd().split("\n");
+          const failed = lines.map((line) => {
+            const row = JSON.parse(line);
+            if (row.seq === 12 || row.seq === 14) {
+              const native = row.frame.params.item;
+              native.id = "failed-call";
+              native.command = "check changes";
+              if (row.seq === 14) {
+                native.aggregatedOutput = "failed\n";
+                native.exitCode = 17;
+                native.status = "failed";
+              }
+            } else if (row.seq === 13) {
+              row.frame.params.itemId = "failed-call";
+              row.frame.params.delta = "failed\n";
+            }
+            return JSON.stringify(row);
+          });
+          await Bun.write(recording, failed.join("\n") + "\n");
+          const replacement = structuredClone(f.registration);
+          replacement.driver.variables.PEER_RECORDING.value = recording;
+          accepted((await f.configure("1", replacement)).receipt, "executorConfigured");
+          accepted((await f.refresh()).receipt, "executorRefreshed");
+          const failedIds = accepted((await f.send()).receipt, "threadStarted");
+          await f.events.until((e) => e.kind === "tool.ended" && e.roundId === failedIds.roundId);
+          accepted(
+            await (await c.client.open(failedIds.threadId, null)).receipt,
+            "subscriptionOpened",
+          );
+          const findFailed = () =>
+            Object.values(c.cache.read().rows).flatMap((r) =>
+              r.row?.objectType === "timelineItem" &&
+              r.row.value.kind === "toolActivity" &&
+              r.row.value.threadId === failedIds.threadId
+                ? [r.row.value]
+                : [],
+            )[0];
+          await installs.until(() => !!findFailed());
+          const failedRow = findFailed()!;
+          expect(failedRow.source.callId.toString()).toBe("failed-call");
+          expect(failedRow.id).not.toBe(row.id);
+          expect((await (await expand(c, failedRow)).at("3")).body).toMatchObject({
+            exitCode: 17,
+            status: "failed",
+            output: { kind: "complete", text: "failed\n" },
+          });
         } finally {
           for (const g of gates.values()) g.resolve();
           await Promise.all(clients.map((c) => c.close()));
@@ -153,7 +200,7 @@ test(
       await f.start();
       await f.control({ activity: toolFact(f.threadId, "started") });
       const signal = Promise.withResolvers<SyncCursor>();
-      const c = await f.connect("desktop", { installed: signal.resolve });
+      const c = await f.connect("desktop", { minor: 2, installed: signal.resolve });
       await (await c.client.open(f.threadId, null)).receipt;
       await signal.promise;
       const row = installedTool(c);
@@ -187,7 +234,7 @@ test(
       });
       await f.restart();
       const opened = Promise.withResolvers<SyncCursor>();
-      const fresh = await f.connect("fresh", { installed: opened.resolve });
+      const fresh = await f.connect("fresh", { minor: 2, installed: opened.resolve });
       await (await fresh.client.open(f.threadId, null)).receipt;
       const head = await opened.promise;
       expect(
@@ -203,7 +250,27 @@ test(
         exitCode: 17,
         changes: [change],
       });
-      const legacy = await f.connect("legacy", { timeline: false });
+      const summaryOnly = await f.connect("summary-only", { minor: 1 });
+      expect(
+        await summaryOnly.client.readActivity({
+          threadId: f.threadId,
+          itemId: row.id,
+          expectedVersion: null,
+          onVersion() {
+            throw Error("Unexpected body");
+          },
+        }),
+      ).toEqual({ kind: "unsupported" });
+      expect(
+        await summaryOnly.client.rpc("tool.readActivity", {
+          threadId: f.threadId,
+          itemId: row.id,
+          expectedVersion: null,
+          subscriptionId: crypto.randomUUID(),
+          streamId: 1,
+        }),
+      ).toMatchObject({ kind: "accepted", result: { kind: "activityUnsupported" } });
+      const legacy = await f.connect("legacy", { minor: 2, timeline: false });
       expect(
         await legacy.client.readActivity({
           threadId: f.threadId,
@@ -248,7 +315,7 @@ test(
         transactions: Array.from({ length: 12 }, (_, i) => turnRows(fork, i + 100)),
       });
       const heads = new Journal<SyncCursor>();
-      const c = await f.connect("tablet", { installed: (h) => heads.push(h) });
+      const c = await f.connect("tablet", { minor: 2, installed: (h) => heads.push(h) });
       await (await c.client.open(fork, null)).receipt;
       const initial = await heads.until(() => true);
       const page = await c.client.history(initial, null, () => true);
@@ -295,6 +362,7 @@ test(
           pending: (() => void) | undefined,
           dataBytes = 0;
         const c = await f.connect("viewer", {
+          minor: 2,
           installed: installed.resolve,
           write(w, send) {
             if (paused && stream && typeof w === "string") {
@@ -322,7 +390,7 @@ test(
         const detail = await expand(c, row);
         await within(blocked.promise, 5000, "paused detail");
         const h = new Journal<SyncCursor>();
-        const other = await f.connect("tablet", { installed: (x) => h.push(x) });
+        const other = await f.connect("tablet", { minor: 2, installed: (x) => h.push(x) });
         await (await other.client.open(f.threadId, null)).receipt;
         await h.until(() => true);
         const newTitle = "Edited while paused";
@@ -357,7 +425,7 @@ test(
         ]);
         await f.control({ activity: toolFact(foreign, "ended", "private bytes", 0) });
         const ready = Promise.withResolvers<SyncCursor>();
-        const owner = await f.connect("foreign-owner", { installed: ready.resolve });
+        const owner = await f.connect("foreign-owner", { minor: 2, installed: ready.resolve });
         const o = await owner.client.open(foreign, null);
         await o.receipt;
         const page = await ready.promise;
@@ -365,6 +433,7 @@ test(
         expect(page.scope).toEqual({ kind: "thread", threadId: foreign });
         const deniedFrames: number[] = [];
         const denied = await f.connect("tablet", {
+          minor: 2,
           wire(w) {
             const frame = decodeFrame(w, utf8);
             if (frame.lane === "data") deniedFrames.push(frame.streamId);

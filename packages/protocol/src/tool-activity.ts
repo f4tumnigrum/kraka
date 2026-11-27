@@ -8,6 +8,9 @@ import {
 } from "./ids";
 import { ToolActivityHistoryItemSchema } from "./timeline";
 
+// Minor 1 peers can negotiate timeline rows but cannot open versioned bodies.
+export const TOOL_ACTIVITY_DETAIL_MINOR = 2;
+
 const capturedInput = v.variant("kind", [
   v.strictObject({ kind: v.literal("unobserved") }),
   v.strictObject({ kind: v.literal("captured"), json: v.string() }),

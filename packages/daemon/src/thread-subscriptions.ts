@@ -140,13 +140,16 @@ export class ThreadSubscriptions {
       commandId,
       failure: { kind },
     });
+    let terminal = false;
     let sub: ActivitySub | null = null;
     let pull: PullFrame = () => null;
     // Both peers consume this ordinal even if the signed open is rejected.
     const id = this.peer.send.open(
       subscriptionId,
       (offset, room) => pull(offset, room),
-      undefined,
+      () => {
+        if (terminal) this.peer.send.finishAfterConsumption(streamId);
+      },
       () => {
         sub?.off();
         if (sub) this.activities.delete(subscriptionId);
@@ -182,7 +185,6 @@ export class ThreadSubscriptions {
     this.activities.set(subscriptionId, sub);
     let stored: StoredToolActivityVersion | null = read.version;
     let last = read.version.item.version,
-      terminal = false,
       dirty = false;
     let header: ToolActivityDetailFrame | null = null,
       chunk: PullFrame | null = null;

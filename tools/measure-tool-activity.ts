@@ -34,6 +34,7 @@ export async function measureToolActivity(
       const sentAt = new Map<string, number>(),
         gotAt = new Map<string, number>();
       const c = await f.connect("desktop", {
+        minor: 2,
         installed: installed.resolve,
         write(w, send) {
           if (active && typeof w === "string") {
