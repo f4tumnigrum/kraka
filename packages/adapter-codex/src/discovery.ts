@@ -1,12 +1,16 @@
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, isAbsolute, sep } from "node:path";
 import * as v from "valibot";
 import {
   CAPABILITY_IDS,
+  CodexEffectivePolicySchema,
+  canonicalJson,
   CapabilityMatrixSchema,
   NativeSessionIdSchema,
   type CapabilityId,
+  type NativeSessionId,
+  type PermissionMode,
   type ExecutorRefreshed,
 } from "@kraka/protocol";
 import type { CapabilityDeclaration, ExecutorRegistration, SessionSetup } from "@kraka/environment";
@@ -16,6 +20,9 @@ import { NativeError, object } from "./native";
 type Catalog = NonNullable<ExecutorRefreshed["models"]>;
 export type CodexProbe = {
   declaration: CapabilityDeclaration<"codex">;
+  accountContext: string | null;
+  nativeHome: string | null;
+  historyRoot: string | null;
   models: Catalog | null;
   binaryVersion: string | null;
   compatibilityAdvisory: ExecutorRefreshed["compatibilityAdvisory"];
@@ -37,6 +44,7 @@ function declaration(
   checkedAt: number,
   readiness: ExecutorRefreshed["readiness"],
   supported: Set<CapabilityId>,
+  mode: PermissionMode,
 ): CapabilityDeclaration<"codex"> {
   const unsupported = {
     kind: "unsupported",
@@ -58,10 +66,16 @@ function declaration(
     ),
     input: { ...none, receipt: "proof" },
     answer: none,
-    steering: { queueNext: steer, insertCurrent: steer, restartCurrent: steer },
-    requests: { approval: request, question: request },
+    steering: {
+      queueNext: steer,
+      insertCurrent: supported.has("steerCurrentRound")
+        ? { support: { kind: "native" }, readReceipt: "no", accepts: ["text"] }
+        : steer,
+      restartCurrent: steer,
+    },
+    requests: { approval: request, question: { afterSessionLoss: "messageFallback" } },
     permission: {
-      modes: supported.has("selectPermissionMode") ? ["ask"] : [],
+      modes: supported.has("selectPermissionMode") ? [mode] : [],
       enforcement: supported.has("declareSandboxEnforcement") ? "native" : "unknown",
       changeEffective: "now",
     },
@@ -146,36 +160,87 @@ export async function openThread(
   cwd: string,
   model: SessionSetup["model"],
   probe = false,
+  mode: PermissionMode = "ask",
+  resume: NativeSessionId | null = null,
+  historyRoot: string | null = null,
 ) {
   const { effort, serviceTier } = model.options;
+  const approvalPolicy =
+    mode === "ask"
+      ? "untrusted"
+      : mode === "edits"
+        ? "on-request"
+        : {
+            granular: {
+              rules: false,
+              sandbox_approval: false,
+              skill_approval: false,
+              request_permissions: false,
+              mcp_elicitations: true,
+            },
+          };
+  const config = {
+    ...(effort ? { model_reasoning_effort: effort } : {}),
+    ...(mode === "edits"
+      ? {
+          sandbox_workspace_write: {
+            writable_roots: [cwd],
+            network_access: false,
+            exclude_slash_tmp: true,
+            exclude_tmpdir_env_var: true,
+          },
+        }
+      : {}),
+  };
+  const sandboxMode =
+    mode === "ask" ? "read-only" : mode === "edits" ? "workspace-write" : "danger-full-access";
   const r = object(
-    await rpc.request("thread/start", {
+    await rpc.request(resume ? "thread/resume" : "thread/start", {
+      ...(resume ? { threadId: resume } : {}),
       cwd,
       model: model.id,
-      approvalPolicy: "untrusted",
+      approvalPolicy,
       approvalsReviewer: "user",
-      sandbox: "read-only",
-      ...(effort ? { config: { model_reasoning_effort: effort } } : {}),
+      sandbox: sandboxMode,
+      ...(Object.keys(config).length ? { config } : {}),
       ...(serviceTier ? { serviceTier } : {}),
       ...(probe ? { ephemeral: true } : {}),
     }),
   );
   const thread = object(r.thread),
     sandbox = object(r.sandbox);
+  if (!probe && historyRoot && thread.path != null) {
+    if (typeof thread.path !== "string" || !isAbsolute(thread.path) || !isAbsolute(historyRoot))
+      throw new NativeError("invalidState", "Invalid Codex history location");
+    const path = relative(historyRoot, thread.path);
+    if (path === ".." || path.startsWith(".." + sep) || isAbsolute(path))
+      throw new NativeError("invalidState", "Codex history is outside the registered root");
+  }
+  if (resume && historyRoot && !thread.path)
+    throw new NativeError("invalidState", "Missing Codex history location");
   if (
     r.cwd !== cwd ||
     r.model !== model.id ||
-    r.approvalPolicy !== "untrusted" ||
+    !Bun.deepEquals(r.approvalPolicy, approvalPolicy) ||
     r.approvalsReviewer !== "user" ||
-    sandbox.type !== "readOnly" ||
-    sandbox.networkAccess !== false ||
+    (resume !== null && thread.id !== resume) ||
+    (mode === "ask" && (sandbox.type !== "readOnly" || sandbox.networkAccess !== false)) ||
+    (mode === "edits" &&
+      (sandbox.type !== "workspaceWrite" ||
+        sandbox.networkAccess !== false ||
+        !Array.isArray(sandbox.writableRoots) ||
+        sandbox.writableRoots.some((r) => r !== cwd))) ||
+    (mode === "open" && sandbox.type !== "dangerFullAccess") ||
     (thread.cwd !== undefined && thread.cwd !== cwd) ||
     (thread.model != null && thread.model !== model.id) ||
     (effort !== undefined && r.reasoningEffort !== effort) ||
     (serviceTier !== undefined && r.serviceTier !== serviceTier)
   )
     throw new NativeError("unsupported", "Codex returned incompatible effective session settings");
-  return v.parse(NativeSessionIdSchema, thread.id);
+  return {
+    nativeSessionId: v.parse(NativeSessionIdSchema, thread.id),
+    policy: v.parse(CodexEffectivePolicySchema, r),
+  };
 }
 async function basicMethods(launch: Launch) {
   const dir = await mkdtemp(join(tmpdir(), "kraka-codex-schema-"));
@@ -195,6 +260,45 @@ async function basicMethods(launch: Launch) {
     async function methods(file: string) {
       const schema = object(JSON.parse(await readFile(join(dir, file), "utf8")));
       const names = new Set<string>();
+      function resolveRef(raw: unknown): Record<string, unknown> {
+        let node = object(raw);
+        const seen = new Set<string>();
+        while (
+          typeof node.$ref === "string" &&
+          node.$ref.startsWith("#/") &&
+          !seen.has(node.$ref)
+        ) {
+          seen.add(node.$ref);
+          let target: unknown = schema;
+          for (const key of node.$ref.slice(2).split("/"))
+            target = object(target)[key.replaceAll("~1", "/").replaceAll("~0", "~")];
+          node = object(target);
+        }
+        return node;
+      }
+      function textInput(raw: unknown): boolean {
+        if (!raw || typeof raw !== "object") return false;
+        const n = resolveRef(raw);
+        const choices = n.oneOf ?? n.anyOf ?? n.allOf;
+        if (Array.isArray(choices)) return choices.some(textInput);
+        if (!n.properties) return false;
+        const props = object(n.properties);
+        if (!props.type || !props.text) return false;
+        const tag = resolveRef(props.type);
+        return (
+          (tag.const === "text" || (Array.isArray(tag.enum) && tag.enum.includes("text"))) &&
+          resolveRef(props.text).type === "string"
+        );
+      }
+      function supportsSteer(raw: unknown) {
+        if (!raw || typeof raw !== "object") return false;
+        const params = resolveRef(raw);
+        if (!params.properties) return false;
+        const p = object(params.properties);
+        return (
+          !!p.threadId && !!p.expectedTurnId && !!p.input && textInput(resolveRef(p.input).items)
+        );
+      }
       function visit(raw: unknown) {
         if (!raw || typeof raw !== "object") return;
         if (Array.isArray(raw)) {
@@ -206,9 +310,13 @@ async function basicMethods(launch: Launch) {
           const method = object(node.properties).method;
           if (method && typeof method === "object") {
             const values = object(method);
-            if (typeof values.const === "string") names.add(values.const);
-            if (Array.isArray(values.enum))
-              for (const value of values.enum) if (typeof value === "string") names.add(value);
+            const methods = Array.isArray(values.enum) ? values.enum : [values.const];
+            for (const value of methods)
+              if (
+                typeof value === "string" &&
+                (value !== "turn/steer" || supportsSteer(object(node.properties).params))
+              )
+                names.add(value);
           }
         }
         Object.values(node).forEach(visit);
@@ -220,7 +328,7 @@ async function basicMethods(launch: Launch) {
       methods("ClientRequest.json"),
       methods("ServerNotification.json"),
     ]);
-    return (
+    const basic =
       ["thread/start", "turn/start", "thread/read"].every((m) => requests.has(m)) &&
       [
         "turn/started",
@@ -229,8 +337,12 @@ async function basicMethods(launch: Launch) {
         "item/completed",
         "item/agentMessage/delta",
         "item/commandExecution/outputDelta",
-      ].every((m) => notices.has(m))
-    );
+      ].every((m) => notices.has(m));
+    if (!basic) return false;
+    const server = (await Bun.file(join(dir, "ServerRequest.json")).exists())
+      ? await methods("ServerRequest.json")
+      : new Set<string>();
+    return { requests, server };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -247,6 +359,9 @@ async function version(launch: Launch) {
   const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
   return code === 0 ? (/\b(\d+\.\d+\.\d+)\b/.exec(out)?.[1] ?? null) : null;
 }
+export function accountFingerprint(result: Record<string, unknown>) {
+  return new Bun.CryptoHasher("sha256").update(canonicalJson(result.account)).digest("hex");
+}
 export async function probeCodex(
   reg: ExecutorRegistration,
   launch: Launch,
@@ -261,6 +376,8 @@ export async function probeCodex(
     model: unknown,
     operation: unknown,
   };
+  let accountContext: string | null = null,
+    nativeHome: string | null = null;
   let binaryVersion: string | null = null,
     models: Catalog | null = null,
     compatibilityAdvisory: CodexProbe["compatibilityAdvisory"] = null,
@@ -270,12 +387,21 @@ export async function probeCodex(
   const supported = new Set<CapabilityId>();
   const result = () => ({
     binaryVersion,
+    accountContext,
+    nativeHome,
+    historyRoot: reg.driver.historyRoot,
     models,
     compatibilityAdvisory,
     versionAdvisory,
     retryAt,
     transient,
-    declaration: declaration(Number(reg.version), Date.now(), readiness, supported),
+    declaration: declaration(
+      Number(reg.version),
+      Date.now(),
+      readiness,
+      supported,
+      reg.permission.selected,
+    ),
   });
   if (!reg.enabled) return result();
   try {
@@ -299,13 +425,14 @@ export async function probeCodex(
   let rpc: CodexConnection | undefined;
   try {
     rpc = new CodexConnection(launch);
-    await rpc.initialize();
+    nativeHome = await rpc.initialize();
     supported.add("declareTransport");
     supported.add("negotiateProtocol");
     const a = object(await rpc.request("account/read", { refreshToken: false }));
     if (!Object.hasOwn(a, "account")) throw new Error("Missing Codex account");
     if (a.account !== null && typeof object(a.account).type !== "string")
       throw new Error("Invalid Codex account");
+    accountContext = accountFingerprint(a);
     readiness.authenticated = verified(
       a.account === null ? (a.requiresOpenaiAuth === false ? "yes" : "no") : "yes",
     );
@@ -316,13 +443,30 @@ export async function probeCodex(
     const model = selectedModel(models, reg.model);
     readiness.model = verified(model ? "yes" : "no");
     if (!model) return result();
-    await openThread(rpc, launch.cwd, model, true);
-    if (!(await basicMethods(launch))) {
+    await openThread(rpc, launch.cwd, model, true, reg.permission.selected);
+    const methods = await basicMethods(launch);
+    if (!methods) {
       readiness.operation = verified("no");
       return result();
     }
     readiness.operation = verified("yes");
     for (const id of basic) supported.add(id);
+    supported.add("readHistory");
+    if (methods.requests.has("thread/resume")) {
+      supported.add("resumeSessionAfterProcessExit");
+      supported.add("resumeSessionAfterHostRestart");
+    }
+    if (methods.requests.has("turn/interrupt")) supported.add("stopRound");
+    if (methods.requests.has("turn/steer")) supported.add("steerCurrentRound");
+    for (const [method, id] of [
+      ["item/commandExecution/requestApproval", "requestCommandApproval"],
+      ["item/fileChange/requestApproval", "requestFileApproval"],
+      ["item/tool/requestUserInput", "askStructuredQuestion"],
+    ] as const)
+      if (methods.server.has(method)) {
+        supported.add(id);
+        supported.add("answerApprovalChoices");
+      }
   } catch (error) {
     if (!models && error instanceof NativeError && error.reason === "notAuthenticated") {
       readiness.authenticated = verified("no");

@@ -317,6 +317,7 @@ export type AdapterEventPayload =
       recovery: Recovery;
       body: RequestBody;
       approval?: ApprovalAuthority;
+      nativeNode?: NativeItemId;
       fallback?: Extract<
         Extract<
           import("@kraka/protocol").TodoRoute,
@@ -325,6 +326,7 @@ export type AdapterEventPayload =
         { kind: "asMessage" }
       >;
     }
+  | { kind: "requestClosed"; attemptId: AttemptId; requestId: NativeRequestId }
   | { kind: "steerRead"; attemptId: AttemptId; messageId: MessageId }
   | {
       kind: "childChanged";

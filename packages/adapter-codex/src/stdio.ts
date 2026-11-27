@@ -36,6 +36,8 @@ export class CodexConnection {
   private nextId = 1;
   private ordinal = 0;
   private lost: Error | null = null;
+  onRequest: (method: string, params: unknown, id: string | number, ordinal: number) => boolean =
+    () => false;
   onNotice: Notice = () => {};
   onLost: (error: Error) => void = () => {};
   constructor(
@@ -54,6 +56,7 @@ export class CodexConnection {
       this.ordinal++;
       if (typeof frame.method === "string") {
         if (typeof frame.id === "string" || typeof frame.id === "number") {
+          if (this.onRequest(frame.method, frame.params, frame.id, this.ordinal)) return;
           void Promise.resolve(
             this.write({ id: frame.id, error: { code: -32601, message: "Method not supported" } }),
           ).catch(() => this.fail(new Error("Codex reply write failed")));
@@ -81,6 +84,10 @@ export class CodexConnection {
   private write(body: object) {
     this.child.stdin.write(`${JSON.stringify(body)}\n`);
     return this.child.stdin.flush();
+  }
+  async respond(id: string | number, result: object) {
+    if (this.lost) throw this.lost;
+    await this.write({ id, result });
   }
   async request(method: string, params: object, timeout = 30000) {
     return (await this.reply(method, params, timeout)).result;
@@ -116,6 +123,7 @@ export class CodexConnection {
     if (typeof r.userAgent !== "string" || !r.userAgent)
       throw new Error("Invalid Codex initialize result");
     await this.write({ method: "initialized" });
+    return typeof r.codexHome === "string" && r.codexHome.length ? r.codexHome : null;
   }
   async close() {
     const timer = setTimeout(() => {

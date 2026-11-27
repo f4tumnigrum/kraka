@@ -3465,6 +3465,107 @@
                   "type": "object",
                   "properties": {
                     "kind": {
+                      "const": "stopResult"
+                    },
+                    "stopCommandId": {
+                      "$ref": "#/$defs/CommandId"
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "roundId": {
+                      "$ref": "#/$defs/RoundId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "sessionId": {
+                      "$ref": "#/$defs/NativeSessionId"
+                    },
+                    "rootId": {
+                      "$ref": "#/$defs/NativeRootTurnId"
+                    },
+                    "requestedAt": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "dispatchedAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reachedAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "timedOutAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "disposition": {
+                      "enum": [
+                        "pending",
+                        "unconfirmed",
+                        "stopped",
+                        "alreadyEnded"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "stopCommandId",
+                    "threadId",
+                    "roundId",
+                    "attemptId",
+                    "instanceId",
+                    "epoch",
+                    "sessionId",
+                    "rootId",
+                    "requestedAt",
+                    "dispatchedAt",
+                    "reachedAt",
+                    "timedOutAt",
+                    "disposition"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
                       "const": "executorRefreshed"
                     },
                     "instanceId": {
@@ -7892,20 +7993,135 @@
               "maximum": 9007199254740991
             },
             "selectedMode": {
-              "const": "ask"
+              "$ref": "#/$defs/PermissionMode"
             },
             "effectiveMode": {
-              "const": "ask"
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "effectivePolicy": {
+              "type": "object",
+              "properties": {
+                "approvalsReviewer": {
+                  "const": "user"
+                },
+                "approvalPolicy": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "untrusted",
+                        "on-request"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "granular": {
+                          "type": "object",
+                          "properties": {
+                            "rules": {
+                              "const": false
+                            },
+                            "sandbox_approval": {
+                              "const": false
+                            },
+                            "skill_approval": {
+                              "const": false
+                            },
+                            "request_permissions": {
+                              "const": false
+                            },
+                            "mcp_elicitations": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "rules",
+                            "sandbox_approval",
+                            "skill_approval",
+                            "request_permissions",
+                            "mcp_elicitations"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "granular"
+                      ]
+                    }
+                  ]
+                },
+                "sandbox": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "readOnly"
+                        },
+                        "networkAccess": {
+                          "const": false
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "networkAccess"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "workspaceWrite"
+                        },
+                        "writableRoots": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "networkAccess": {
+                          "const": false
+                        },
+                        "excludeSlashTmp": {
+                          "const": true
+                        },
+                        "excludeTmpdirEnvVar": {
+                          "const": true
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "writableRoots",
+                        "networkAccess",
+                        "excludeSlashTmp",
+                        "excludeTmpdirEnvVar"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "dangerFullAccess"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "approvalsReviewer",
+                "approvalPolicy",
+                "sandbox"
+              ]
             },
             "supportedModes": {
               "type": "array",
-              "prefixItems": [
-                {
-                  "const": "ask"
-                }
-              ],
-              "minItems": 1,
-              "items": false
+              "items": {
+                "$ref": "#/$defs/PermissionMode"
+              }
             },
             "enforcement": {
               "const": "native"
@@ -14084,6 +14300,14 @@
                   "completed"
                 ],
                 "type": "string"
+              },
+              "submission": {
+                "enum": [
+                  "submitted",
+                  "rejected",
+                  "unknown"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -19441,6 +19665,9 @@
         },
         {
           "$ref": "#/$defs/input.releaseQueue"
+        },
+        {
+          "$ref": "#/$defs/round.readStop"
         },
         {
           "$ref": "#/$defs/round.stop"
@@ -28477,6 +28704,119 @@
       ],
       "additionalProperties": false,
       "description": "Requires workspace.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
+    "round.readStop": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "round.readStop"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "stopCommandId": {
+              "$ref": "#/$defs/CommandId"
+            }
+          },
+          "required": [
+            "threadId",
+            "stopCommandId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
     "round.stop": {
       "type": "object",

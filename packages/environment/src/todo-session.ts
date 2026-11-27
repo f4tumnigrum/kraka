@@ -1,6 +1,8 @@
 import * as v from "valibot";
 import {
   TodoRequestSchema,
+  MessageSchema,
+  WorkNodeIdSchema,
   type AdapterFamily,
   type Round,
   type NativeRequestId,
@@ -22,6 +24,7 @@ export function bindTodoSession<F extends AdapterFamily, H extends object>(
   session: AdapterSession<F, H>,
   adapter: ProviderAdapter<F, H>,
   capabilities: CapabilityDeclaration<F>,
+  nativeOpen?: (request: NativeRequestId) => boolean,
 ) {
   const requests = new Map<NativeRequestId, ReturnType<TodoLedger["open"]>>();
   const attempts = new Map<AttemptId, NativeRequestId>();
@@ -29,12 +32,40 @@ export function bindTodoSession<F extends AdapterFamily, H extends object>(
     event(e: AdapterEventEnvelope): boolean {
       const p = e.payload;
       if (!matchesAdapterEvent(session, e)) return false;
+      if (p.kind === "requestClosed" && p.attemptId === round.attempt.attemptId) {
+        requests.get(p.requestId)?.close(true);
+        return true;
+      }
       if (p.kind === "requestOpened") {
         if (p.attemptId !== round.attempt.attemptId) return false;
         if (requests.has(p.requestId)) return true;
         const support = capabilities.matrix.answerApprovalChoices;
         if (support.kind === "unsupported" || !session.nativeSessionId)
           throw Error("Missing native reply capability");
+        const questions =
+          p.recovery === "messageFallback" && p.body.kind === "question" && p.nativeNode
+            ? p.body.questions.map((q) =>
+                v.parse(MessageSchema, {
+                  id: crypto.randomUUID(),
+                  threadId: round.threadId,
+                  roundId: round.id,
+                  author: { kind: "executor", id: session.instanceId },
+                  text: q.text,
+                  references: [],
+                  attachments: [],
+                  version: "1",
+                }),
+              )
+            : [];
+        const [first, ...rest] = questions;
+        const fallback =
+          first && p.nativeNode
+            ? {
+                kind: "asMessage" as const,
+                nodeId: v.parse(WorkNodeIdSchema, p.nativeNode),
+                questions: [first.id, ...rest.map((q) => q.id)],
+              }
+            : p.fallback;
         const todo = v.parse(TodoRequestSchema, {
           id: crypto.randomUUID(),
           threadId: round.threadId,
@@ -49,46 +80,52 @@ export function bindTodoSession<F extends AdapterFamily, H extends object>(
               sessionId: session.nativeSessionId,
               requestId: p.requestId,
               fallback:
-                p.recovery === "messageFallback" && p.body.kind === "question" && p.fallback
-                  ? p.fallback
+                p.recovery === "messageFallback" && p.body.kind === "question" && fallback
+                  ? fallback
                   : { kind: "expire" },
             },
           },
         });
         requests.set(
           p.requestId,
-          ledger.open(todo, {
-            instanceId: session.instanceId,
-            family: session.family,
-            epoch: session.epoch,
-            attemptId: p.attemptId,
-            ...(p.approval ? { approval: p.approval } : {}),
-            async send(answer, reply) {
-              attempts.set(answer.attemptId, p.requestId);
-              const result = await adapter.invoke(
-                session,
-                {
-                  family: session.family,
-                  instanceId: session.instanceId,
-                  capability: "answerApprovalChoices",
-                  support,
-                  capabilityVersion: capabilities.version,
-                },
-                {
-                  kind: "deliverAnswer",
-                  capability: "answerApprovalChoices",
-                  deliveryId: answer.deliveryId,
-                  attemptId: answer.attemptId,
-                  requestId: p.requestId,
-                  answer,
-                  ...(reply ? { reply } : {}),
-                },
-              );
-              if (result.kind !== "ok" || result.value.kind !== "written")
-                throw Error("Answer write unconfirmed");
-              return result.value.deliveryId;
+          ledger.open(
+            todo,
+            {
+              instanceId: session.instanceId,
+              family: session.family,
+              epoch: session.epoch,
+              attemptId: p.attemptId,
+              ...(p.nativeNode ? { nativeNode: p.nativeNode } : {}),
+              ...(nativeOpen ? { available: () => nativeOpen(p.requestId) } : {}),
+              ...(p.approval ? { approval: p.approval } : {}),
+              async send(answer, reply) {
+                attempts.set(answer.attemptId, p.requestId);
+                const result = await adapter.invoke(
+                  session,
+                  {
+                    family: session.family,
+                    instanceId: session.instanceId,
+                    capability: "answerApprovalChoices",
+                    support,
+                    capabilityVersion: capabilities.version,
+                  },
+                  {
+                    kind: "deliverAnswer",
+                    capability: "answerApprovalChoices",
+                    deliveryId: answer.deliveryId,
+                    attemptId: answer.attemptId,
+                    requestId: p.requestId,
+                    answer,
+                    ...(reply ? { reply } : {}),
+                  },
+                );
+                if (result.kind !== "ok" || result.value.kind !== "written")
+                  throw Error("Answer write unconfirmed");
+                return result.value.deliveryId;
+              },
             },
-          }),
+            questions,
+          ),
         );
         return true;
       }

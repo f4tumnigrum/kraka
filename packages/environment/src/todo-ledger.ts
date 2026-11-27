@@ -1,6 +1,8 @@
 import * as v from "valibot";
 import {
   TodoRequestSchema,
+  AdapterFamilySchema,
+  NativeItemIdSchema,
   TodoDecisionSchema,
   PermissionItemSchema,
   ExecutorInstanceIdSchema,
@@ -28,9 +30,14 @@ export type LiveTodo = {
   epoch: number;
   attemptId: SecretTarget["attemptId"];
   approval?: ApprovalAuthority;
+  available?: () => boolean;
+  nativeNode?: import("@kraka/protocol").NativeItemId;
   send: (answer: TodoAnswer, content: TodoReplyContent | null) => Promise<DeliveryId>;
 };
 const binding = v.object({
+  family: v.optional(AdapterFamilySchema),
+  epoch: v.optional(v.number()),
+  nativeNode: v.optional(NativeItemIdSchema),
   instanceId: ExecutorInstanceIdSchema,
   attemptId: AttemptIdSchema,
   approval: v.optional(
@@ -43,6 +50,7 @@ export class TodoLedger {
   constructor(private store: FirstSendStore) {
     const db = store.db;
     db.exec(`CREATE TABLE IF NOT EXISTS todo_requests(id TEXT PRIMARY KEY, data TEXT NOT NULL, binding TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS todo_question_nodes(request TEXT PRIMARY KEY,node TEXT NOT NULL,questions TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS todo_replies(message TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS private_todo_receipts(command TEXT PRIMARY KEY, metadata TEXT NOT NULL, choice TEXT NOT NULL);`);
     db.transaction(() => {
@@ -92,9 +100,9 @@ export class TodoLedger {
   }
   isLive(todo: TodoRequest) {
     const native = this.live.get(todo.id);
-    return !!native && this.bound(todo, native);
+    return !!native && (native.available?.() ?? true) && this.bound(todo, native);
   }
-  open(todo: TodoRequest, native: LiveTodo) {
+  open(todo: TodoRequest, native: LiveTodo, questions: Message[] = []) {
     const metadata = v.parse(binding, native);
     if (
       !this.bound(todo, native) ||
@@ -111,13 +119,27 @@ export class TodoLedger {
         JSON.stringify(todo),
         JSON.stringify(metadata),
       ]);
-      this.store.sync.record([{ objectType: "todoRequest", value: todo }]);
+      for (const question of questions)
+        this.store.db.run("INSERT INTO messages VALUES(?,?)", [
+          question.id,
+          JSON.stringify(question),
+        ]);
+      if (questions.length && route.fallback.kind === "asMessage")
+        this.store.db.run("INSERT INTO todo_question_nodes VALUES(?,?,?)", [
+          todo.id,
+          route.fallback.nodeId,
+          JSON.stringify(questions.map((q) => q.id)),
+        ]);
+      this.store.sync.record([
+        ...questions.map((value) => ({ objectType: "message" as const, value })),
+        { objectType: "todoRequest", value: todo },
+      ]);
     })();
     this.live.set(todo.id, native);
     this.store.sync.notify();
     return {
       evidence: (event: AnswerEvent) => this.observe(todo.id, { kind: "delivery", event }),
-      close: () => {
+      close: (resolved = false) => {
         if (this.live.get(todo.id) !== native) return;
         this.live.delete(todo.id);
         const current = this.get(todo.id)?.todo;
@@ -127,26 +149,45 @@ export class TodoLedger {
           current.state.route.kind === "live" &&
           current.state.route.sessionId === route.sessionId
         )
-          this.store.db.transaction(() => this.lost(current))();
+          this.store.db.transaction(() => this.lost(current, resolved))();
         this.store.sync.notify();
       },
     };
   }
-  private lost(todo: TodoRequest) {
+  private lost(todo: TodoRequest, resolved = false) {
     if (todo.state.kind === "expired" || todo.state.route.kind !== "live") return;
     const route = todo.state.route;
     const fallback = route.fallback;
+    const thread = readThread(this.store.db, todo.threadId);
+    const node = this.store.db
+      .query<{ node: string; questions: string }, [string]>(
+        "SELECT node,questions FROM todo_question_nodes WHERE request=?",
+      )
+      .get(todo.id);
+    const original = this.get(todo.id)?.binding.nativeNode;
+    const eligible =
+      !resolved &&
+      thread &&
+      (!original ||
+        (this.store.directory(thread) &&
+          node &&
+          fallback.kind === "asMessage" &&
+          node.node === original &&
+          node.node === fallback.nodeId &&
+          Bun.deepEquals(JSON.parse(node.questions), fallback.questions)));
     const questions =
-      fallback.kind === "asMessage"
+      eligible && fallback.kind === "asMessage"
         ? fallback.questions.flatMap((id) => {
             const m = readMessage(this.store.db, id);
-            return m?.threadId === todo.threadId ? [m] : [];
+            return m?.threadId === todo.threadId && (!original || m.roundId === todo.roundId)
+              ? [m]
+              : [];
           })
         : [];
     this.apply(todo, {
       kind: "sessionLost",
       sessionId: route.sessionId,
-      reason: "native session closed",
+      reason: resolved ? "native request resolved" : "native session closed: not resumable",
       messageFallback:
         fallback.kind === "asMessage" ? { nodeId: fallback.nodeId, questions } : null,
     });

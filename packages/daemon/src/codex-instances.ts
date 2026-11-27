@@ -34,7 +34,7 @@ type Entry = {
   cwd: string;
   probe: CodexProbe;
   snapshot: ExecutorInstanceSnapshot;
-  adapter: ReturnType<typeof createCodexAdapter>;
+  adapter: (previousEpoch: number) => ReturnType<typeof createCodexAdapter>;
 };
 export class CodexInstances {
   readonly registry;
@@ -104,7 +104,8 @@ export class CodexInstances {
   }
   select(entry: Entry | null, selection: SessionSetup["model"] | undefined) {
     if (
-      entry?.snapshot.permission.selected !== "ask" ||
+      !entry ||
+      !entry.probe.declaration.permission.modes.includes(entry.snapshot.permission.selected) ||
       Object.values(entry.probe.declaration.readiness).some(
         (l) => l.state !== "yes" || l.verifiedAt === null,
       )
@@ -152,7 +153,13 @@ export class CodexInstances {
       cwd,
       probe,
       snapshot,
-      adapter: createCodexAdapter({ family: "codex", instanceId: reg.instanceId }, launch, probe),
+      adapter: (previousEpoch: number) =>
+        createCodexAdapter(
+          { family: "codex", instanceId: reg.instanceId },
+          launch,
+          probe,
+          previousEpoch,
+        ),
     };
     this.entries.set(reg.instanceId, entry);
     clearTimeout(this.timers.get(reg.instanceId));

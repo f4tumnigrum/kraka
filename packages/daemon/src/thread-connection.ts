@@ -47,6 +47,14 @@ export async function threadConnection(
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   beforeTodo?: (id: CommandId, proceed: () => void) => void,
+  stopCommand?: (
+    actor: LocalActor,
+    command: import("@kraka/environment").StopCommand,
+  ) => CommandReceipt,
+  steerCommand?: (
+    actor: LocalActor,
+    command: Extract<SignedRequest, { method: "input.steer" }>,
+  ) => CommandReceipt,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -264,6 +272,23 @@ export async function threadConnection(
             return;
           }
           let result = subs.handle(m);
+          if (
+            !result &&
+            (m.method === "round.stop" ||
+              m.method === "round.readStop" ||
+              m.method === "input.steer")
+          ) {
+            const principal: LocalActor = {
+              id: actor.principal.id,
+              environmentId: host.identity.id,
+              allows: (permission, target) =>
+                target.kind === "thread" && allows(target.threadId, permission),
+            };
+            result =
+              (m.method === "input.steer"
+                ? steerCommand?.(principal, m)
+                : stopCommand?.(principal, m)) ?? null;
+          }
           if (!result && m.method === "thread.rename")
             result = renameThread({
               actor: {

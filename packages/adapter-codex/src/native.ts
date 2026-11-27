@@ -1,5 +1,6 @@
 import * as v from "valibot";
 import { NativeSessionIdSchema, NativeRootTurnIdSchema, NativeItemIdSchema } from "@kraka/protocol";
+import { requestKey, type Callback } from "./requests";
 import type { RoundEnd } from "@kraka/environment";
 
 export function object(value: unknown): Record<string, unknown> {
@@ -104,6 +105,16 @@ const item = v.variant("type", [
   }),
 ]);
 export function notification(method: string, raw: unknown, secrets: readonly string[]) {
+  if (method === "serverRequest/resolved") {
+    const p = v.parse(
+      v.object({
+        threadId: NativeSessionIdSchema,
+        requestId: v.union([v.string(), v.pipe(v.number(), v.safeInteger())]),
+      }),
+      raw,
+    );
+    return { method, threadId: p.threadId, requestId: requestKey(p.requestId) } as const;
+  }
   if (method === "turn/started" || method === "turn/completed") {
     const p = object(raw);
     return {
@@ -124,4 +135,4 @@ export function notification(method: string, raw: unknown, secrets: readonly str
   }
   return null;
 }
-export type CodexNativeFrame = NonNullable<ReturnType<typeof notification>>;
+export type CodexNativeFrame = NonNullable<ReturnType<typeof notification>> | Callback;
