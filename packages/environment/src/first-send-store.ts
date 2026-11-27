@@ -24,6 +24,7 @@ import { physicalDirectory } from "./project-directory";
 import { directoryForThread } from "./worktrees";
 
 import { worktreeTables, readManaged } from "./worktree-storage";
+import { settingTables } from "./setting-store";
 import { managedView } from "./worktree-git";
 const step = v.parse(DatabaseHeaderSchema.entries.ledger.item, {
   id: "input-attempts",
@@ -96,6 +97,7 @@ export function openStore(writer: DirectoryWriter, recovery?: RecoveryScope) {
         db.run("PRAGMA user_version=2");
       })();
     db.exec(worktreeTables);
+    db.exec(settingTables);
     const store = new FirstSendStore(db, writer);
     recoverQueues(store, recovery);
     return store;

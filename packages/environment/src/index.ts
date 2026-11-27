@@ -21,6 +21,7 @@ export {
 export { transitionTodo, type TodoEvent, type AnswerEvent } from "./todo";
 export * from "./adapter-contract";
 export * from "./settings";
+export * from "./setting-store";
 export * from "./checkpoints";
 export * from "./terminal";
 export * from "./worktrees";

@@ -1,3 +1,4 @@
+import { settingPeer } from "./setting-peer";
 import { scenarioInput, serveSeed } from "./thread-seed";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -122,10 +123,21 @@ const writer = await startWriter(
           },
         }
       : {}),
+    ...(point === "settings"
+      ? {
+          settingReply: settingPeer(state, () => {
+            if (!openedStore) throw Error("Writer not open");
+            return openedStore;
+          }),
+        }
+      : {}),
     preparation(point, managed) {
       barrier(point, JSON.stringify(managed));
     },
-    async beforeDispatch() {
+    async beforeDispatch(threadId) {
+      if (point === "settings" && openedStore) {
+        process.send?.({ event: "dispatch", threadId });
+      }
       if (point === "recovery") while (existsSync(join(state, "hold-claim"))) await Bun.sleep(3);
       if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {
         const input = JSON.parse(readFileSync(join(state, "seed-handoff"), "utf8"));
@@ -202,6 +214,8 @@ const writer = await startWriter(
       if (req.method === "thread.start") barrier("afterCommit");
     },
     update(event) {
+      if (point === "settings" && event.kind === "round.ended")
+        process.send?.({ event: "ended", roundId: event.roundId });
       if (point === "peer" && event.kind === "round.started")
         writeFileSync(join(state, `started-${event.roundId}`), JSON.stringify(event));
     },

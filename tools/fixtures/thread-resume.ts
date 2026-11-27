@@ -23,7 +23,7 @@ import { within, withState } from "./replay-process";
 
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
-  minor?: 0 | 1;
+  minor?: 0 | 1 | 2;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
@@ -142,13 +142,13 @@ export async function connectReplica(
               : cache),
           read: () => cache.read(),
           id: () => v.parse(SubscriptionIdSchema, crypto.randomUUID()),
-          async sign(method, payload) {
+          async sign(method, payload, commandId) {
             const request = {
               ...envelope,
               method,
               payload,
               kind: "signedRequest",
-              commandId: crypto.randomUUID(),
+              commandId: commandId ?? crypto.randomUUID(),
               sequence: ++seq,
             };
             return v.parse(SignedRequestSchema, {

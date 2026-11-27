@@ -965,6 +965,12 @@ export const SignedRequestSchema = v.variant(
   "method",
   Object.values(REQUEST_METHODS).map((definition) => definition.schema),
 );
+// Authenticate the intact envelope before classifying a future field or malformed edit.
+export const InboundSettingWriteSchema = v.strictObject({
+  ...REQUEST_METHODS.writeSetting.schema.entries,
+  payload: v.unknown(),
+});
+export type InboundSettingWrite = v.InferOutput<typeof InboundSettingWriteSchema>;
 export type SignedRequest = v.InferOutput<typeof SignedRequestSchema>;
 
 export const PairingRequestSchema = v.pipe(
@@ -1225,6 +1231,35 @@ export const CommandReceiptSchema = v.variant("kind", [
   }),
 ]);
 export type CommandReceipt = v.InferOutput<typeof CommandReceiptSchema>;
+
+export const SETTING_GENERATION_MINOR = 2;
+
+/** Older strict readers understand repository paths and versions, but not directory generations. */
+export function settingReceiptForVersion(receipt: CommandReceipt, minor: number): CommandReceipt {
+  if (minor >= SETTING_GENERATION_MINOR) return receipt;
+  const result =
+    receipt.kind === "accepted"
+      ? receipt.result
+      : receipt.kind === "rejected"
+        ? receipt.failure
+        : null;
+  if (
+    !result ||
+    !("readback" in result) ||
+    result.readback.effective.source.kind !== "repository" ||
+    result.readback.effective.source.generation === undefined
+  )
+    return receipt;
+  const { generation: _, ...source } = result.readback.effective.source;
+  const value = {
+    ...result,
+    readback: { ...result.readback, effective: { ...result.readback.effective, source } },
+  };
+  return v.parse(
+    CommandReceiptSchema,
+    receipt.kind === "accepted" ? { ...receipt, result: value } : { ...receipt, failure: value },
+  );
+}
 
 /** Decode old acknowledgements through the same strict receipt schema as current frames. */
 export function readSettingWriteReceipt(raw: unknown): CommandReceipt | null {

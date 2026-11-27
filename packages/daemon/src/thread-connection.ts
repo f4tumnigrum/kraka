@@ -8,15 +8,27 @@ import {
   SessionAuthorizedSchema,
   TRANSPORT_LIMITS,
   RequestUploads,
+  sendLogicalControl,
+  SETTING_GENERATION_MINOR,
+  settingReceiptForVersion,
   type SubscriptionPage,
   type SessionAuthorized,
   type SignedRequest,
+  type InboundSettingWrite,
   type ClientAuthentication,
   type ThreadId,
   type CommandReceipt,
   type CommandId,
 } from "@kraka/protocol";
-import { type LocalActor, readThread, renameThread, type FirstSendStore } from "@kraka/environment";
+import {
+  type LocalActor,
+  settingCommand,
+  watchSettingFile,
+  readProject,
+  readThread,
+  renameThread,
+  type FirstSendStore,
+} from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
 import type { openAccessHost } from "./access";
 import type { SocketApplication } from "./flow-socket";
@@ -25,6 +37,13 @@ export type FixtureThreadCommand = (
   request: SignedRequest,
   store: FirstSendStore,
 ) => CommandReceipt | null;
+export type SettingIngress =
+  | Extract<SignedRequest, { method: "settings.read" }>
+  | InboundSettingWrite;
+export type FixtureSettingReply = (
+  req: SettingIngress,
+  execute: () => CommandReceipt,
+) => CommandReceipt;
 type Access = Awaited<ReturnType<typeof openAccessHost>>;
 export async function threadConnection(
   store: FirstSendStore,
@@ -37,6 +56,7 @@ export async function threadConnection(
   ) => Promise<CommandReceipt>,
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
+  settingReply?: FixtureSettingReply,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -46,7 +66,7 @@ export async function threadConnection(
     challengeId: crypto.randomUUID(),
     challenge: randomBytes(32).toString("base64url"),
     clientNonce: nonce,
-    protocolVersion: { major: 1, minor: 1 },
+    protocolVersion: { major: 1, minor: SETTING_GENERATION_MINOR },
     features: [
       "strictSchemas",
       "signedRequests",
@@ -67,6 +87,8 @@ export async function threadConnection(
     epoch,
     beforeSend: () => check(),
     attach(peer, wake) {
+      let watching: string | null = null,
+        stopWatching: (() => void) | undefined;
       let seq = 0,
         session: SessionAuthorized | null = null,
         subs: ThreadSubscriptions | null = null;
@@ -98,7 +120,7 @@ export async function threadConnection(
         }
         return !!host.store.ceiling(session.principal.id, { kind: "thread", threadId }, permission);
       };
-      function accept(m: SignedRequest | ClientAuthentication) {
+      function accept(m: SignedRequest | InboundSettingWrite | ClientAuthentication) {
         const actor = usable(m.signer);
         if (
           !actor ||
@@ -191,6 +213,43 @@ export async function threadConnection(
           );
         } else {
           if (!session || !subs) throw Error("Configuration required");
+          if (m.method === "settings.read" || m.method === "settings.write") {
+            const principal = actor.principal.id;
+            const local: LocalActor = {
+              id: principal,
+              environmentId: host.identity.id,
+              allows(permission, target) {
+                if (target.kind === "project") {
+                  if (!readProject(store.db, target.projectId)) return false;
+                  host.store.provisionProject(target.projectId);
+                }
+                return !!host.store.ceiling(principal, target, permission);
+              },
+            };
+            const execute = () =>
+              settingCommand(
+                { actor: local, transaction: store, commandId: m.commandId },
+                m.method,
+                m.payload,
+              );
+            const receipt = settingReply ? settingReply(m, execute) : execute();
+            if (
+              receipt.kind === "accepted" &&
+              (receipt.result.kind === "settingRead" || receipt.result.kind === "settingSaved")
+            ) {
+              const rb = receipt.result.readback,
+                context = rb.checkout ?? rb.target;
+              const key = context.kind === "checkout" ? canonicalJson(context) : null;
+              if (key !== watching) {
+                stopWatching?.();
+                watching = key;
+                stopWatching =
+                  context.kind === "checkout" ? watchSettingFile(store, context) : undefined;
+              }
+            }
+            sendLogicalControl(peer, settingReceiptForVersion(receipt, m.protocolVersion.minor));
+            return;
+          }
           let result = subs.handle(m);
           if (!result && m.method === "thread.rename")
             result = renameThread({
@@ -280,6 +339,7 @@ export async function threadConnection(
           uploads.drop(id);
         },
         close() {
+          stopWatching?.();
           session = null;
           clearInterval(timer);
           subs?.close();

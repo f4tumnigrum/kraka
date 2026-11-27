@@ -8,6 +8,9 @@ import {
   type AuthorizationExpectation,
   type ClientAuthentication,
   type CommandReceipt,
+  type CommandId,
+  type TextReturnResult,
+  CommandReceiptSchema,
   type ControlMessage,
   type FlowPort,
   type SignedRequest,
@@ -43,9 +46,11 @@ type Host = {
   sign: (
     method: SignedRequest["method"],
     payload: unknown,
+    commandId?: CommandId,
   ) => SignedRequest | Promise<SignedRequest>;
   id: () => SubscriptionId;
   receipt?: () => void;
+  textReturned?: (commandId: CommandId, result: TextReturnResult) => void;
   pageStaged?: (page: SubscriptionPage) => void | Promise<void>;
   acknowledged?: (head: SyncCursor) => void;
   installed?: (head: SyncCursor) => void;
@@ -86,7 +91,16 @@ export class ThreadReplica {
     this.peer = new FlowPeer(hello.connectionId, port, {
       control: (m) => this.control(m),
       data: (f, n) => this.data(f, n),
-      discarded: (id) => this.streams.get(id)?.discarded(),
+      discarded: (id) => {
+        const command = this.receiptStreams.get(id);
+        if (command) {
+          this.commands.get(command)?.done.reject(Error("Setting receipt interrupted"));
+          this.commands.delete(command);
+          this.receiptStreams.delete(id);
+          this.parts.delete(id);
+        }
+        this.streams.get(id)?.discarded();
+      },
     });
   }
   authenticate(
@@ -100,6 +114,7 @@ export class ThreadReplica {
   }
   private request(r: SignedRequest) {
     if (this.closed || !this.configured) throw Error("Session unavailable");
+    if (this.commands.has(r.commandId)) throw Error("Command already outstanding");
     const done = deferred<CommandReceipt>();
     this.commands.set(r.commandId, { request: r, done });
     try {
@@ -111,17 +126,36 @@ export class ThreadReplica {
     }
     return done.promise;
   }
+  private settingListeners = new Set<(r: CommandReceipt) => Promise<void>>();
+  onSettingReceipt(receive: (r: CommandReceipt) => Promise<void>) {
+    this.settingListeners.add(receive);
+    return () => {
+      this.settingListeners.delete(receive);
+    };
+  }
+  private settingReplies = new Set<Promise<CommandReceipt>>();
+  private receiptStreams = new Map<number, CommandId>();
   private signing = Promise.resolve();
-  private sign(method: SignedRequest["method"], payload: unknown) {
-    const signed = this.signing.then(() => this.host.sign(method, payload));
+  private sign(method: SignedRequest["method"], payload: unknown, commandId?: CommandId) {
+    const signed = this.signing.then(() => this.host.sign(method, payload, commandId));
     this.signing = signed.then(
       () => {},
       () => {},
     );
     return signed;
   }
-  async rpc(method: SignedRequest["method"], payload: unknown) {
-    return this.request(await this.sign(method, payload));
+  async rpc(method: SignedRequest["method"], payload: unknown, commandId?: CommandId) {
+    const reply = this.sign(method, payload, commandId).then((signed) => {
+      if (commandId && signed.commandId !== commandId) throw Error("Signed command ID changed");
+      return this.request(signed);
+    });
+    if (method !== "settings.read" && method !== "settings.write") return reply;
+    this.settingReplies.add(reply);
+    try {
+      return await reply;
+    } finally {
+      this.settingReplies.delete(reply);
+    }
   }
   private async invalidate(cursor: SyncCursor | null) {
     if (!cursor) return;
@@ -139,6 +173,7 @@ export class ThreadReplica {
     cold = false,
     mayReset = true,
   ) {
+    while (this.settingReplies.size) await Promise.allSettled(this.settingReplies);
     const cache = this.host.read(),
       after = cold ? null : cached;
     const members = after ? Object.values(cache.scopes[scopeKey(after)]?.members ?? {}) : [];
@@ -209,6 +244,7 @@ export class ThreadReplica {
     anchor: HistoryPage["anchor"] | null,
     allows: Parameters<typeof installHistoryPage>[2]["allows"],
   ) {
+    while (this.settingReplies.size) await Promise.allSettled(this.settingReplies);
     if (head.scope.kind !== "thread") throw Error("Expected thread history");
     const streamId = ++this.lastId,
       request = await this.sign("thread.readHistory", {
@@ -279,8 +315,23 @@ export class ThreadReplica {
       return;
     }
     if (m.kind === "transport.content") {
+      const request = this.commands.get(m.transferId)?.request;
+      if (request && (request.method === "settings.read" || request.method === "settings.write")) {
+        if (
+          m.streamId !== this.lastId + 1 ||
+          m.byteLength < 1 ||
+          [...this.parts.values()].reduce((n, p) => n + p.length, m.byteLength) >
+            TRANSPORT_LIMITS.maxPendingDataBytes
+        )
+          throw Error("Invalid setting receipt stream");
+        this.peer.receive.open(m.streamId);
+        this.lastId = m.streamId;
+        this.receiptStreams.set(m.streamId, request.commandId);
+      }
       if (
-        (!this.streams.has(m.streamId) && !this.reads.has(m.streamId)) ||
+        (!this.streams.has(m.streamId) &&
+          !this.reads.has(m.streamId) &&
+          !this.receiptStreams.has(m.streamId)) ||
         m.byteLength > TRANSPORT_LIMITS.maxPendingDataBytes
       )
         throw Error("Unexpected logical page");
@@ -290,8 +341,16 @@ export class ThreadReplica {
     }
     this.host.received?.(m.kind, m);
     if (m.kind === "accepted" || m.kind === "programError" || m.kind === "rejected") {
+      if (m.kind === "accepted" && m.result.kind === "textReturned") {
+        if (m.result.target.environmentId === this.hello.identity.id)
+          this.host.textReturned?.(m.commandId, m.result);
+        return;
+      }
       const pending = this.commands.get(m.commandId);
-      if (!pending) return;
+      if (!pending) {
+        for (const listener of this.settingListeners) void listener(m).catch(() => this.close());
+        return;
+      }
       if (pending.request.method === "subscription.openThread")
         this.streams
           .get(pending.request.payload.streamId)
@@ -331,6 +390,15 @@ export class ThreadReplica {
       message = JSON.parse(this.peer.port.utf8.decode(data));
     }
     this.peer.control(this.peer.receive.consume(f.streamId, size));
+    const expected = this.receiptStreams.get(f.streamId);
+    if (expected) {
+      this.receiptStreams.delete(f.streamId);
+      this.peer.receive.cancel(f.streamId);
+      const receipt = v.parse(CommandReceiptSchema, message);
+      if (receipt.commandId !== expected) throw Error("Wrong receipt transfer");
+      this.control(receipt);
+      return;
+    }
     const s = this.streams.get(f.streamId);
     if (s) {
       this.host.received?.("subscription.page", message);
@@ -352,6 +420,8 @@ export class ThreadReplica {
     for (const sub of this.streams.values()) sub.close();
     for (const { done } of this.commands.values()) done.reject(error);
     for (const { result } of this.reads.values()) result.reject(error);
+    this.settingListeners.clear();
+    this.receiptStreams.clear();
     this.commands.clear();
     this.streams.clear();
     this.reads.clear();

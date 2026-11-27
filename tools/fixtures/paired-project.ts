@@ -235,11 +235,13 @@ export async function startPairedProject({
   stateDir: parent,
   projectId,
   requests,
+  devices,
   signal,
 }: {
   stateDir: string;
   projectId: string;
   requests: readonly (readonly PermissionItem[])[];
+  devices?: { owner: LocalDevice; applicants: readonly LocalDevice[] };
   signal?: AbortSignal;
 }) {
   const project = v.parse(ProjectIdSchema, projectId);
@@ -274,7 +276,7 @@ export async function startPairedProject({
   }
   try {
     await host.control("project", { projectId: project, threadId });
-    const device = await local("owner");
+    const device = devices?.owner ?? (await local("owner"));
     const ownerInput = {
       deviceId: device.deviceId,
       keyId: device.keyId,
@@ -287,7 +289,7 @@ export async function startPairedProject({
     const first = v.parse(principalKey, await host.control("owner", ownerInput));
     let owner = await attach(device, first.principal);
     for (const [index, permissions] of requests.entries()) {
-      const d = await local(`device-${index}`);
+      const d = devices?.applicants[index] ?? (await local(`device-${index}`));
       const id = await invite(owner, project);
       const app = await beginApplication(d, host.origin, identity, project, id, [...permissions]);
       try {

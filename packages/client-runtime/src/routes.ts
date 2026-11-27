@@ -11,6 +11,7 @@ import {
   migrateRouteCatalog,
   type ControlMessage,
   type CommandId,
+  type TextReturnResult,
   type CommandReceipt,
   type SignedRequest,
   type EnvironmentIdentity,
@@ -46,6 +47,7 @@ export type RouteEvent =
     }
   | { kind: "disconnected"; routeId: RouteId }
   | { kind: "receipt"; receipt: CommandReceipt }
+  | { kind: "textReturned"; commandId: CommandId; result: TextReturnResult }
   | { kind: "control"; epoch: number; frame: ControlMessage };
 
 type Options = RoutePlatform & {
@@ -254,6 +256,22 @@ export function selectRoute(options: Options) {
         },
         frame(raw) {
           const receipt = v.safeParse(CommandReceiptSchema, raw);
+          if (
+            receipt.success &&
+            receipt.output.kind === "accepted" &&
+            receipt.output.result.kind === "textReturned"
+          ) {
+            if (
+              sender?.attempt === attempt &&
+              receipt.output.result.target.environmentId === pin.id
+            )
+              emit({
+                kind: "textReturned",
+                commandId: receipt.output.commandId,
+                result: receipt.output.result,
+              });
+            return;
+          }
           if (receipt.success && pendingReceipts.delete(receipt.output.commandId)) {
             emit({ kind: "receipt", receipt: receipt.output });
             return;

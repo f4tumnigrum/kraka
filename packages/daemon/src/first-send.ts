@@ -1,5 +1,9 @@
 import { openAccessHost } from "./access";
-import { threadConnection, type FixtureThreadCommand } from "./thread-connection";
+import {
+  threadConnection,
+  type FixtureThreadCommand,
+  type FixtureSettingReply,
+} from "./thread-connection";
 import { attachFlow, type SocketApplication } from "./flow-socket";
 import { inputReads, inputReadMethods } from "./input-reads";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
@@ -35,10 +39,14 @@ import {
   readThread,
   recordInputEvidence,
   registerProject,
+  settingCommand,
   renameThread,
 } from "@kraka/environment";
 import {
   checkBusinessUpgrade,
+  InboundSettingWriteSchema,
+  settingReceiptForVersion,
+  SETTING_GENERATION_MINOR,
   CheckpointCaptureSchema,
   type CommandId,
   CommandIdSchema,
@@ -64,6 +72,8 @@ const methods = v.variant("method", [
   REQUEST_METHODS.configureExecutor.schema,
   REQUEST_METHODS.refreshExecutor.schema,
   REQUEST_METHODS.registerProject.schema,
+  REQUEST_METHODS.readSetting.schema,
+  InboundSettingWriteSchema,
   REQUEST_METHODS.startThread.schema,
   REQUEST_METHODS.renameThread.schema,
   REQUEST_METHODS.prepareWorktree.schema,
@@ -94,6 +104,7 @@ export async function startWriter<H extends object>(
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
     threadCommand?: FixtureThreadCommand;
+    settingReply?: FixtureSettingReply;
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
@@ -300,6 +311,7 @@ export async function startWriter<H extends object>(
             sendInput,
             lifecycle?.threadCommand,
             lifecycle?.inspectPage,
+            lifecycle?.settingReply,
           );
           if (!app) return new Response(null, { status: 403 });
           if (server.upgrade(req, { data: { app, flow: null } })) return;
@@ -361,7 +373,10 @@ export async function startWriter<H extends object>(
             if (
               req.environmentId !== actor.environmentId ||
               req.protocolVersion.major !== 1 ||
-              req.protocolVersion.minor > 1 ||
+              req.protocolVersion.minor >
+                (req.method === "settings.read" || req.method === "settings.write"
+                  ? SETTING_GENERATION_MINOR
+                  : 1) ||
               req.connectionId !== session.connectionId ||
               req.challengeId !== session.challengeId ||
               req.challenge !== session.challenge ||
@@ -387,6 +402,17 @@ export async function startWriter<H extends object>(
               req.method === "subscription.close"
             ) {
               reads.request(ws, req);
+              return;
+            }
+            if (req.method === "settings.read" || req.method === "settings.write") {
+              ws.send(
+                JSON.stringify(
+                  settingReceiptForVersion(
+                    settingCommand(context, req.method, req.payload),
+                    req.protocolVersion.minor,
+                  ),
+                ),
+              );
               return;
             }
             const priorRetry =
@@ -432,7 +458,7 @@ export async function startWriter<H extends object>(
                 receipt = renameThread({ ...context, ...req.payload });
                 break;
               case "thread.start": {
-                const { projectId, model } = req.payload;
+                const { projectId } = req.payload;
                 const id = req.payload.instanceId ?? codex.registry.defaultFor(projectId);
                 const cwd = id ? transaction.projectDirectory(projectId) : null;
                 let entry = id && cwd ? codex.current(id, actor.id, cwd) : null;
@@ -444,6 +470,7 @@ export async function startWriter<H extends object>(
                 )
                   entry = await codex.lookup(id, actor.id, projectId);
                 if (!accepting) return;
+                const model = req.payload.model;
                 const chosen = codex.select(entry, model);
                 receipt = acceptFirstInput({
                   verifiedActor: actor,

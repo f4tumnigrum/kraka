@@ -269,3 +269,94 @@ test("a separately decoded custom worktree path completes its original write", (
     }),
   ).toBe(member);
 });
+
+test("a returned input leaves a durable setting checking until its own readback arrives", async () => {
+  const { SettingsRuntime } = await import("../src/setting-batch");
+  const { DeviceIdSchema, SettingReadbackSchema, CommandReceiptSchema } = await import(
+    "@kraka/protocol"
+  );
+  const { edit } = write("one");
+  const env = edit.target.environmentId;
+  const device = v.parse(DeviceIdSchema, "desktop");
+  const initial = v.parse(SettingReadbackSchema, {
+    field: edit.field,
+    target: edit.target,
+    checkout: null,
+    atLayer: { kind: "absent" },
+    fieldVersion: "0",
+    readVersion: "0",
+    effective: { value: "local", source: { kind: "builtin" }, sourceVersion: null },
+  });
+  let raw: unknown = null;
+  const runtime = new SettingsRuntime(
+    {
+      async update(key, edit) {
+        expect(key).toContain(device);
+        const next = edit(raw);
+        raw = next.value;
+        return next.result;
+      },
+    },
+    device,
+    () => v.parse(CommandIdSchema, crypto.randomUUID()),
+  );
+  let receive: ((r: import("@kraka/protocol").CommandReceipt) => Promise<void>) | undefined;
+  let sends = 0;
+  await runtime.authorize(env, {
+    onSettingReceipt(f) {
+      receive = f;
+      return () => {
+        receive = undefined;
+      };
+    },
+    async rpc(method, _payload, commandId) {
+      if (method === "settings.read")
+        return { kind: "accepted", commandId, result: { kind: "settingRead", readback: initial } };
+      sends++;
+      return { kind: "accepted", commandId, result: { kind: "actionAccepted" } };
+    },
+  });
+  const [member] = await runtime.submitSettings({
+    members: [{ target: edit.target }],
+    field: edit.field,
+    explicitChoice: edit.change,
+    checkoutContext: null,
+  });
+  if (!member || !receive) throw Error("Missing pending write");
+  const { commandId } = member;
+  const result = {
+    kind: "textReturned",
+    transferId: "t1",
+    source: { environmentId: env, threadId: "source", roundId: "old" },
+    target: { environmentId: env, threadId: "target" },
+    text: "saved input",
+    history: { coverage: "complete", omittedItems: 0, missingSources: [] },
+    input: { messageId: "m", roundId: "r", attemptId: "a", deliveryId: "d" },
+  };
+  await receive(v.parse(CommandReceiptSchema, { kind: "accepted", commandId, result }));
+  expect((await runtime.batch([commandId]))[0]).toMatchObject({
+    status: "checking",
+    visible: initial,
+  });
+  const saved = v.parse(CommandReceiptSchema, {
+    kind: "accepted",
+    commandId,
+    result: {
+      kind: "settingSaved",
+      supportedFields: [edit.field],
+      readback: {
+        ...initial,
+        atLayer: edit.change,
+        fieldVersion: "1",
+        readVersion: "1",
+        effective: { value: "worktree", source: edit.target, sourceVersion: "1" },
+      },
+    },
+  });
+  await receive(saved);
+  expect((await runtime.batch([commandId]))[0]).toMatchObject({
+    status: "saved",
+    visible: { atLayer: edit.change, effective: { source: edit.target, value: "worktree" } },
+  });
+  expect(sends).toBe(1);
+});

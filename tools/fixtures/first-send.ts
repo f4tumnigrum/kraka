@@ -31,7 +31,8 @@ export type Fault =
   | "beforeSetup"
   | "setupExited"
   | "resume"
-  | "recovery";
+  | "recovery"
+  | "settings";
 export async function configureLocalOwner(
   stateDir: string,
   permissions = ["workspace.change", "thread.send", "thread.view"],

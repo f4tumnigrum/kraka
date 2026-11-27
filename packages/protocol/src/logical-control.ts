@@ -5,10 +5,13 @@ import { ControlMessageSchema, type ControlMessage, type TransportFrame } from "
 import { TRANSPORT_LIMITS } from "./transport-limits";
 import type { FlowPeer } from "./flow-peer";
 
-// Large signed requests remain one logical control message, with independent byte credit.
-export function sendLogicalRequest(
+/** A signed request or its receipt can exceed a single control frame. */
+export function sendLogicalControl(
   peer: FlowPeer,
-  request: Extract<ControlMessage, { kind: "signedRequest" }>,
+  request: Extract<
+    ControlMessage,
+    { kind: "signedRequest" | "accepted" | "rejected" | "programError" }
+  >,
 ) {
   const utf8 = peer.port.utf8;
   const data = utf8.encode(JSON.stringify(request));
@@ -42,6 +45,8 @@ export function sendLogicalRequest(
     byteLength: data.length,
   });
 }
+export const sendLogicalRequest = sendLogicalControl;
+
 export class RequestUploads {
   private streams = new Map<number, { parts: Uint8Array[]; length: number; received: number }>();
   private allocated = 0;
