@@ -7075,7 +7075,7 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 
 ```json
 {
-  "oneOf": [
+  "anyOf": [
     {
       "type": "object",
       "properties": {
@@ -7111,6 +7111,46 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "type": "object",
       "properties": {
         "kind": {
+          "const": "git"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "relation": {
+          "enum": [
+            "mergeBase",
+            "head",
+            "firstParent",
+            "commit",
+            "emptyTree"
+          ],
+          "type": "string"
+        },
+        "oid": {
+          "$ref": "#/$defs/GitObjectId"
+        }
+      },
+      "required": [
+        "kind",
+        "threadId",
+        "directoryId",
+        "generation",
+        "relation",
+        "oid"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
           "const": "workingTree"
         },
         "worktreeId": {
@@ -7123,6 +7163,35 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "required": [
         "kind",
         "worktreeId",
+        "tree"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "workingTree"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "tree": {
+          "$ref": "#/$defs/GitObjectId"
+        }
+      },
+      "required": [
+        "kind",
+        "threadId",
+        "directoryId",
+        "generation",
         "tree"
       ],
       "additionalProperties": false
@@ -7163,7 +7232,7 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 
 ```json
 {
-  "oneOf": [
+  "anyOf": [
     {
       "type": "object",
       "properties": {
@@ -7242,6 +7311,31 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "threadId": {
           "$ref": "#/$defs/ThreadId"
         },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "workingTree"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
         "worktreeId": {
           "$ref": "#/$defs/WorktreeId"
         },
@@ -7267,6 +7361,36 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "threadId": {
           "$ref": "#/$defs/ThreadId"
         },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "branch"
+        },
+        "baseRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "kind",
+        "baseRef"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
         "worktreeId": {
           "$ref": "#/$defs/WorktreeId"
         },
@@ -7280,6 +7404,35 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "required": [
         "threadId",
         "worktreeId",
+        "kind",
+        "commit"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "commit"
+        },
+        "commit": {
+          "$ref": "#/$defs/GitObjectId"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
         "kind",
         "commit"
       ],
@@ -13817,11 +13970,12 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "binaryContentChunks",
       "privateSecretSubmission",
       "queueEditing",
-      "timelineItems"
+      "timelineItems",
+      "directoryDiff"
     ],
     "type": "string"
   },
-  "maxItems": 8
+  "maxItems": 9
 }
 ```
 

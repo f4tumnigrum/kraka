@@ -1,5 +1,9 @@
+import { GitObservations, type GitStatusUpdate } from "./git-observations";
+export type { GitStatusUpdate } from "./git-observations";
 import {
   FlowPeer,
+  sendLogicalRequest,
+  type GitStatus,
   sameRange,
   sameHead,
   matchesAuthorizedConfiguration,
@@ -46,6 +50,7 @@ export class EnvironmentRpcUnavailableError extends Error {
 
 export class SubscriptionSession {
   readonly peer: FlowPeer;
+  private readonly git: GitObservations;
   private authorization: SessionAuthorized | null = null;
   private ready = false;
   private closed = false;
@@ -62,12 +67,19 @@ export class SubscriptionSession {
     port: FlowPort,
     private readonly install: (pages: readonly SubscriptionPage[], head: SyncCursor) => void,
     private readonly consumed: (id: number, size: number) => number = (_, size) => size,
+    onGitStatus: (update: GitStatusUpdate) => void = () => {},
+    refreshGit: (
+      open: Extract<SignedRequest, { method: "git.subscribeStatus" }>["payload"],
+    ) => Promise<GitStatus> = async () => {
+      throw Error("Git status refresh unavailable");
+    },
   ) {
     this.peer = new FlowPeer(verifiedHello.connectionId, port, {
       control: (m) => this.control(m),
       data: (f, n) => this.data(f, n),
       discarded: (id) => this.drop(id),
     });
+    this.git = new GitObservations(this.peer, onGitStatus, refreshGit);
   }
   snapshot(id: number) {
     const sub = this.subs.get(id);
@@ -103,12 +115,20 @@ export class SubscriptionSession {
         content: null,
       });
     }
+    if (request.method === "git.subscribeStatus") this.git.open(request.payload);
+    if (
+      request.method === "checkpoint.diff" &&
+      "directoryId" in request.payload.query &&
+      !this.authorization?.features.includes("directoryDiff")
+    )
+      return { kind: "rejected", commandId: request.commandId, failure: { kind: "unsupported" } };
     return new Promise((resolve, reject) => {
       this.requests.set(request.commandId, { request, resolve, reject });
       try {
-        this.peer.control(request);
+        sendLogicalRequest(this.peer, request);
         this.peer.pump();
       } catch (error) {
+        if (request.method === "git.subscribeStatus") this.git.drop(request.payload.streamId);
         this.requests.delete(request.commandId);
         if (
           request.method === "subscription.openList" ||
@@ -123,6 +143,12 @@ export class SubscriptionSession {
     for (const sub of this.subs.values()) if (sub.request.payload.subscriptionId === id) return sub;
   }
   private control(m: ControlMessage) {
+    if (
+      m.kind === "server.hello" &&
+      !this.authorization &&
+      m.identityProof === this.verifiedHello.identityProof
+    )
+      return;
     if (m.kind === "session.rejected") {
       this.failure = m.reason;
       this.close();
@@ -175,10 +201,17 @@ export class SubscriptionSession {
           this.installSealed(sub);
         }
       }
+      if (r.method === "git.subscribeStatus") this.git.bind(r.payload, m);
       entry.resolve(m);
       return;
     }
     if (m.kind === "transport.content") {
+      const receipt = [...this.requests.values()].some(
+        (e) =>
+          String(e.request.commandId) === String(m.transferId) &&
+          (e.request.method === "checkpoint.diff" || e.request.method === "git.readStatus"),
+      );
+      if (this.git.declare(m, receipt)) return;
       const sub = this.subs.get(m.streamId);
       if (
         !sub?.pass ||
@@ -194,6 +227,8 @@ export class SubscriptionSession {
       return;
     }
     if (!("subscriptionId" in m)) return;
+    if (m.kind === "subscription.ended" || m.kind === "subscription.reset")
+      this.git.ended(m.subscriptionId);
     const sub = this.bySubscription(m.subscriptionId);
     if (!sub) return;
     const id = sub.request.payload.streamId;
@@ -251,6 +286,7 @@ export class SubscriptionSession {
     sub.pass = null;
   }
   private data(frame: Extract<TransportFrame, { lane: "data" }>, size: number) {
+    if (this.ready && this.git.data(frame, size, (receipt) => this.control(receipt))) return;
     const sub = this.subs.get(frame.streamId);
     if (!sub || !this.ready) throw new Error("Data on unavailable subscription");
     let page: SubscriptionPage | null = null;
@@ -312,6 +348,7 @@ export class SubscriptionSession {
     this.peer.control({ kind: "stream.reset", streamId: id, reason: "cancelled" });
   }
   private drop(id: number) {
+    this.git.drop(id);
     const sub = this.subs.get(id);
     if (sub) {
       this.stagedBytes -= (sub.content?.received ?? 0) + (sub.pass?.size ?? 0);
@@ -325,6 +362,7 @@ export class SubscriptionSession {
   close() {
     this.closed = true;
     this.ready = false;
+    this.git.close();
     this.peer.close();
     this.subs.clear();
     this.stagedBytes = 0;

@@ -48,6 +48,9 @@ export class ThreadSubscriptions {
     private access: Access,
     private inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   ) {}
+  has(id: SubscriptionId) {
+    return this.subs.has(id);
+  }
   private scope(threadId: ThreadId): AuthorizedScope {
     const permissions = new Map<ThreadId, boolean>();
     return {

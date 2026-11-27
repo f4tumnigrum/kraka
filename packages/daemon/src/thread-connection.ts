@@ -13,11 +13,26 @@ import {
   type SignedRequest,
   type ClientAuthentication,
   type ThreadId,
+  type ProjectId,
   type CommandReceipt,
   type CommandId,
+  DiffResultSchema,
+  WorkspaceTargetSchema,
+  workspaceAuthorizationTarget,
 } from "@kraka/protocol";
-import { type LocalActor, readThread, renameThread, type FirstSendStore } from "@kraka/environment";
+import {
+  GitStatusCache,
+  LocalDiffService,
+  type LocalActor,
+  readProject,
+  readThread,
+  renameThread,
+  resolveDiffDirectory,
+  type FirstSendStore,
+} from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
+import { GitStatusSubscriptions } from "./git-status-subscriptions";
+import { sendGitReceipt } from "./diff-stream";
 import type { openAccessHost } from "./access";
 import type { SocketApplication } from "./flow-socket";
 
@@ -26,6 +41,7 @@ export type FixtureThreadCommand = (
   store: FirstSendStore,
 ) => CommandReceipt | null;
 type Access = Awaited<ReturnType<typeof openAccessHost>>;
+type WorkspaceTarget = v.InferOutput<typeof WorkspaceTargetSchema>;
 export async function threadConnection(
   store: FirstSendStore,
   host: Access,
@@ -35,6 +51,7 @@ export async function threadConnection(
     actor: LocalActor,
     command: Extract<SignedRequest, { method: "input.send" }>,
   ) => Promise<CommandReceipt>,
+  gitStatusCache = new GitStatusCache(),
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
 ): Promise<SocketApplication | null> {
@@ -54,6 +71,7 @@ export async function threadConnection(
       "perStreamFlowControl",
       "binaryContentChunks",
       "timelineItems",
+      "directoryDiff",
     ],
     identity: host.identity,
   };
@@ -69,7 +87,8 @@ export async function threadConnection(
     attach(peer, wake) {
       let seq = 0,
         session: SessionAuthorized | null = null,
-        subs: ThreadSubscriptions | null = null;
+        subs: ThreadSubscriptions | null = null,
+        gitStatus: GitStatusSubscriptions | null = null;
       const uploads = new RequestUploads(peer);
       let boundKey: ReturnType<typeof createPublicKey> | null = null;
       function usable(signer: ClientAuthentication["signer"]) {
@@ -82,22 +101,72 @@ export async function threadConnection(
           ? d
           : null;
       }
-      const allows = (threadId: ThreadId, permission: "thread.view" | "thread.send") => {
+      const allowsTarget = (
+        target: { kind: "thread"; threadId: ThreadId } | { kind: "project"; projectId: ProjectId },
+        permission: "thread.view" | "thread.send",
+      ) => {
         if (!session || !usable(session.signer)) return false;
-        const thread = readThread(store.db, threadId);
-        if (!thread) return false;
-        const bound = host.store.db
-          .query<{ parent: string }, [string]>(
-            "SELECT parent FROM objects WHERE kind='thread' AND id=?",
-          )
-          .get(threadId);
-        if (bound && bound.parent !== thread.projectId) return false;
-        if (!bound) {
-          host.store.provisionProject(thread.projectId);
-          host.store.provisionThread(threadId, thread.projectId);
+        if (target.kind === "thread") {
+          const thread = readThread(store.db, target.threadId);
+          if (!thread) return false;
+          const bound = host.store.db
+            .query<{ parent: string }, [string]>(
+              "SELECT parent FROM objects WHERE kind='thread' AND id=?",
+            )
+            .get(target.threadId);
+          if (bound && bound.parent !== thread.projectId) return false;
+          if (!bound) {
+            host.store.provisionProject(thread.projectId);
+            host.store.provisionThread(target.threadId, thread.projectId);
+          }
+        } else {
+          const project = readProject(store.db, target.projectId);
+          if (!project || project.environmentId !== host.identity.id) return false;
+          host.store.provisionProject(target.projectId);
         }
-        return !!host.store.ceiling(session.principal.id, { kind: "thread", threadId }, permission);
+        return !!host.store.ceiling(session.principal.id, target, permission);
       };
+      const allows = (threadId: ThreadId, permission: "thread.view" | "thread.send") =>
+        allowsTarget({ kind: "thread", threadId }, permission);
+      const allowsWorkspace = (target: WorkspaceTarget) =>
+        allowsTarget(workspaceAuthorizationTarget(target), "thread.view");
+      const diffService = new LocalDiffService();
+      function readDiff(
+        request: Extract<SignedRequest, { method: "checkpoint.diff" }>,
+      ): CommandReceipt {
+        const { commandId } = request;
+        const { query, cursor } = request.payload;
+        const unavailable = (reason: string) =>
+          v.parse(DiffResultSchema, {
+            kind: "unavailable",
+            request: query,
+            from: null,
+            to: null,
+            reason,
+          });
+        if (!allows(query.threadId, "thread.view"))
+          return { kind: "rejected", commandId, failure: { kind: "notFound" } };
+        const directoryDiff = session?.features.includes("directoryDiff") ?? false;
+        if ("directoryId" in query && !directoryDiff)
+          return {
+            kind: "rejected",
+            commandId,
+            failure: { kind: "unsupported" },
+          };
+        const directory = resolveDiffDirectory(store, query);
+        const diff = directory
+          ? diffService.readLocalDiff({
+              actor: {
+                scope: `${session?.principal.id ?? ""}\0${query.threadId}`,
+                directoryDiff,
+              },
+              query,
+              cursor,
+              resolvedDirectory: directory,
+            })
+          : unavailable("invalidated");
+        return { kind: "accepted", commandId, result: { kind: "checkpointDiff", diff } };
+      }
       function accept(m: SignedRequest | ClientAuthentication) {
         const actor = usable(m.signer);
         if (
@@ -189,9 +258,30 @@ export async function threadConnection(
             },
             inspectPage,
           );
+          gitStatus = new GitStatusSubscriptions(
+            peer,
+            wake,
+            store,
+            host.identity.id,
+            allowsWorkspace,
+            gitStatusCache,
+            (id) => subs?.has(id) ?? false,
+          );
         } else {
           if (!session || !subs) throw Error("Configuration required");
-          let result = subs.handle(m);
+          let result = gitStatus?.handle(m) ?? null;
+          if (
+            !result &&
+            m.method === "subscription.openThread" &&
+            gitStatus?.has(m.payload.subscriptionId)
+          )
+            result = {
+              kind: "rejected",
+              commandId: m.commandId,
+              failure: { kind: "invalidState" },
+            };
+          if (!result && m.method === "checkpoint.diff") result = readDiff(m);
+          if (!result) result = subs.handle(m);
           if (!result && m.method === "thread.rename")
             result = renameThread({
               actor: {
@@ -237,6 +327,17 @@ export async function threadConnection(
               return;
             }
           }
+          if (
+            result?.kind === "accepted" &&
+            (result.result.kind === "checkpointDiff" || result.result.kind === "gitStatus")
+          ) {
+            sendGitReceipt(peer, result, () =>
+              m.method === "checkpoint.diff"
+                ? allows(m.payload.query.threadId, "thread.view")
+                : m.method === "git.readStatus" && allowsWorkspace(m.payload.target),
+            );
+            return;
+          }
           peer.control(
             result ?? {
               kind: "rejected",
@@ -257,7 +358,10 @@ export async function threadConnection(
         if (!device || device.deviceKey.state.kind !== "usable")
           throw Error("Device registration ended");
         expires = device.deviceKey.state.expiresAt;
-        if (next !== last) subs?.recheckAccess();
+        if (next !== last) {
+          subs?.recheckAccess();
+          gitStatus?.recheckAccess();
+        }
         last = next;
       };
       const timer = setInterval(wake, 250);
@@ -282,7 +386,9 @@ export async function threadConnection(
         close() {
           session = null;
           clearInterval(timer);
+          diffService.close();
           subs?.close();
+          gitStatus?.close();
         },
       };
     },

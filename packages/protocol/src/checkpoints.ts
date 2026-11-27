@@ -8,6 +8,7 @@ import {
   NativeRootTurnIdSchema,
   RoundIdSchema,
   ThreadIdSchema,
+  WorktreeGenerationSchema,
   WorktreeIdSchema,
 } from "./ids";
 
@@ -80,7 +81,12 @@ export function checkpointSummary(result: CheckpointResult): ChangeSummary {
 }
 
 const local = { threadId: ThreadIdSchema, worktreeId: WorktreeIdSchema };
-export const DiffRequestSchema = v.variant("kind", [
+const projectRoot = {
+  threadId: ThreadIdSchema,
+  directoryId: v.pipe(v.string(), v.minLength(1)),
+  generation: WorktreeGenerationSchema,
+};
+export const DiffRequestSchema = v.union([
   v.strictObject({
     ...local,
     kind: v.literal("roundRange"),
@@ -89,14 +95,21 @@ export const DiffRequestSchema = v.variant("kind", [
   }),
   v.strictObject({ ...local, kind: v.literal("round"), captureId: CaptureIdSchema }),
   v.strictObject({ ...local, kind: v.literal("workingTree") }),
+  v.strictObject({ ...projectRoot, kind: v.literal("workingTree") }),
   v.strictObject({
     ...local,
     kind: v.literal("branch"),
     baseRef: v.pipe(v.string(), v.minLength(1)),
   }),
+  v.strictObject({
+    ...projectRoot,
+    kind: v.literal("branch"),
+    baseRef: v.pipe(v.string(), v.minLength(1)),
+  }),
   v.strictObject({ ...local, kind: v.literal("commit"), commit: GitObjectIdSchema }),
+  v.strictObject({ ...projectRoot, kind: v.literal("commit"), commit: GitObjectIdSchema }),
 ]);
-export const DiffEndpointSchema = v.variant("kind", [
+export const DiffEndpointSchema = v.union([
   v.strictObject({
     kind: v.literal("git"),
     worktreeId: WorktreeIdSchema,
@@ -104,8 +117,19 @@ export const DiffEndpointSchema = v.variant("kind", [
     oid: GitObjectIdSchema,
   }),
   v.strictObject({
+    kind: v.literal("git"),
+    ...projectRoot,
+    relation: v.picklist(["mergeBase", "head", "firstParent", "commit", "emptyTree"]),
+    oid: GitObjectIdSchema,
+  }),
+  v.strictObject({
     kind: v.literal("workingTree"),
     worktreeId: WorktreeIdSchema,
+    tree: GitObjectIdSchema,
+  }),
+  v.strictObject({
+    kind: v.literal("workingTree"),
+    ...projectRoot,
     tree: GitObjectIdSchema,
   }),
   v.strictObject({

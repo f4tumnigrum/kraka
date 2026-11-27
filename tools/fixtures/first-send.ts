@@ -26,6 +26,7 @@ export type Fault =
   | "afterCommit"
   | "externalWrite"
   | "peer"
+  | "local-diff"
   | "claimed"
   | "registered"
   | "beforeSetup"

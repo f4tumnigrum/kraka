@@ -202,8 +202,30 @@ const writer = await startWriter(
       if (req.method === "thread.start") barrier("afterCommit");
     },
     update(event) {
+      if (point === "local-diff" && event.kind === "round.ended")
+        process.send?.({
+          event: "completed",
+          roundId: event.roundId,
+          threadId: openedStore && readRound(openedStore.db, event.roundId)?.threadId,
+        });
       if (point === "peer" && event.kind === "round.started")
         writeFileSync(join(state, `started-${event.roundId}`), JSON.stringify(event));
+    },
+    ...(point === "local-diff" && {
+      browserFixture(path: string) {
+        if (path === "/s15")
+          return new Response('<!doctype html><script src="/s15-client.js"></script>', {
+            headers: { "Content-Type": "text/html" },
+          });
+        if (path === "/s15-client.js")
+          return new Response(Bun.file(join(state, "s15-client.js")), {
+            headers: { "Content-Type": "application/javascript" },
+          });
+        return null;
+      },
+    }),
+    gitProcess(directory, granularity) {
+      process.send?.({ event: "gitProcess", directory, granularity });
     },
   },
 );
