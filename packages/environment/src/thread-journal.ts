@@ -1,3 +1,6 @@
+import { ListIndex } from "./list-index";
+import type { ListScope } from "./list-pass";
+import type { PrincipalId, TodoRequest } from "@kraka/protocol";
 import type { Database } from "bun:sqlite";
 import * as v from "valibot";
 import {
@@ -66,16 +69,20 @@ function orderBounded(item: ReadRow, edge: Bound) {
   return 0;
 }
 export class ThreadJournal {
+  readonly list: ListIndex;
   private readonly listeners = new Set<() => void>();
   constructor(
     readonly db: Database,
     readonly environmentId: EnvironmentId,
   ) {
-    db.transaction(() => {
+    this.list = db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1),generation TEXT NOT NULL,head TEXT NOT NULL,floor TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);`);
+      return new ListIndex(db);
+    })();
+    db.transaction(() => {
       if (this.meta()) return;
       db.run("INSERT INTO sync_meta VALUES(1,?,'0','0')", [crypto.randomUUID()]);
       const rows: HistoryRow[] = [];
@@ -120,7 +127,9 @@ export class ThreadJournal {
     const put =
       this.db.query(`INSERT INTO sync_rows(source,key,round,created,changed,version,payload) VALUES(?,?,?,?,?,?,?)
    ON CONFLICT(source,key) DO UPDATE SET changed=excluded.changed,version=excluded.version,payload=excluded.payload,round=excluded.round`);
+    const now = Date.now();
     for (const row of rows) {
+      this.list.record(row, position, now);
       const source =
         row.objectType === "thread"
           ? row.value.id
@@ -145,6 +154,7 @@ export class ThreadJournal {
       );
     }
     for (const item of extras.removed ?? []) {
+      this.list.remove(item.source, item.key.objectType, item.key.id, position, now);
       const prior = this.db
         .query<{ version: string }, [string, string]>(
           "SELECT version FROM sync_rows WHERE source=? AND key=?",
@@ -162,6 +172,34 @@ export class ThreadJournal {
         "INSERT INTO sync_returns VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET changed=excluded.changed,data=excluded.data",
         [event.result.target.threadId, event.result.transferId, position, JSON.stringify(event)],
       );
+  }
+  readList(
+    scope: ListScope,
+    visibility: string,
+    actor: PrincipalId,
+    canRead: (id: ThreadId) => boolean,
+    canAnswer: (todo: TodoRequest) => boolean,
+  ) {
+    return this.db.transaction(() => {
+      const meta = this.meta();
+      if (!meta) throw Error("Missing sync clock");
+      const head = v.parse(SyncCursorSchema, {
+        environmentId: this.environmentId,
+        databaseGeneration: meta.generation,
+        visibilityGeneration: visibility,
+        scope,
+        shapeVersion: 2,
+        through: meta.head,
+      });
+      return this.list.read(
+        head,
+        v.parse(SyncPositionSchema, meta.floor),
+        scope,
+        actor,
+        canRead,
+        canAnswer,
+      );
+    })();
   }
   read(scope: AuthorizedScope, visibility: string): ThreadReadView {
     return this.db.transaction((): ThreadReadView => {

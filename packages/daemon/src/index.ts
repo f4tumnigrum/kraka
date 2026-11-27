@@ -1,5 +1,5 @@
 import { accessCli } from "./access";
-import "@kraka/cli-client";
+import { threadListCli } from "@kraka/cli-client";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -155,6 +155,7 @@ if (import.meta.main && process.argv.length > 2) {
   try {
     const [command, ...args] = process.argv.slice(2);
     if (command === worktreeWorkerCommand) await runWorktreeWorker(args[0]);
+    else if (command === "thread" && args[0] === "list") await threadListCli(args.slice(1));
     else if (command === "daemon") {
       const { values } = parseArgs({
         args,

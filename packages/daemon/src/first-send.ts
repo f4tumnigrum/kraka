@@ -90,6 +90,7 @@ export async function startWriter<H extends object>(
   } | null,
   lifecycle?: {
     preparation?: PreparationHook;
+    browserListFixture?: boolean;
     inspectPage?: (
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
@@ -288,10 +289,20 @@ export async function startWriter<H extends object>(
       port: 0,
       async fetch(req, server) {
         const url = new URL(req.url);
-        if (!accepting || req.headers.has("Origin") || url.hostname !== "127.0.0.1")
+        if (
+          !accepting ||
+          (req.headers.has("Origin") &&
+            (!lifecycle?.browserListFixture || url.pathname !== "/ws")) ||
+          url.hostname !== "127.0.0.1"
+        )
           return new Response(null, { status: 403 });
         if (url.pathname === "/ws") {
-          const admission = checkBusinessUpgrade(url.pathname + url.search, [], [], URL);
+          const admission = checkBusinessUpgrade(
+            url.pathname + url.search,
+            req.headers.has("Origin") ? [req.headers.get("Origin")!] : [],
+            lifecycle?.browserListFixture ? ["http://127.0.0.1:" + server.port] : [],
+            URL,
+          );
           if (admission.kind === "reject") return new Response(null, { status: admission.status });
           const app = await threadConnection(
             transaction,

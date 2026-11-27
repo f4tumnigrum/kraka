@@ -1,5 +1,7 @@
 import {
   sameRange,
+  type ProjectId,
+  type ThreadId,
   FlowPeer,
   matchesAuthorizedConfiguration,
   sendLogicalRequest,
@@ -161,16 +163,23 @@ export class ThreadReplica {
       };
     });
   }
+  openList(projectId: ProjectId | null, cached: SyncCursor | null, cold = false, mayReset = true) {
+    return this.orderStream(() =>
+      this.openScope({ kind: "list", projectId }, cached, cold, mayReset),
+    );
+  }
   async open(
     threadId: Open["payload"]["threadId"],
     cached: SyncCursor | null,
     cold = false,
     mayReset = true,
   ) {
-    return this.orderStream(() => this.openThread(threadId, cached, cold, mayReset));
+    return this.orderStream(() =>
+      this.openScope({ kind: "thread", threadId }, cached, cold, mayReset),
+    );
   }
-  private async openThread(
-    threadId: Open["payload"]["threadId"],
+  private async openScope(
+    scope: { kind: "list"; projectId: ProjectId | null } | { kind: "thread"; threadId: ThreadId },
     cached: SyncCursor | null,
     cold = false,
     mayReset = true,
@@ -185,26 +194,58 @@ export class ThreadReplica {
     const recheckTodos = after
       ? Object.values(cache.rows).flatMap(({ row }) =>
           row?.objectType === "todoRequest" &&
-          row.value.threadId === threadId &&
+          (scope.kind === "list" || row.value.threadId === scope.threadId) &&
           row.value.state.kind === "open"
             ? [row.value.id]
             : [],
         )
       : [];
     const streamId = ++this.lastId;
-    const req = await this.sign("subscription.openThread", {
-      threadId,
-      streamId,
-      subscriptionId: this.host.id(),
-      after,
-      knownWindow,
-      recheckTodos,
-    });
-    if (req.method !== "subscription.openThread") throw Error("Unexpected signed intent");
+    const membership = after && cache.scopes[scopeKey(after)];
+    const req =
+      scope.kind === "list"
+        ? await this.sign("subscription.openList", {
+            projectId: scope.projectId,
+            streamId,
+            subscriptionId: this.host.id(),
+            after,
+            windowShapeVersion: 2,
+            knownThreads: membership
+              ? Object.values(membership.listRows ?? {}).map(({ threadId, version }) => ({
+                  threadId,
+                  version,
+                }))
+              : [],
+            recheckTodos: [
+              ...new Set([
+                ...recheckTodos,
+                ...(membership
+                  ? Object.values(membership.facts ?? {}).flatMap((f) =>
+                      [f.root, ...f.descendants].flatMap((s) =>
+                        s.requests
+                          .filter((r) => r.request.state.kind === "open")
+                          .map((r) => r.request.id),
+                      ),
+                    )
+                  : []),
+              ]),
+            ],
+          })
+        : await this.sign("subscription.openThread", {
+            threadId: scope.threadId,
+            streamId,
+            subscriptionId: this.host.id(),
+            after,
+            knownWindow,
+            recheckTodos,
+          });
+    if (req.method !== "subscription.openThread" && req.method !== "subscription.openList")
+      throw Error("Unexpected signed intent");
     const sub = new ThreadInstallation(
       req,
       {
         store: this.host.store,
+        owner: this.expected.principal.id,
         ack: (a) => {
           void this.rpc(a.method, a.payload)
             .then((receipt) => {
@@ -229,7 +270,11 @@ export class ThreadReplica {
           const restart = async () => {
             if (incompatible) await this.invalidate(cached);
             if (mayReset && !this.closed)
-              await (await this.open(threadId, incompatible ? null : cached, true, false)).receipt;
+              await (
+                await this.orderStream(() =>
+                  this.openScope(scope, incompatible ? null : cached, true, false),
+                )
+              ).receipt;
           };
           void restart().catch(() => this.close());
         },
@@ -346,7 +391,10 @@ export class ThreadReplica {
     if (m.kind === "accepted" || m.kind === "programError" || m.kind === "rejected") {
       const pending = this.commands.get(m.commandId);
       if (!pending) return;
-      if (pending.request.method === "subscription.openThread")
+      if (
+        pending.request.method === "subscription.openThread" ||
+        pending.request.method === "subscription.openList"
+      )
         this.streams
           .get(pending.request.payload.streamId)
           ?.frame({ epoch: this.peer.epoch, streamId: 0, message: m });

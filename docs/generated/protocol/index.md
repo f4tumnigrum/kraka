@@ -892,6 +892,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
           "items": {
             "type": "object",
             "properties": {
+              "answerable": {
+                "type": "boolean"
+              },
               "request": {
                 "type": "object",
                 "properties": {
@@ -1233,6 +1236,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
             "items": {
               "type": "object",
               "properties": {
+                "answerable": {
+                  "type": "boolean"
+                },
                 "request": {
                   "type": "object",
                   "properties": {
@@ -1833,6 +1839,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "threadId": {
           "$ref": "#/$defs/ThreadId"
+        },
+        "answerable": {
+          "type": "boolean"
         },
         "request": {
           "type": "object",

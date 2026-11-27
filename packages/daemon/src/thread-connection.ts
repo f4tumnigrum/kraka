@@ -198,6 +198,40 @@ export async function threadConnection(
                   .get()?.n;
                 return JSON.stringify([actor.principal.id, n]);
               },
+              canList: (projectId) => {
+                if (!session || !usable(session.signer)) return false;
+                if (
+                  projectId &&
+                  !host.store.db
+                    .query("SELECT 1 FROM objects WHERE kind='project' AND id=?")
+                    .get(projectId)
+                ) {
+                  if (!store.db.query("SELECT 1 FROM projects WHERE id=?").get(projectId))
+                    return false;
+                  host.store.provisionProject(projectId);
+                }
+                const target = projectId
+                  ? { kind: "project" as const, projectId }
+                  : { kind: "environment" as const, environmentId: host.identity.id };
+                return !!host.store.ceiling(actor.principal.id, target, "thread.view");
+              },
+              canAnswer: (todo) => {
+                if (
+                  todo.state.kind !== "open" ||
+                  (todo.state.route.kind === "live" && !store.todos.isLive(todo))
+                )
+                  return false;
+                if (todo.body.kind === "approval") {
+                  const right = store.todos.get(todo.id)?.binding.approval?.permission;
+                  return (
+                    !!right && allows(todo.threadId, right) && allows(todo.threadId, "owner.decide")
+                  );
+                }
+                return allows(
+                  todo.threadId,
+                  todo.body.kind === "question" ? "thread.reply" : "owner.decide",
+                );
+              },
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
               protocolMinor: m.protocolVersion.minor,
@@ -264,6 +298,25 @@ export async function threadConnection(
             return;
           }
           let result = subs.handle(m);
+          if (result?.kind === "accepted" && result.result.kind === "earlierSettled") {
+            const visibility = result.result.page.through.visibilityGeneration;
+            const stream = sendLogicalRequest(peer, result);
+            disclosures.set(m.commandId, {
+              stream,
+              allowed: () =>
+                visibility ===
+                JSON.stringify([
+                  actor.principal.id,
+                  host.store.db
+                    .query<{ n: string }, []>(
+                      "SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes",
+                    )
+                    .get()?.n,
+                ]),
+            });
+            wake();
+            return;
+          }
           if (!result && m.method === "thread.rename")
             result = renameThread({
               actor: {

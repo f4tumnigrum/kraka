@@ -113,6 +113,7 @@ const writer = await startWriter(
   {
     ...(point === "resume"
       ? {
+          browserListFixture: true,
           threadCommand: scenarioInput,
           inspectPage(page: import("@kraka/protocol").SubscriptionPage) {
             if (!existsSync(join(state, "unknown-change"))) return page;

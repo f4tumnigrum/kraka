@@ -11,6 +11,9 @@ import {
   sameRange,
   sameScope,
   type CommandReceipt,
+  type AttentionFacts,
+  type PrincipalId,
+  type ThreadSummary,
   type MessageId,
   type ControlMessage,
   type HistoryCoverage,
@@ -204,6 +207,8 @@ type AcceptedInput = { threadId: string; messageId: MessageId; text: string };
 type Membership = {
   cursor: SyncCursor;
   members: Record<string, ObjectKey>;
+  listRows?: Record<string, ThreadSummary>;
+  facts?: Record<string, AttentionFacts>;
   counts: Extract<ObjectChange, { kind: "list.counts" }>["counts"] | null;
 };
 type SavedPage = Pick<HistoryPage, "threadId" | "anchor" | "verifiedAt" | "olderAnchor"> & {
@@ -299,6 +304,7 @@ export async function installThreadPass(
   store: ThreadCacheStore,
   expectedBase: SyncCursor | null,
   sealedPass: SealedPass,
+  owner?: PrincipalId,
 ) {
   const { begin, pages, recheck } = sealedPass;
   return store.transact<"installed" | "staleBase">((old) => {
@@ -322,6 +328,12 @@ export async function installThreadPass(
       members: begin.mode === "replace" ? {} : { ...prior?.members },
       counts: begin.mode === "replace" ? null : (prior?.counts ?? null),
     };
+    const list = begin.through.scope.kind === "list" && begin.through.shapeVersion === 2;
+    if (list) {
+      scope.listRows = begin.mode === "merge" ? { ...prior?.listRows } : {};
+      scope.facts =
+        begin.mode === "merge" && sameHead(begin.base, begin.through) ? { ...prior?.facts } : {};
+    }
     const seen = new Map<string, string>();
     let counts: string | null = null;
     for (const page of pages)
@@ -371,10 +383,28 @@ export async function installThreadPass(
             }
             break;
           }
+          case "attention.facts": {
+            const { facts } = change,
+              head = begin.through;
+            if (
+              !scope.facts ||
+              facts.through !== head.through ||
+              facts.databaseGeneration !== head.databaseGeneration ||
+              facts.environmentId !== head.environmentId ||
+              (owner && facts.ownerId !== owner)
+            )
+              throw Error("Attention facts belong to a different list");
+            const id = JSON.stringify(facts.root.threadId);
+            if (scope.facts[id] && canonicalJson(scope.facts[id]) !== canonicalJson(facts))
+              throw Error("Conflicting attention facts");
+            scope.facts[id] = facts;
+            break;
+          }
           case "thread.summary": {
             if (begin.through.scope.kind !== "list") throw Error("Summary outside list");
             const k = JSON.stringify(change.summary.threadId),
               old = cache.summaries[k];
+            if (scope.listRows) scope.listRows[k] = change.summary;
             const cmp = old ? comparePositions(change.summary.version, old.version) : 1;
             if (cmp === 0 && canonicalJson(old) !== canonicalJson(change.summary))
               throw Error("Conflicting summary");
@@ -403,6 +433,20 @@ export async function installThreadPass(
           : !cache.rows[k]?.row
       )
         throw Error("Missing member");
+    }
+    if (list && scope.listRows && scope.facts) {
+      for (const key of Object.keys(scope.listRows))
+        if (!scope.members[keyString({ objectType: "thread", id: scope.listRows[key]!.threadId })])
+          delete scope.listRows[key];
+      for (const key of Object.keys(scope.facts))
+        if (!scope.listRows[key]) throw Error("Attention outside list");
+      for (const member of Object.values(scope.members))
+        if (
+          member.objectType !== "thread" ||
+          !scope.listRows[JSON.stringify(member.id)] ||
+          !scope.facts[JSON.stringify(member.id)]
+        )
+          throw Error("Incomplete list facts");
     }
     for (const [command, input] of Object.entries(cache.accepted))
       if (cache.rows[keyString({ objectType: "message", id: input.messageId })])

@@ -54,6 +54,7 @@ export async function connectReplica(
   let replica: ThreadReplica | undefined,
     seq = 0,
     bytes = 0,
+    replyBytes = 0,
     arrival = 0;
   const messages: Observation[] = [],
     heads: SyncCursor[] = [];
@@ -77,6 +78,7 @@ export async function connectReplica(
     try {
       const wire = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
       bytes += wireBytes(wire, utf8);
+      replyBytes += wireBytes(wire, utf8);
       if (replica) {
         replica.peer.input(wire);
         replica.peer.pump();
@@ -217,6 +219,7 @@ export async function connectReplica(
       messages,
       cache,
       bytes: () => bytes,
+      replyBytes: () => replyBytes,
       async at(position: string) {
         await until(() => heads.some((h) => h.through === position), "installed " + position);
         return heads.find((h) => h.through === position)!;
@@ -255,7 +258,7 @@ async function setup(dir: string, root: string) {
   const pairing = await startPairedProject({
     stateDir: dir,
     projectId: "project-notes",
-    requests: [["thread.view", "thread.send"]],
+    requests: [["thread.view", "thread.send", "thread.reply", "owner.decide", "term.input"]],
   });
   const stateDir = join(pairing.stateDir, "host");
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
@@ -299,6 +302,7 @@ async function setup(dir: string, root: string) {
   const threadId = v.parse(ThreadIdSchema, "thread-notes");
   return {
     f,
+    pairing,
     dir,
     stateDir,
     threadId,
