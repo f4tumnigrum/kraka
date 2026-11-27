@@ -94,6 +94,7 @@ export async function startWriter<H extends object>(
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
     threadCommand?: FixtureThreadCommand;
+    beforeTodo?: (id: CommandId, proceed: () => void) => void;
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
@@ -300,6 +301,7 @@ export async function startWriter<H extends object>(
             sendInput,
             lifecycle?.threadCommand,
             lifecycle?.inspectPage,
+            lifecycle?.beforeTodo,
           );
           if (!app) return new Response(null, { status: 403 });
           if (server.upgrade(req, { data: { app, flow: null } })) return;

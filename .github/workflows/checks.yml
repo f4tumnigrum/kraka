@@ -60,6 +60,12 @@ jobs:
       - run: bun test ./tools/owner-pairing.live.test.ts
         env:
           KRAKA_REQUIRED_PAIRING_CASES: "1"
+      - name: Verify both devices and interrupted answer delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          NO_COLOR=1 bun test ./tools/first-answer.live.test.ts 2>&1 | tee "$RUNNER_TEMP/first-answer.log"
+          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/first-answer.log"; done
       - run: bun test ./tools/thread-resume.live.test.ts
       - run: bun test ./tools/first-send.live.test.ts
       - run: bun test ./tools/isolated-start.live.test.ts
@@ -76,6 +82,7 @@ jobs:
             --path-ignore-patterns "**/codex-turn.live.test.ts" \
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
             --path-ignore-patterns "**/browser-https.live.test.ts" \
+            --path-ignore-patterns "**/first-answer.live.test.ts" \
             --path-ignore-patterns "**/thread-resume.live.test.ts" \
             --path-ignore-patterns "**/isolated-start.live.test.ts" \
             --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
@@ -102,6 +109,18 @@ jobs:
           git archive "$BASE_SHA" | tar -xf - -C "$BASE_ROOT"
           (cd "$BASE_ROOT" && bun install --frozen-lockfile)
           echo "root=$BASE_ROOT" >> "$GITHUB_OUTPUT"
+      - name: Measure answer slice budgets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          BASE_ROOT: ${{ steps.baseline.outputs.root }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BASE_SHA" ]]; then
+            bun run perf P3 P7 P9 P10 --report-only --baseline-root "${BASE_ROOT:?}" > "$RUNNER_TEMP/budget-answer-base.jsonl"
+          fi
+          bun run perf P3 P7 P9 P10 --report-only --root . > "$RUNNER_TEMP/budget-answer-candidate.jsonl"
       - name: Measure budget workloads
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         env:
@@ -129,6 +148,7 @@ jobs:
           path: |
             ${{ runner.temp }}/budget-*.jsonl
             ${{ runner.temp }}/flow-tests.log
+            ${{ runner.temp }}/first-answer.log
           if-no-files-found: error
 
   routed:

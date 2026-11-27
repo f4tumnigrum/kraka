@@ -1,3 +1,10 @@
+import {
+  readPrivateSecretRequest,
+  type PrivateSecretRequest,
+  type CommandReceipt,
+  type SignedRequest,
+  type SessionAuthorized,
+} from "./requests";
 import * as v from "valibot";
 import { ContentTransferIdSchema, SubscriptionIdSchema } from "./ids";
 import { binarySource } from "./stream-codec";
@@ -8,15 +15,18 @@ import type { FlowPeer } from "./flow-peer";
 // Large signed requests remain one logical control message, with independent byte credit.
 export function sendLogicalRequest(
   peer: FlowPeer,
-  request: Extract<ControlMessage, { kind: "signedRequest" }>,
+  request: SignedRequest | PrivateSecretRequest | CommandReceipt,
 ) {
   const utf8 = peer.port.utf8;
   const data = utf8.encode(JSON.stringify(request));
-  if (data.length + utf8.encode(peer.epoch).length + 88 <= TRANSPORT_LIMITS.maxControlFrameBytes) {
+  if (
+    !(request.kind === "signedRequest" && request.method === "todo.submitSecret") &&
+    data.length + utf8.encode(peer.epoch).length + 88 <= TRANSPORT_LIMITS.maxControlFrameBytes
+  ) {
     peer.control(request);
     return;
   }
-  sendLogicalContent(peer, data, request.commandId);
+  return sendLogicalContent(peer, data, request.commandId);
 }
 
 export function sendLogicalContent(
@@ -50,6 +60,7 @@ export function sendLogicalContent(
     encoding: "utf8Json",
     byteLength: data.length,
   });
+  return id;
 }
 export class ControlContentReceiver {
   private streams = new Map<number, { parts: Uint8Array[]; length: number; received: number }>();
@@ -66,7 +77,7 @@ export class ControlContentReceiver {
     this.streams.set(m.streamId, { parts: [], length: m.byteLength, received: 0 });
     this.allocated += m.byteLength;
   }
-  read(f: Extract<TransportFrame, { lane: "data" }>, size: number) {
+  protected readContent(f: Extract<TransportFrame, { lane: "data" }>, size: number) {
     const s = this.streams.get(f.streamId);
     if (!s || !("payload" in f)) throw Error("Undeclared request");
     s.parts.push(f.payload.slice());
@@ -80,7 +91,12 @@ export class ControlContentReceiver {
       offset += part.length;
     }
     this.drop(f.streamId);
-    return v.parse(ControlMessageSchema, JSON.parse(this.peer.port.utf8.decode(bytes)));
+    const value: unknown = JSON.parse(this.peer.port.utf8.decode(bytes));
+    return { value, transferId: f.message.transferId };
+  }
+  read(f: Extract<TransportFrame, { lane: "data" }>, size: number) {
+    const content = this.readContent(f, size);
+    return content ? v.parse(ControlMessageSchema, content.value) : null;
   }
   clear() {
     this.streams.clear();
@@ -100,14 +116,27 @@ export class RequestUploads extends ControlContentReceiver {
   constructor(peer: FlowPeer) {
     super(peer, TRANSPORT_LIMITS.maxPendingDataBytes);
   }
-  data(frame: Extract<TransportFrame, { lane: "data" }>, size: number) {
-    const message = this.read(frame, size);
-    if (!message) return null;
+  data(
+    frame: Extract<TransportFrame, { lane: "data" }>,
+    size: number,
+    features: SessionAuthorized["features"] = [],
+  ) {
+    const content = this.readContent(frame, size);
+    if (!content) return null;
+    const { value, transferId } = content;
     if (
-      !("payload" in frame) ||
-      message.kind !== "signedRequest" ||
-      message.commandId !== String(frame.message.transferId)
-    )
+      value &&
+      typeof value === "object" &&
+      "method" in value &&
+      value.method === "todo.submitSecret"
+    ) {
+      const parsed = readPrivateSecretRequest(value, features);
+      if (parsed.kind !== "request" || parsed.request.commandId !== String(transferId))
+        throw Error("Invalid confidential request");
+      return parsed.request;
+    }
+    const message = v.parse(ControlMessageSchema, value);
+    if (message.kind !== "signedRequest" || message.commandId !== String(transferId))
       throw Error("Invalid logical request binding");
     return message;
   }

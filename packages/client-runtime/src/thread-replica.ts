@@ -4,6 +4,8 @@ import {
   matchesAuthorizedConfiguration,
   sendLogicalRequest,
   TRANSPORT_LIMITS,
+  CommandReceiptSchema,
+  type PrivateSecretRequest,
   keyString,
   type AuthorizationExpectation,
   type ClientAuthentication,
@@ -69,10 +71,14 @@ export class ThreadReplica {
       result: ReturnType<typeof deferred<HistoryPage>>;
     }
   >();
+  private receiptStreams = new Map<number, string>();
   private parts = new Map<number, { chunks: Uint8Array[]; length: number; received: number }>();
   private commands = new Map<
     string,
-    { request: SignedRequest; done: ReturnType<typeof deferred<CommandReceipt>> }
+    {
+      request: SignedRequest | PrivateSecretRequest;
+      done: ReturnType<typeof deferred<CommandReceipt>>;
+    }
   >();
   private lastId = 0;
   private closed = false;
@@ -98,7 +104,7 @@ export class ThreadReplica {
     this.peer.control(auth);
     this.peer.pump();
   }
-  private request(r: SignedRequest) {
+  private request(r: SignedRequest | PrivateSecretRequest) {
     if (this.closed || !this.configured) throw Error("Session unavailable");
     const done = deferred<CommandReceipt>();
     this.commands.set(r.commandId, { request: r, done });
@@ -120,8 +126,30 @@ export class ThreadReplica {
     );
     return signed;
   }
+  private streamTurn = Promise.resolve();
+  private orderStream<T>(work: () => Promise<T>) {
+    const result = this.streamTurn.then(work);
+    this.streamTurn = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
   async rpc(method: SignedRequest["method"], payload: unknown) {
-    return this.request(await this.sign(method, payload));
+    const send = async () => this.request(await this.sign(method, payload));
+    return method.startsWith("todo.") ? this.orderStream(send) : send();
+  }
+  async submitSecret(sign: () => Promise<PrivateSecretRequest>) {
+    if (!this.authorized?.features.includes("privateSecretSubmission"))
+      throw Error("Confidential submission unavailable");
+    return this.orderStream(async () => {
+      const signed = this.signing.then(sign);
+      this.signing = signed.then(
+        () => {},
+        () => {},
+      );
+      return this.request(await signed);
+    });
   }
   private async invalidate(cursor: SyncCursor | null) {
     if (!cursor) return;
@@ -134,6 +162,14 @@ export class ThreadReplica {
     });
   }
   async open(
+    threadId: Open["payload"]["threadId"],
+    cached: SyncCursor | null,
+    cold = false,
+    mayReset = true,
+  ) {
+    return this.orderStream(() => this.openThread(threadId, cached, cold, mayReset));
+  }
+  private async openThread(
     threadId: Open["payload"]["threadId"],
     cached: SyncCursor | null,
     cold = false,
@@ -209,6 +245,13 @@ export class ThreadReplica {
     anchor: HistoryPage["anchor"] | null,
     allows: Parameters<typeof installHistoryPage>[2]["allows"],
   ) {
+    return this.orderStream(() => this.readHistory(head, anchor, allows));
+  }
+  private async readHistory(
+    head: SyncCursor,
+    anchor: HistoryPage["anchor"] | null,
+    allows: Parameters<typeof installHistoryPage>[2]["allows"],
+  ) {
     if (head.scope.kind !== "thread") throw Error("Expected thread history");
     const streamId = ++this.lastId,
       request = await this.sign("thread.readHistory", {
@@ -280,7 +323,18 @@ export class ThreadReplica {
     }
     if (m.kind === "transport.content") {
       if (
-        (!this.streams.has(m.streamId) && !this.reads.has(m.streamId)) ||
+        !this.streams.has(m.streamId) &&
+        !this.reads.has(m.streamId) &&
+        [...this.commands.keys()].includes(m.transferId)
+      ) {
+        this.peer.receive.open(m.streamId);
+        this.lastId = Math.max(this.lastId, m.streamId);
+        this.receiptStreams.set(m.streamId, m.transferId);
+      }
+      if (
+        (!this.receiptStreams.has(m.streamId) &&
+          !this.streams.has(m.streamId) &&
+          !this.reads.has(m.streamId)) ||
         m.byteLength > TRANSPORT_LIMITS.maxPendingDataBytes
       )
         throw Error("Unexpected logical page");
@@ -331,6 +385,15 @@ export class ThreadReplica {
       message = JSON.parse(this.peer.port.utf8.decode(data));
     }
     this.peer.control(this.peer.receive.consume(f.streamId, size));
+    const expected = this.receiptStreams.get(f.streamId);
+    if (expected) {
+      const r = v.parse(CommandReceiptSchema, message);
+      if (String(r.commandId) !== expected) throw Error("Unbound receipt");
+      this.receiptStreams.delete(f.streamId);
+      this.peer.receive.cancel(f.streamId);
+      this.control(r);
+      return;
+    }
     const s = this.streams.get(f.streamId);
     if (s) {
       this.host.received?.("subscription.page", message);
@@ -356,6 +419,7 @@ export class ThreadReplica {
     this.streams.clear();
     this.reads.clear();
     this.parts.clear();
+    this.receiptStreams.clear();
   }
 }
 import * as v from "valibot";
