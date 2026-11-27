@@ -212,30 +212,28 @@ export async function until(done: () => boolean, label: string) {
     await Bun.sleep(1);
   }
 }
-export function timing(stage:string){
- if(process.env.D009H_CASE)console.log("D009H "+JSON.stringify({stage,ms:performance.now()}));
-}
 export async function threadFixture<T>(
   body: (f: Awaited<ReturnType<typeof setup>>) => Promise<T>,
   root = productRoot,
+  onStage?: (name: string) => void,
 ) {
   return withState(async (dir) => {
-    const f = await setup(dir, root);
+    const f = await setup(dir, root, onStage);
     try {
       return await body(f);
     } finally {
-      timing("cleanup");await f.close();
+      onStage?.("closing the fixture");
+      await f.close();
     }
   });
 }
-async function setup(dir: string, root: string) {
-  timing("pairing");
+async function setup(dir: string, root: string, onStage?: (name: string) => void) {
+  onStage?.("pairing devices");
   const pairing = await startPairedProject({
     stateDir: dir,
     projectId: "project-notes",
     requests: [["thread.view", "thread.send"]],
   });
-  timing("writer setup");
   const stateDir = join(pairing.stateDir, "host");
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   const f = await startFirstSendFixture({
@@ -244,6 +242,7 @@ async function setup(dir: string, root: string) {
     adapter: "replay",
     root,
     point: "resume",
+    ...(onStage && { onStage }),
     ipc(message) {
       const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
       const waiter = pending.get(reply.id);

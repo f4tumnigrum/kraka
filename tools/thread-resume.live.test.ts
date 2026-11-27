@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import { join } from "node:path";
 import { writeFileSync, unlinkSync } from "node:fs";
 import * as v from "valibot";
@@ -14,7 +14,7 @@ import {
   cachedHistory,
   installHistoryPage,
 } from "../packages/client-runtime/src/thread-pass";
-import { timing,threadFixture, turnRows, until } from "./fixtures/thread-resume";
+import { threadFixture, turnRows, until } from "./fixtures/thread-resume";
 import { parseScenario } from "./fixtures/scenario";
 const scenario = parseScenario(
   await Bun.file(
@@ -226,45 +226,71 @@ test(
     }),
   10000,
 );
+// Across 18 Windows CI runs the slowest case took 5.68 s, including 4.41 s pairing devices.
+// An earlier run hit the 12 s deadline. Allow for runner delays and the writer's own 11 s publication deadline.
+const expiredCursorTimeoutMs = process.platform === "win32" ? 30_000 : 12_000;
 test(
   "S-STATE-013 expired cursor reopens once with a bounded window and independent history",
   async () => {
-    process.env.D009H_CASE="1";timing("start");try{await threadFixture(async (f) => {
-      timing("seed initial");
-      await f.start();
-      timing("desktop connect");
-      const d = await f.connect("desktop");
-      timing("open and install 1");
-      await op(d, f.threadId);
-      const p = await d.at("1");
-      timing("desktop disconnect");
-      await d.close();
-      timing("18 seed transactions");
-      for (let i = 1; i <= 18; i++) await f.seed(turnRows(f.threadId, i));
-      timing("set retention");
-      await f.control({ floor: "5" });
-      timing("desktop reconnect");
-      const back = await f.connect("desktop");
-      timing("reset and install 19");
-      await op(back, f.threadId, p);
-      const h = await back.at("19");
-      expect(
-        back.messages.filter((m) => m.kind === "subscription.reset").map((m) => m.message),
-      ).toEqual([expect.objectContaining({ reason: "cursorExpired" })]);
-      expect(Object.keys(back.cache.read().scopes[scopeKey(h)]!.members)).toHaveLength(21);
-      timing("history");
-      const page = await back.client.history(h, null, () => true);
-      expect(page.rows.filter((r) => r.objectType === "message")).toHaveLength(8);
-      expect(page.olderAnchor).toBeNull();
-      timing("post-head update");
-      await f.seed(turnRows(f.threadId, 19));
-      await back.at("20");
-      expect(back.heads.filter((h) => h.through === "20")).toHaveLength(1);
-      expect(cachedHistory(back.cache.read(), page.anchor, back.heads.at(-1)!)?.verifiedAt).toEqual(
-        h,
+    let stage = "creating the fixture";
+    let since = performance.now();
+    function entering(name: string) {
+      stage = name;
+      since = performance.now();
+    }
+    onTestFinished(() => {
+      if (stage)
+        console.error(
+          `S-STATE-013 interrupted while ${stage} (${Math.round(performance.now() - since)} ms in this step)`,
+        );
+    });
+    try {
+      await threadFixture(
+        async (f) => {
+          entering("seeding the initial thread");
+          await f.start();
+          entering("connecting the desktop");
+          const d = await f.connect("desktop");
+          entering("opening and installing position 1");
+          await op(d, f.threadId);
+          const p = await d.at("1");
+          entering("disconnecting the desktop");
+          await d.close();
+          for (let i = 1; i <= 18; i++) {
+            entering(`seeding turn ${i} of 18`);
+            await f.seed(turnRows(f.threadId, i));
+          }
+          entering("advancing the retention floor");
+          await f.control({ floor: "5" });
+          entering("reconnecting the desktop");
+          const back = await f.connect("desktop");
+          entering("resetting and installing position 19");
+          await op(back, f.threadId, p);
+          const h = await back.at("19");
+          expect(
+            back.messages.filter((m) => m.kind === "subscription.reset").map((m) => m.message),
+          ).toEqual([expect.objectContaining({ reason: "cursorExpired" })]);
+          expect(Object.keys(back.cache.read().scopes[scopeKey(h)]!.members)).toHaveLength(21);
+          entering("reading the older history page");
+          const page = await back.client.history(h, null, () => true);
+          expect(page.rows.filter((r) => r.objectType === "message")).toHaveLength(8);
+          expect(page.olderAnchor).toBeNull();
+          entering("committing and installing position 20");
+          await f.seed(turnRows(f.threadId, 19));
+          await back.at("20");
+          expect(back.heads.filter((h) => h.through === "20")).toHaveLength(1);
+          expect(
+            cachedHistory(back.cache.read(), page.anchor, back.heads.at(-1)!)?.verifiedAt,
+          ).toEqual(h);
+        },
+        undefined,
+        entering,
       );
-    });}finally{timing("end");delete process.env.D009H_CASE;}},
-  60000,
+    } finally {
+      stage = "";
+    }
+  },
+  expiredCursorTimeoutMs,
 );
 test(
   "S-STATE-053 ancestor history preserves the ended activity over a late old page",

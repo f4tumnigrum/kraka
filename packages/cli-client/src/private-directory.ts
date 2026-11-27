@@ -1,4 +1,3 @@
-import {appendFileSync} from "node:fs";
 import { mkdir, lstat, realpath } from "node:fs/promises";
 
 const windowsDirectory = `
@@ -31,7 +30,6 @@ try {
 
 export async function ownedDirectory(dir: string) {
   if (process.platform === "win32") {
-    const t=performance.now();
     const result = Bun.spawnSync(
       [
         "powershell.exe",
@@ -42,7 +40,6 @@ export async function ownedDirectory(dir: string) {
       ],
       { env: { ...process.env, KRAKA_ACCESS_DIRECTORY: dir }, stdout: "ignore", stderr: "pipe" },
     );
-    if(process.env.D009H_CASE && process.env.D009H_ACL)appendFileSync(process.env.D009H_ACL,JSON.stringify({pid:process.pid,ms:performance.now()-t,dir:dir.split(/[\\/]/).at(-1)})+"\n");
     if (result.exitCode !== 0)
       throw Error(`Private state directory check failed: ${result.stderr.toString().trim()}`);
   } else {
