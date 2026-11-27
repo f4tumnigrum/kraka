@@ -40,3 +40,8 @@ export { runReplayTurn } from "./replay-turn";
 export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
+export type { LocalActor } from "./command-receipts";
+export { managedView } from "./worktree-git";
+export * from "./isolated-start";
+export * from "./worktree-storage";
+export * from "./worktree-prepare";

@@ -22,6 +22,8 @@ import { physicalDirectory } from "./project-directory";
 import { recoverInputDelivery } from "./round";
 import type { FrozenDelivery } from "./executor-records";
 
+import { worktreeTables, readManaged } from "./worktree-storage";
+import { managedView } from "./worktree-git";
 const catalog = { initial: 1, steps: [] };
 const ddl = `
 CREATE TABLE header (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
@@ -67,10 +69,13 @@ export function openStore(writer: DirectoryWriter) {
         db.run("PRAGMA user_version=1");
         db.run("INSERT INTO header VALUES(1,?)", [JSON.stringify(header)]);
       })();
+    db.exec(worktreeTables);
     const store = new FirstSendStore(db, writer);
     db.transaction(() => {
       for (const { round } of db
-        .query<{ round: string }, []>("SELECT round FROM deliveries WHERE pending=1")
+        .query<{ round: string }, []>(
+          "SELECT round FROM deliveries WHERE pending=1 AND round NOT IN (SELECT round FROM ready_dispatch)",
+        )
         .all()) {
         const row = readRound(db, round);
         if (!row) throw new Error("Delivery missing round");
@@ -129,6 +134,12 @@ export class FirstSendStore {
   ) {}
   directory(thread: Thread) {
     const project = readProject(this.db, thread.projectId);
+    if (thread.worktreeId && project) {
+      const managed = readManaged(this.db, thread.worktreeId);
+      return managed
+        ? directoryForThread(thread, project, managed.directory, managedView(managed))
+        : null;
+    }
     const saved = this.db
       .query<{ identity: string; directory: string }, [string]>(
         "SELECT identity,directory FROM projects WHERE id=?",
@@ -141,6 +152,18 @@ export class FirstSendStore {
     return physical?.identity === saved.identity && physical.realPath === path ? path : null;
   }
   setPhase(round: Round, phase: RoundPhase) {
+    if (phase.kind === "filed" && phase.gate === "eligible") {
+      const thread = readThread(this.db, round.threadId);
+      if (thread?.worktreeId) {
+        const managed = readManaged(this.db, thread.worktreeId);
+        if (
+          !managed ||
+          (managed.roundId === round.id && managed.claim.operationId !== managed.firstCommand) ||
+          !this.directory(thread)
+        )
+          phase = { kind: "filed", gate: "held" };
+      }
+    }
     const updated = {
       ...round,
       version: String(BigInt(round.version) + 1n),
@@ -148,6 +171,8 @@ export class FirstSendStore {
     };
     this.db.transaction(() => {
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(updated), round.id]);
+      if (phase.kind !== "filed" || phase.gate !== "eligible")
+        this.db.run("DELETE FROM ready_dispatch WHERE round=?", [round.id]);
       const pending =
         phase.kind === "armed" ||
         phase.kind === "handed" ||

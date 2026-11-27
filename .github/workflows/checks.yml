@@ -35,11 +35,13 @@ jobs:
         env:
           KRAKA_REQUIRED_ROUTE_CASES: "1"
       - run: bun test ./tools/first-send.live.test.ts
+      - run: bun test ./tools/isolated-start.live.test.ts
       - run: >-
           bun test
           --path-ignore-patterns "**/reference-conformance.live.test.ts"
           --path-ignore-patterns "**/route-switch.live.test.ts"
           --path-ignore-patterns "**/first-send.live.test.ts"
+          --path-ignore-patterns "**/isolated-start.live.test.ts"
       - run: bun run build
       - run: bun run protocol:reference:check
       - name: Measure budgets on the PR base

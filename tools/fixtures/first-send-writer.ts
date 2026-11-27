@@ -7,16 +7,20 @@ import { fixture } from "./replay-process";
 const [stateDir, root, point] = process.argv.slice(2);
 if (!stateDir || !root) throw new Error("Expected state and product roots");
 const state = stateDir;
-function barrier(name: string) {
+function barrier(name: string, data = "entered") {
   if (point !== name) return;
   const marker = join(state, `entered-${name}`);
   if (existsSync(marker)) return;
-  writeFileSync(marker, "entered", { flag: "wx" });
+  writeFileSync(marker, data, { flag: "wx" });
   while (!existsSync(join(state, `release-${name}`))) Bun.sleepSync(5);
 }
 const recording = parseReplayRecording(readFileSync(join(root, fixture), "utf8"));
 const adapter = createReplayAdapter(recording);
-if (point === "peer" || point === "externalWrite") {
+if (
+  point === "peer" ||
+  point === "externalWrite" ||
+  ["claimed", "registered", "beforeSetup", "setupExited"].includes(point ?? "")
+) {
   const open = adapter.open,
     invoke = adapter.invoke;
   const sessions = new WeakMap<object, { cwd: string; frames: unknown[] }>();
@@ -68,6 +72,9 @@ const writer = await startWriter(
   state,
   { adapter, expectedText: recording.expectedText, modelId: recording.modelId },
   {
+    preparation(point, managed) {
+      barrier(point, JSON.stringify(managed));
+    },
     locked() {
       barrier("locked");
     },

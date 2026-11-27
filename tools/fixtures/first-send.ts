@@ -5,6 +5,7 @@ import * as v from "valibot";
 import {
   confirmWriter,
   InstancePublicationSchema,
+  type InstancePublication,
   openReceiptReader,
   readReceipt,
 } from "@kraka/environment";
@@ -18,7 +19,16 @@ import { connectFirstSend, fixtureActor, fixtureSigner } from "./first-send-clie
 import { entry, fixture, sampleRequest, terminate, within } from "./replay-process";
 
 export const productRoot = resolve(import.meta.dir, "../..");
-export type Fault = "locked" | "beforeCommit" | "afterCommit" | "externalWrite" | "peer";
+export type Fault =
+  | "locked"
+  | "beforeCommit"
+  | "afterCommit"
+  | "externalWrite"
+  | "peer"
+  | "claimed"
+  | "registered"
+  | "beforeSetup"
+  | "setupExited";
 export function configureLocalOwner(stateDir: string) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const privatePath = join(stateDir, "fixture-private.pem");
@@ -71,7 +81,12 @@ export function launchWriter(stateDir: string, root: string, point?: Fault) {
       }),
       JSON.parse(raw),
     );
-    const confirmed = await confirmWriter(realpathSync.native(stateDir), performance.now() + 1000);
+    const deadline = performance.now() + 10000;
+    let confirmed: InstancePublication | null;
+    do {
+      confirmed = await confirmWriter(realpathSync.native(stateDir), deadline);
+      if (!confirmed) await Bun.sleep(10);
+    } while (!confirmed && performance.now() < deadline);
     if (
       !Bun.deepEquals(confirmed, result.instance) ||
       (result.kind === "ready" && result.instance.pid !== child.pid)
