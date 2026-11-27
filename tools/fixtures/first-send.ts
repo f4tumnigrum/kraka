@@ -14,16 +14,17 @@ import {
   type CommandReceipt,
   type RequestResult,
 } from "@kraka/protocol";
+import { ownedDirectory } from "../../packages/cli-client/src/private-directory";
 import { connectFirstSend, fixtureActor, fixtureSigner } from "./first-send-client";
 import { entry, fixture, sampleRequest, terminate, within } from "./replay-process";
 
 export const productRoot = resolve(import.meta.dir, "../..");
 export type Fault = "locked" | "beforeCommit" | "afterCommit" | "externalWrite" | "peer" | "resume";
-export function configureLocalOwner(
+export async function configureLocalOwner(
   stateDir: string,
   permissions = ["workspace.change", "thread.send"],
 ) {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  await ownedDirectory(stateDir);
   const privatePath = join(stateDir, "fixture-private.pem");
   if (existsSync(privatePath)) return;
   const { privateKey, publicKey } = generateKeyPairSync("ec", {
@@ -135,7 +136,7 @@ export async function startFirstSendFixture({
   point?: Fault;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
-  configureLocalOwner(stateDir);
+  await configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
   const launcher = launchWriter(stateDir, root, point);
   try {
