@@ -2,6 +2,11 @@ import * as v from "valibot";
 import { P256PublicKeySchema, SessionRejectionReasonSchema } from "./access";
 import { EnvironmentIdSchema, HostInstanceIdSchema, RouteIdSchema } from "./ids";
 
+import type { OriginParser } from "./origins";
+
+// Both browser and Bun hosts provide WHATWG URL. The client core has no DOM types.
+declare const URL: OriginParser;
+
 export const BUSINESS_WEBSOCKET_PATH = "/ws";
 /** Host status requires separate process-exit evidence. */
 export const BUSINESS_CLOSE_CODES = {
@@ -202,16 +207,23 @@ export function migrateRouteCatalog(raw: unknown): RouteCatalogRead {
       routeIds.add(route.id);
     }
   }
-  return {
-    kind: "ready",
-    catalog: {
-      ...catalog,
-      environments: catalog.environments.map((entry) => ({
-        ...entry,
-        routes: entry.routes.map((route) => ({ ...route, status: { kind: "untested" } })),
-      })),
-    },
-  };
+  for (const entry of catalog.environments) {
+    const origins = new Map<string, Route["id"]>();
+    const rows: typeof entry.routes = [];
+    for (const route of entry.routes) {
+      const endpoint = new URL(route.endpoint).origin;
+      const path = JSON.stringify([route.kind, endpoint, route.sshProfileReference]);
+      const first = origins.get(path);
+      if (first !== undefined) {
+        if (entry.preferredRouteId === route.id) entry.preferredRouteId = first;
+        continue;
+      }
+      origins.set(path, route.id);
+      rows.push({ ...route, endpoint, status: { kind: "untested" } });
+    }
+    entry.routes = rows;
+  }
+  return { kind: "ready", catalog };
 }
 
 export const HostStatusSchema = v.variant("kind", [
