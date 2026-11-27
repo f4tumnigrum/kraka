@@ -13,6 +13,7 @@ import { currentFootprint, noChildren } from "./measure-replay";
 import { startFirstSendFixture, accepted, waitFile } from "./fixtures/first-send";
 import { connectFirstSend, fixtureActor } from "./fixtures/first-send-client";
 import { withState } from "./fixtures/replay-process";
+import { codexFixture } from "./fixtures/codex-turn";
 import type { Unit } from "./perf-catalog";
 
 type Fixture = Awaited<ReturnType<typeof startFirstSendFixture>>;
@@ -27,15 +28,7 @@ const sample = (base: ReportBase, series: string, value: number, unit: Unit = "m
 function verifyObservation(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
-function original(f: Fixture, receipt: CommandReceipt) {
-  const row = f.receipt(receipt.commandId);
-  verifyObservation(
-    row && Bun.deepEquals(row.receipt, receipt),
-    `Missing durable receipt for ${receipt.commandId}`,
-  );
-  return row;
-}
-async function waitIdle(f: Fixture) {
+async function waitIdle(f: Pick<Fixture, "instance">) {
   const deadline = performance.now() + 8000;
   do {
     const idle = await confirmWriter(f.instance.stateDirectory, deadline, true);
@@ -51,9 +44,9 @@ async function startup(
 ): Promise<Record<string, number>> {
   const count = idle ? 10 : 20;
   base.workload = idle
-    ? "Ten single-thread writers idle at first durable thread.start acceptance + 60 s"
-    : "Ten fresh/reused writer pairs from spawn through durable thread.start acceptance";
-  base.endpoint = "signed project.register and thread.start on the verified local writer";
+    ? "Ten Codex stdio writers idle at first durable thread.start acceptance + 60 s"
+    : "Ten fresh/reused Codex stdio writer pairs from spawn through durable thread.start acceptance";
+  base.endpoint = "signed Codex first send, matching SQLite receipt, local app-server peer";
   base.expected = { launches: count, accepted: count, completed: count, joined: count };
   const counts = { launches: 0, accepted: 0, completed: 0, joined: 0 };
   base.actual = counts;
@@ -61,21 +54,53 @@ async function startup(
     await withState(async (dir) => {
       for (const series of idle ? ["idle"] : ["fresh", "reused"]) {
         const opts = options(dir, root);
-        const f = await startFirstSendFixture(opts);
+        const f = await codexFixture(dir, {}, root, false);
+        const before = f.ledger.rows().length;
         counts.launches++;
         try {
+          if (series !== "reused") accepted((await f.configure()).receipt, "executorConfigured");
+          accepted((await f.refresh()).receipt, "executorRefreshed");
           const { receipt } = await f.send();
           const at = performance.now();
           const ids = accepted(receipt, "threadStarted");
-          const record = original(f, receipt);
+          const reader = openReceiptReader(opts.stateDir);
+          let position: string;
+          try {
+            const row = readReceipt(
+              reader,
+              v.parse(PrincipalIdSchema, fixtureActor),
+              receipt.commandId,
+            );
+            verifyObservation(
+              row && Bun.deepEquals(row.receipt, receipt),
+              "Missing durable Codex receipt",
+            );
+            position = row.position;
+          } finally {
+            reader.close();
+          }
           counts.accepted++;
           await waitIdle(f);
+          const native = f.ledger.rows().slice(before);
+          const peers = native.filter((r) => r.event === "spawn").map((r) => r.handle);
+          verifyObservation(
+            peers.length === 2 &&
+              native.filter((r) => r.event === "exit").length === peers.length &&
+              native.filter((r) => r.event === "root").length === 1,
+            "Missing probe/turn exit or root evidence",
+          );
+          const processes = {
+            appServers: peers.length,
+            protocolSchemas: native.filter((r) => r.event === "protocolSchema").length,
+            versions: native.filter((r) => r.event === "version").length,
+            remaining: 0,
+          };
           const db = openReceiptReader(opts.stateDir);
           try {
             const phase = readRound(db, ids.roundId)?.attempt.phase;
             verifyObservation(
               phase?.kind === "closing" && phase.endTimeEvidence?.source === "executorReported",
-              "Incomplete replay turn",
+              "Incomplete Codex turn",
             );
           } finally {
             db.close();
@@ -105,7 +130,8 @@ async function startup(
               pid,
               elapsedMs,
               commandId: receipt.commandId,
-              position: record.position,
+              position,
+              nativeProcesses: processes,
               ...memory,
             });
             sample(base, "idle", memory.mib, "MiB");
@@ -114,7 +140,8 @@ async function startup(
               pid,
               series,
               commandId: receipt.commandId,
-              position: record.position,
+              position,
+              nativeProcesses: processes,
               elapsedMs: at - f.started,
             });
             sample(base, series, at - f.started);

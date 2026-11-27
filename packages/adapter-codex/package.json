@@ -17,6 +17,7 @@
     "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-codex.js"
   },
   "dependencies": {
+    "valibot": "1.5.0",
     "@kraka/environment": "workspace:*",
     "@kraka/protocol": "workspace:*"
   }

@@ -1,8 +1,11 @@
+import { CodexInstances, type CodexSelection } from "./codex-instances";
+import { dispatchCodex } from "./durable-codex";
 import { createPublicKey, verify, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import {
+  readReceipt,
   openWriter,
   openStore,
   registerProject,
@@ -26,6 +29,8 @@ import {
 import { dispatchReplay } from "./durable-replay";
 
 const methods = v.variant("method", [
+  REQUEST_METHODS.configureExecutor.schema,
+  REQUEST_METHODS.refreshExecutor.schema,
   REQUEST_METHODS.registerProject.schema,
   REQUEST_METHODS.startThread.schema,
   REQUEST_METHODS.renameThread.schema,
@@ -39,7 +44,7 @@ export const localOwnerSchema = v.strictObject({
 type Session = { connectionId: string; challengeId: string; challenge: string; sequence: number };
 export async function startWriter<H extends object>(
   stateDir: string,
-  replay: { adapter: ProviderAdapter<"replay", H>; expectedText: string; modelId: string },
+  replay: { adapter: ProviderAdapter<"replay", H>; expectedText: string; modelId: string } | null,
   lifecycle?: {
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
@@ -59,6 +64,7 @@ export async function startWriter<H extends object>(
     const transaction = openStore(lock.lease);
     store = transaction;
     lifecycle?.opened?.(transaction);
+    const codex = new CodexInstances(transaction);
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
@@ -116,7 +122,7 @@ export async function startWriter<H extends object>(
             }),
           );
         },
-        message(ws, frame) {
+        async message(ws, frame) {
           try {
             if (!accepting || typeof frame !== "string") {
               ws.close(1008);
@@ -146,17 +152,75 @@ export async function startWriter<H extends object>(
             }
             session.sequence = req.sequence;
             const context = { actor, commandId: req.commandId, transaction };
-            const receipt =
-              req.method === "project.register"
-                ? registerProject({ ...context, environmentId: req.environmentId, ...req.payload })
-                : req.method === "thread.rename"
-                  ? renameThread({ ...context, ...req.payload })
-                  : acceptFirstInput({
-                      verifiedActor: actor,
-                      commandId: req.commandId,
-                      threadStart: req.payload,
-                      transaction,
-                    });
+            let selection: CodexSelection | null = null;
+            let receipt: CommandReceipt;
+            switch (req.method) {
+              case "executor.configure":
+                receipt = codex.registry.configure(context, req.payload);
+                break;
+              case "executor.refresh": {
+                const work = codex.refresh(context, req.payload);
+                codex.active.add(work);
+                try {
+                  receipt = await work;
+                } finally {
+                  codex.active.delete(work);
+                }
+                break;
+              }
+              case "project.register":
+                receipt = registerProject({
+                  ...context,
+                  environmentId: req.environmentId,
+                  ...req.payload,
+                });
+                break;
+              case "thread.rename":
+                receipt = renameThread({ ...context, ...req.payload });
+                break;
+              case "thread.start": {
+                const { projectId, model } = req.payload;
+                const id = req.payload.instanceId ?? codex.registry.defaultFor(projectId);
+                const cwd = id ? transaction.projectDirectory(projectId) : null;
+                let entry = id && cwd ? codex.current(id, actor.id, cwd) : null;
+                if (
+                  id &&
+                  !entry &&
+                  actor.allows("thread.send") &&
+                  !readReceipt(transaction.db, actor.id, req.commandId)
+                )
+                  entry = await codex.lookup(id, actor.id, projectId);
+                if (!accepting) return;
+                selection = codex.select(entry, model);
+                const chosen = selection;
+                receipt = acceptFirstInput({
+                  verifiedActor: actor,
+                  commandId: req.commandId,
+                  threadStart: req.payload,
+                  transaction,
+                  validate: () =>
+                    id
+                      ? chosen
+                        ? null
+                        : "unsupported"
+                      : replay &&
+                          (!model ||
+                            (model.id === replay.modelId && !Object.keys(model.options).length))
+                        ? null
+                        : "unsupported",
+                  selected(roundId) {
+                    if (chosen)
+                      transaction.db.run("INSERT INTO round_executors VALUES(?,?,?,?)", [
+                        roundId,
+                        chosen.reg.instanceId,
+                        chosen.reg.version,
+                        JSON.stringify(chosen.model),
+                      ]);
+                  },
+                });
+                break;
+              }
+            }
             lifecycle?.committed?.(req, receipt);
             ws.send(JSON.stringify(receipt));
             if (
@@ -165,16 +229,42 @@ export async function startWriter<H extends object>(
               !turns.has(receipt.result.roundId)
             ) {
               const result = receipt.result;
-              const run = Bun.sleep(0).then(() =>
-                dispatchReplay(
-                  transaction,
-                  result,
-                  req.commandId,
-                  replay,
-                  (event) => lifecycle?.update?.(event),
-                  controller.signal,
-                ),
-              );
+              const chosen = selection;
+              const saved = transaction.db
+                .query<{ instance: string; version: string; model: string }, [string]>(
+                  "SELECT instance,version,model FROM round_executors WHERE round=?",
+                )
+                .get(result.roundId);
+              const run = Bun.sleep(0).then(async () => {
+                if (saved) {
+                  if (
+                    chosen &&
+                    chosen.reg.instanceId === saved.instance &&
+                    chosen.reg.version === saved.version &&
+                    Bun.deepEquals(JSON.parse(saved.model), chosen.model)
+                  )
+                    await dispatchCodex(
+                      transaction,
+                      result,
+                      chosen,
+                      () =>
+                        codex.current(chosen.reg.instanceId, actor.id, chosen.cwd)?.snapshot ===
+                        chosen.snapshot,
+                      (event) => {
+                        if (ws.readyState === 1) ws.send(JSON.stringify(event));
+                      },
+                      controller.signal,
+                    );
+                } else if (replay)
+                  await dispatchReplay(
+                    transaction,
+                    result,
+                    req.commandId,
+                    replay,
+                    (event) => lifecycle?.update?.(event),
+                    controller.signal,
+                  );
+              });
               turns.set(result.roundId, run);
               void run.finally(() => turns.delete(result.roundId));
             }
@@ -205,6 +295,7 @@ export async function startWriter<H extends object>(
         try {
           await server.stop(true);
           await Promise.allSettled(turns.values());
+          await codex.close();
         } finally {
           try {
             transaction.db.close();

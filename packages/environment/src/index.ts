@@ -40,3 +40,4 @@ export { runReplayTurn } from "./replay-turn";
 export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
+export * from "./executor-registry";

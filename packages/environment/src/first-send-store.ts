@@ -127,6 +127,17 @@ export class FirstSendStore {
     readonly db: Database,
     readonly writer: DirectoryWriter,
   ) {}
+  projectDirectory(id: string) {
+    const row = this.db
+      .query<{ path: string; identity: string }, [string, string]>(
+        "SELECT path,identity FROM projects WHERE id=? AND environment=?",
+      )
+      .get(id, this.writer.environmentId);
+    const physical = row ? physicalDirectory(row.path) : null;
+    return physical && physical.identity === row?.identity && physical.realPath === row.path
+      ? physical.realPath
+      : null;
+  }
   directory(thread: Thread) {
     const project = readProject(this.db, thread.projectId);
     const saved = this.db

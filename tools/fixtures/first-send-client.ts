@@ -5,6 +5,8 @@ import * as v from "valibot";
 import {
   canonicalJson,
   CommandReceiptSchema,
+  ExecutorTurnUpdateSchema,
+  type ExecutorTurnUpdate,
   CommandIdSchema,
   ConnectionChallengeSchema,
   type CommandReceipt,
@@ -25,7 +27,11 @@ const helloSchema = v.strictObject({
   challengeId: v.string(),
   challenge: ConnectionChallengeSchema,
 });
-export async function connectFirstSend(stateDir: string, instance: InstancePublication) {
+export async function connectFirstSend(
+  stateDir: string,
+  instance: InstancePublication,
+  onUpdate?: (event: ExecutorTurnUpdate) => void,
+) {
   const key = createPrivateKey(readFileSync(join(stateDir, "fixture-private.pem")));
   const socket = new WebSocket(instance.endpoint);
   const ready = Promise.withResolvers<v.InferOutput<typeof helloSchema>>();
@@ -51,7 +57,12 @@ export async function connectFirstSend(stateDir: string, instance: InstancePubli
         ready.resolve(hello);
         return;
       }
-      const receipt = v.parse(CommandReceiptSchema, JSON.parse(String(data)));
+      const raw = JSON.parse(String(data));
+      if (onUpdate && raw.kind !== "accepted" && raw.kind !== "rejected") {
+        onUpdate(v.parse(ExecutorTurnUpdateSchema, raw));
+        return;
+      }
+      const receipt = v.parse(CommandReceiptSchema, raw);
       const waiter = pending.get(receipt.commandId);
       if (!waiter) throw new Error("Unmatched receipt");
       pending.delete(receipt.commandId);
