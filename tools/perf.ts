@@ -1,4 +1,4 @@
-import { missingOwnerLaunch, sampleOwnerPair } from "./measure-owner-launch";
+import { ownerProvisioner, sampleOwnerPair } from "./measure-owner-launch";
 import { readdir } from "node:fs/promises";
 import { arch, cpus, hostname, platform, release, totalmem } from "node:os";
 import { join, resolve } from "node:path";
@@ -39,8 +39,9 @@ function hostInfo() {
         : "host observation; historical reference machine unavailable",
   };
 }
-interface ReportBase extends ProbeSpec {
+export interface ReportBase extends ProbeSpec {
   metric: Metric;
+  variant?: "access.listSessions";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -238,23 +239,31 @@ async function measureClosure(base: ReportBase, root: string) {
   return measured(base, { external: 1, native: 1 });
 }
 async function checkCommandSurface(root: string) {
-  // Verify the known command surface at the measured root before reporting missing workloads.
+  // Probe the executable in the selected root before declaring an endpoint unavailable.
   return withState(async (dir) => {
-    const r = Bun.spawnSync([process.execPath, join(root, entry), "start", "--state-dir", dir], {
-      cwd: root,
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 10000,
-    });
+    const r = Bun.spawnSync(
+      [process.execPath, join(root, entry), "probe-unknown-command", "--state-dir", dir],
+      {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 10000,
+      },
+    );
+    const diagnostic = r.stderr.toString().trim();
     if (
       r.exitCode !== 1 ||
       r.signalCode ||
       r.stdout.length ||
-      !["Unknown command, expected replay", "Unknown command, expected replay or access"].includes(
-        r.stderr.toString().trim(),
-      )
+      ![
+        "Unknown command, expected replay",
+        "Unknown command, expected replay or start",
+        "Unknown command, expected replay or access",
+        "Unknown command, expected replay, start or access",
+      ].includes(diagnostic)
     )
       throw new Error(`Cannot confirm command surface (exit ${r.exitCode}): ${r.stderr}`);
+    return diagnostic;
   });
 }
 export function parseSelection(args: string[]) {
@@ -306,10 +315,17 @@ export async function runBudget({
   let exit = 0,
     stub = false,
     replayAttempted = false;
-  let capability: Promise<void> | undefined;
-  for (const metric of metricIds.filter((m) => !metrics.length || metrics.includes(m))) {
+  let capability: Promise<string> | undefined;
+  const commandSurface = () => (capability ??= checkCommandSurface(root));
+  const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
+  const selected = metricIds.filter((m) => !metrics.length || metrics.includes(m));
+  const workloads = selected.flatMap((metric): Pick<ReportBase, "metric" | "variant">[] =>
+    metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
+  );
+  for (const workload of workloads) {
+    const { metric, variant } = workload;
     const base: ReportBase = {
-      metric,
+      ...workload,
       role,
       platform,
       revision: null,
@@ -326,10 +342,17 @@ export async function runBudget({
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (metric === "P1") {
+      else if (variant === "access.listSessions") {
+        base.workload =
+          "Ten provisioned fresh/reused directory pairs, daemon spawn through first signed access.listSessions acceptance, existing OS cache";
+        base.endpoint = "access serve with a registered device";
         base.expected = { launches: 20, accepted: 20, joined: 20 };
         base.actual = { launches: 0, accepted: 0, joined: 0 };
-        if (role === "baseline" && (await missingOwnerLaunch(root)))
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, ownerProvisioner)).exists()) &&
+          !(await commandSurface()).includes("access")
+        )
           report = unavailable(
             base,
             "Parent has no protected owner enrollment and signed access.listSessions launch",
@@ -350,7 +373,14 @@ export async function runBudget({
             );
           report = measured(base, { fresh: 10, reused: 10 });
         }
-      } else if (metric === "P2") {
+      } else if (
+        durable &&
+        (metric === "P1" || metric === "P2" || metric === "P7" || metric === "P9")
+      ) {
+        const { measureFirstSend } = await import("./measure-first-send");
+        const series = await measureFirstSend(base, root, metric);
+        report = measured(base, series, metric === "P2" && process.platform !== "darwin");
+      } else if (metric === "P1" || metric === "P2") {
         if (stub) {
           base.actual = replayCounts();
           base.expected = Object.fromEntries(Object.keys(base.actual).map((key) => [key, 10]));
@@ -372,8 +402,7 @@ export async function runBudget({
           )
             throw new Error("Cannot confirm absence of the daemon release packager");
         } else if (!stub) {
-          capability ??= checkCommandSurface(root);
-          await capability;
+          await commandSurface();
         }
         base.actual.capabilityChecks = 1;
         report = unavailable(base, `Missing ${base.endpoint}`);

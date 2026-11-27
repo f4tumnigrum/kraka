@@ -12,6 +12,8 @@ import {
   ThreadSchema,
   validateReplayUpdate,
   type RoundAttempt,
+  type Thread,
+  type Round,
   type ReplayRunRequest,
   type CommandReceipt,
   type ReplayTurnUpdate,
@@ -55,6 +57,7 @@ export async function runReplayTurn<Handle extends object>({
   modelId,
   workingDirectory,
   signal,
+  persisted,
   emit,
 }: {
   request: ReplayRunRequest;
@@ -63,6 +66,13 @@ export async function runReplayTurn<Handle extends object>({
   modelId: string;
   workingDirectory: string;
   signal: AbortSignal;
+  persisted?: {
+    thread: Thread;
+    round: Round;
+    prepare: (delivery: FrozenDelivery) => void;
+    phase: (phase: RoundAttempt["phase"]) => void;
+    directory: () => string;
+  };
   emit: (message: CommandReceipt | ReplayTurnUpdate) => void;
 }): Promise<void> {
   const refuse = (kind: "unsupported" | "invalidState") =>
@@ -102,28 +112,32 @@ export async function runReplayTurn<Handle extends object>({
     matrix: c.matrix,
     permission: { ceiling: "ask", selected: "ask" },
   });
-  const thread = v.parse(ThreadSchema, {
-    id: crypto.randomUUID(),
-    projectId: "replay-project",
-    worktreeId: null,
-    title: request.input.text,
-    lineage: { kind: "root" },
-    version: "1",
-    lifecycle: {
-      archivedAt: null,
-      state: {
-        kind: "active",
-        pinnedAt: null,
-        pinPosition: null,
-        manualPosition: null,
-        snoozedUntil: null,
+  const thread =
+    persisted?.thread ??
+    v.parse(ThreadSchema, {
+      id: crypto.randomUUID(),
+      projectId: "replay-project",
+      worktreeId: null,
+      title: request.input.text,
+      lineage: { kind: "root" },
+      version: "1",
+      lifecycle: {
+        archivedAt: null,
+        state: {
+          kind: "active",
+          pinnedAt: null,
+          pinPosition: null,
+          manualPosition: null,
+          snoozedUntil: null,
+        },
       },
-    },
-  });
-  const messageId = v.parse(MessageIdSchema, crypto.randomUUID());
-  const roundId = v.parse(RoundIdSchema, crypto.randomUUID());
-  const attemptId = v.parse(AttemptIdSchema, crypto.randomUUID());
-  const deliveryId = v.parse(DeliveryIdSchema, crypto.randomUUID());
+    });
+  const messageId = persisted?.round.messageId ?? v.parse(MessageIdSchema, crypto.randomUUID());
+  const roundId = persisted?.round.id ?? v.parse(RoundIdSchema, crypto.randomUUID());
+  const attemptId =
+    persisted?.round.attempt.attemptId ?? v.parse(AttemptIdSchema, crypto.randomUUID());
+  const deliveryId =
+    persisted?.round.attempt.deliveryId ?? v.parse(DeliveryIdSchema, crypto.randomUUID());
   const ticket = { attemptId, deliveryId };
   const ids = { roundId, attemptId };
   const queue: InputQueue = {
@@ -145,7 +159,7 @@ export async function runReplayTurn<Handle extends object>({
     resume: null,
     attemptId,
     setup: {
-      workingDirectory,
+      workingDirectory: persisted?.directory() ?? workingDirectory,
       additionalDirectories: [],
       environment: {},
       model: { id: modelId, options: {} },
@@ -197,6 +211,7 @@ export async function runReplayTurn<Handle extends object>({
     let attempt: RoundAttempt = head.attempt;
     const report = (event: RoundReport) => {
       attempt = { ...attempt, phase: applied(transitionRound(attempt, event)) };
+      persisted?.phase(attempt.phase);
     };
     const delivery: FrozenDelivery = {
       ...ticket,
@@ -205,6 +220,7 @@ export async function runReplayTurn<Handle extends object>({
       input: { id: messageId, ...request.input },
       parts: [],
     };
+    persisted?.prepare(delivery);
     iterator = adapter.events(session, null)[Symbol.asyncIterator]();
     const first = iterator.next().then(
       (value) => ({ ok: true as const, value }),

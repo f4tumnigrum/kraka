@@ -3,33 +3,16 @@ import * as v from "valibot";
 import { DevicePrincipalSchema, EnvironmentIdentitySchema, canonicalJson } from "@kraka/protocol";
 import { openDeviceCredentials } from "../packages/cli-client/src";
 import { connectDevice, commandId, type Client } from "./fixtures/paired-project";
-import { entry, terminate, withState, within } from "./fixtures/replay-process";
+import { entry, terminate, within } from "./fixtures/replay-process";
 
-const provisioner = "tools/fixtures/provision-owner.ts";
-export async function missingOwnerLaunch(root: string) {
-  if (await Bun.file(join(root, provisioner)).exists()) return false;
-  return withState(async (dir) => {
-    const run = Bun.spawnSync(
-      [process.execPath, join(root, entry), "access", "serve", "--state-dir", dir, "--port", "0"],
-      { cwd: root, stdout: "pipe", stderr: "pipe", timeout: 5000 },
-    );
-    if (
-      run.exitCode !== 1 ||
-      run.signalCode ||
-      run.stdout.length ||
-      run.stderr.toString().trim() !== "Unknown command, expected replay"
-    )
-      throw Error("Could not establish that authorized launch is absent");
-    return true;
-  });
-}
+export const ownerProvisioner = "tools/fixtures/provision-owner.ts";
 export async function sampleOwnerPair(
   root: string,
   dir: string,
   counts: Record<string, number>,
   observe: (series: "fresh" | "reused", elapsed: number, command: string) => void,
 ) {
-  const setup = Bun.spawnSync([process.execPath, join(root, provisioner), dir], {
+  const setup = Bun.spawnSync([process.execPath, join(root, ownerProvisioner), dir], {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",

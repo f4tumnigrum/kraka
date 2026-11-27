@@ -8,6 +8,8 @@ import { runReplayTurn, type ProviderAdapter } from "@kraka/environment";
 import { ReplayRunRequestSchema } from "@kraka/protocol";
 import * as v from "valibot";
 
+import { startWriter } from "./first-send";
+
 type SocketState = { claimed: boolean; controller: AbortController; terminal: boolean };
 async function replay(args: string[]) {
   const { values } = parseArgs({
@@ -146,9 +148,29 @@ export async function listenReplay<H extends object>({
 }
 if (import.meta.main && process.argv.length > 2) {
   try {
-    if (process.argv[2] === "access") await accessCli(process.argv.slice(3));
+    if (process.argv[2] === "start") {
+      const { values } = parseArgs({
+        args: process.argv.slice(3),
+        options: { "state-dir": { type: "string" }, recording: { type: "string" } },
+        strict: true,
+      });
+      if (!values["state-dir"] || !values.recording)
+        throw new Error("Expected start --state-dir DIR --recording FILE");
+      const recording = parseReplayRecording(await Bun.file(values.recording).text());
+      const writer = await startWriter(values["state-dir"], {
+        adapter: createReplayAdapter(recording),
+        modelId: recording.modelId,
+        expectedText: recording.expectedText,
+      });
+      if (writer.kind === "unconfirmed") throw new Error(writer.reason);
+      if (writer.kind === "ready") {
+        process.once("SIGTERM", writer.close);
+        process.once("SIGINT", writer.close);
+      }
+      console.log(JSON.stringify({ kind: writer.kind, instance: writer.instance }));
+    } else if (process.argv[2] === "access") await accessCli(process.argv.slice(3));
     else if (process.argv[2] === "replay") await replay(process.argv.slice(3));
-    else throw new Error("Unknown command, expected replay or access");
+    else throw new Error("Unknown command, expected replay, start or access");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
