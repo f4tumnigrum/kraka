@@ -20,6 +20,7 @@ import { verifyP256 } from "@kraka/protocol/web-crypto";
 import {
   selectRoute,
   type RouteCommand,
+  type RouteDial,
   type RouteEvent,
   type SocketEvent,
 } from "../../packages/client-runtime/src";
@@ -44,6 +45,7 @@ export async function connectDevice(
   identity: EnvironmentIdentity,
   device: LocalDevice,
   principal: v.InferOutput<typeof DevicePrincipalSchema>,
+  dial: RouteDial = dialRoute,
 ) {
   const events = new Journal<RouteEvent>(),
     traffic = new Journal<SocketEvent>();
@@ -55,7 +57,7 @@ export async function connectDevice(
     random: { bytes: (n) => crypto.getRandomValues(new Uint8Array(n)) },
     verify: verifyP256,
     dial: (url, receive) =>
-      dialRoute(url, (e) => {
+      dial(url, (e) => {
         traffic.push(e);
         receive(e);
       }),
@@ -96,20 +98,39 @@ export async function connectDevice(
   }
 }
 export type Client = Awaited<ReturnType<typeof connectDevice>>;
-export async function startTestHost(dir: string, signal?: AbortSignal) {
+export interface BrowserPeerOptions {
+  host: string;
+  port: number;
+  publicOrigin?: string;
+  certificate?: string;
+  privateKey?: string;
+}
+export async function startTestHost(
+  dir: string,
+  signal?: AbortSignal,
+  browser?: BrowserPeerOptions,
+) {
   const publication = Promise.withResolvers<unknown>();
   const events = new Journal<Record<string, unknown>>();
-  const p = Bun.spawn([process.execPath, join(import.meta.dir, "pairing-daemon.ts"), dir], {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "pipe",
-    ...(signal && { signal }),
-    ipc(message: unknown) {
-      if (!message || typeof message !== "object") return;
-      events.push(message as Record<string, unknown>);
-      if ("event" in message && message.event === "ready") publication.resolve(message);
+  const p = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, "pairing-daemon.ts"),
+      dir,
+      ...(browser ? [JSON.stringify(browser)] : []),
+    ],
+    {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
+      ...(signal && { signal }),
+      ipc(message: unknown) {
+        if (!message || typeof message !== "object") return;
+        events.push(message as Record<string, unknown>);
+        if ("event" in message && message.event === "ready") publication.resolve(message);
+      },
     },
-  });
+  );
   const stderr = new Response(p.stderr).text();
   const ended = p.exited.then(async (code) => ({ event: "exit", code, error: await stderr }));
   void ended.then((e) => {
@@ -235,10 +256,12 @@ export async function startPairedProject({
   stateDir: parent,
   projectId,
   requests,
+  browser,
   signal,
 }: {
   stateDir: string;
   projectId: string;
+  browser?: BrowserPeerOptions;
   requests: readonly (readonly PermissionItem[])[];
   signal?: AbortSignal;
 }) {
@@ -247,7 +270,7 @@ export async function startPairedProject({
   const cleanup: (() => void)[] = [];
   const clients: Client[] = [];
   const stateDir = await mkdtemp(join(parent, "paired-"));
-  let host = await startTestHost(stateDir, signal).catch(async (error) => {
+  let host = await startTestHost(stateDir, signal, browser).catch(async (error) => {
     await rm(stateDir, { recursive: true, force: true });
     throw error;
   });
@@ -318,7 +341,7 @@ export async function startPairedProject({
         owner.close();
         for (const c of clients) c.close();
         await host.stop();
-        host = await startTestHost(stateDir, signal);
+        host = await startTestHost(stateDir, signal, browser);
         if (canonicalJson(host.identity) !== canonicalJson(identity))
           throw Error("Environment identity changed");
         owner = await attach(device, first.principal);

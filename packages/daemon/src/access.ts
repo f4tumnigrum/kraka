@@ -20,6 +20,7 @@ import {
 } from "@kraka/environment";
 import {
   EnvironmentIdentitySchema,
+  EnvironmentIdSchema,
   DeviceIdSchema,
   DeviceKeyIdSchema,
   CommandIdSchema,
@@ -76,7 +77,10 @@ export async function openAccessHost(
         const previous = db
           .query<{ id: string; secret: string }, []>("SELECT id,secret FROM host_identity")
           .get();
-        if (previous) return previous;
+        if (previous) {
+          directoryEnvironmentId(dir, v.parse(EnvironmentIdSchema, previous.id));
+          return previous;
+        }
         const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
         const row = {
           id: directoryEnvironmentId(dir),

@@ -15,6 +15,8 @@ import type {
   PendingRegistration,
   IdentityPinStore,
 } from "@kraka/client-runtime";
+import type { BrowserHostOptions } from "./storage";
+import { openSession } from "./session";
 
 export const DEVICE_DATABASE = {
   name: "kraka-device-credentials",
@@ -80,5 +82,18 @@ export interface BrowserSessionInput {
   socketFactory: BrowserSocketFactory;
 }
 /** Return the opening handle before discovery or dialing. Callers share the host implementation. */
-export declare function openBrowserSession(input: BrowserSessionInput): SessionHandle;
+export function openBrowserSession(input: BrowserSessionInput): SessionHandle {
+  return openSession(input);
+}
+
+export { browserSocketFactory } from "./session";
+export {
+  createBrowserCredentials,
+  createBrowserPlatform,
+  readBrowserCatalog,
+  addBrowserRoute,
+  browserPins,
+} from "./storage";
+export type { BrowserHostOptions };
+export { startBrowserPage, pageSession, pagePairing } from "./page";
 export { openBrowserList } from "./thread-list";

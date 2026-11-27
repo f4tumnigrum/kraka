@@ -87,6 +87,7 @@ export * from "./registration";
 export * from "./subscription-session";
 export * from "./routes";
 
+export { RouteAttempt } from "./route-attempt";
 export * from "./thread-pass";
 
 export * from "./thread-installation";

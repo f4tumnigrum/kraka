@@ -16,6 +16,7 @@ export type WireMessage = string | Uint8Array;
 export function wireBytes(data: WireMessage, utf8: Utf8) {
   return typeof data === "string" ? utf8.encode(data).byteLength : data.byteLength;
 }
+export class OversizedControlFrame extends Error {}
 export function encodeFrame(frame: TransportFrame, utf8: Utf8): WireMessage {
   if ("payload" in frame) {
     const { payload, ...header } = frame;
@@ -34,7 +35,7 @@ export function encodeFrame(frame: TransportFrame, utf8: Utf8): WireMessage {
       : frame,
   );
   if (wireBytes(text, utf8) > TRANSPORT_LIMITS.maxControlFrameBytes)
-    throw new Error("Oversized encoded frame");
+    throw new OversizedControlFrame("Oversized encoded frame");
   return text;
 }
 

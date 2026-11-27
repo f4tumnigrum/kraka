@@ -1,4 +1,5 @@
-import { chromium, type BrowserContext, type Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
+import { launchBrowser } from "./browser-selection";
 import type { ListReading } from "../../packages/client-runtime/src";
 import { join } from "node:path";
 import { within } from "./replay-process";
@@ -46,10 +47,7 @@ export async function browserProfiles(
     url = new URL(f.f.endpoint.replace("ws:", "http:"));
   await Bun.write(join(f.stateDir, "attention-page.html"), html);
   await Bun.write(join(f.stateDir, "attention-reader.js"), script);
-  const browser = await chromium.launch({
-    ...(process.env.KRAKA_REQUIRED_ATTENTION_CASES === "1" ? {} : { channel: "chrome" }),
-    headless: true,
-  });
+  const browser = await launchBrowser();
   const contexts: BrowserContext[] = [];
   try {
     const profiles = [];
