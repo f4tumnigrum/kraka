@@ -1,3 +1,5 @@
+import * as v from "valibot";
+import { verifyP256 } from "@kraka/protocol/web-crypto";
 import {
   PAIRING_LIMITS,
   type AuthorizationTarget,
@@ -15,9 +17,13 @@ import {
   type PairingInviteId,
   type EnvironmentId,
   type DeviceId,
+  type DeviceKeyId,
   type PermissionItem,
   type PermissionMode,
   type EnvironmentIdentity,
+  PrincipalIdSchema,
+  AccessGrantIdSchema,
+  canonicalJson,
 } from "@kraka/protocol";
 
 type Completed = Extract<DevicePairingResult, { kind: "pairing.completed" }>;
@@ -153,8 +159,9 @@ export function transitionPairing(state: PairingState, event: PairingEvent, now:
         a.environmentId !== state.environmentId ||
         !sameTarget(a.target, state.target) ||
         !/^\d{6}$/.test(a.confirmationCode) ||
+        !a.permissions.length ||
         new Set(a.permissions).size !== a.permissions.length ||
-        (a.target.kind !== "environment" && a.permissions.includes("environment.upgrade"))
+        a.permissions.includes("environment.upgrade")
       )
         return reject("invalidProof");
       const prior = state.applications.find((p) => p.requestId === a.requestId);
@@ -264,8 +271,10 @@ export interface TrustedHostPairing {
     kind: "bootstrap" | "recover";
     environment: EnvironmentIdentity;
     deviceId: DeviceId;
+    keyId?: DeviceKeyId;
     publicKey: DeviceKey["publicKey"];
   }): Promise<"registered" | "alreadyRegistered" | "denied">;
+  grantOwnerUpgrade(input: import("./access-store").UpgradeInput): Promise<AccessGrantId | null>;
 }
 
 type ExchangeIntent = Omit<Extract<PairingEvent, { kind: "exchange" }>, "authority" | "currentKey">;
@@ -278,4 +287,51 @@ export interface PairingStore {
     event: Exclude<PairingEvent, { kind: "exchange" }> | ExchangeIntent,
     now: number,
   ): Promise<Result | null>;
+}
+
+export async function exchangeVerified({
+  exchange,
+  challenge,
+  issuedAt,
+  now,
+  store,
+  active,
+}: {
+  exchange: PairingExchange;
+  challenge: PairingChallenge;
+  issuedAt: number;
+  now: number | (() => number);
+  store: PairingStore;
+  active?: () => boolean;
+}): Promise<DevicePairingResult> {
+  const { signature, ...fields } = exchange;
+  const verified = await verifyP256(exchange.publicKey, canonicalJson(fields), signature);
+  const state = await store.read(exchange.inviteId);
+  const count = state?.kind === "selected" ? state.selection.rights.length : 0;
+  const result = await store.apply(
+    exchange.inviteId,
+    {
+      kind: "exchange",
+      exchange,
+      challenge,
+      issuedAt,
+      verified:
+        verified &&
+        exchange.protocolVersion.major === 1 &&
+        exchange.protocolVersion.minor === 0 &&
+        (active?.() ?? true),
+      principalId: v.parse(PrincipalIdSchema, crypto.randomUUID()),
+      grantIds: Array.from({ length: count }, () =>
+        v.parse(AccessGrantIdSchema, crypto.randomUUID()),
+      ),
+    },
+    typeof now === "number" ? now : now(),
+  );
+  return result?.kind === "ok" && result.completed
+    ? result.completed
+    : {
+        kind: "pairing.rejected",
+        requestId: exchange.requestId,
+        reason: result?.kind === "rejected" ? result.reason : "invalidProof",
+      };
 }

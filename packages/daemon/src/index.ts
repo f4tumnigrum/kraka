@@ -1,3 +1,4 @@
+import { accessCli } from "./access";
 import "@kraka/cli-client";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
@@ -187,8 +188,9 @@ if (import.meta.main && process.argv.length > 2) {
         process.once("SIGINT", writer.close);
       }
       console.log(JSON.stringify({ kind: writer.kind, instance: writer.instance }));
-    } else if (command === "replay") await replay(args);
-    else throw new Error("Unknown command, expected replay, start or daemon");
+    } else if (command === "access") await accessCli(args);
+    else if (command === "replay") await replay(args);
+    else throw new Error("Unknown command, expected replay, start, access or daemon");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

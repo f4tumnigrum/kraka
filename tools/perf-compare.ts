@@ -10,6 +10,7 @@ const series = v.object({
 });
 const report = v.object({
   metric: v.picklist(metricIds),
+  variant: v.optional(v.literal("access.listSessions")),
   role: v.picklist(["candidate", "baseline"]),
   revision: v.nullable(v.string()),
   digest: v.optional(v.string()),
@@ -39,7 +40,12 @@ function scope(r: Report) {
 }
 
 export function compare(base: Report, candidate: Report) {
-  const meta = { metric: candidate.metric, baseline: base.revision, candidate: candidate.revision };
+  const meta = {
+    metric: candidate.metric,
+    variant: candidate.variant,
+    baseline: base.revision,
+    candidate: candidate.revision,
+  };
   const gap = (reason: string) => ({
     ...meta,
     status: "not comparable",
@@ -51,6 +57,7 @@ export function compare(base: Report, candidate: Report) {
   if (
     base.role !== "baseline" ||
     candidate.role !== "candidate" ||
+    base.variant !== candidate.variant ||
     base.metric !== candidate.metric
   )
     throw new Error("Mismatched role or metric");
@@ -85,7 +92,7 @@ async function reports(path: string) {
     .trim()
     .split("\n")
     .map((line) => v.parse(report, JSON.parse(line)));
-  const map = new Map(rows.map((r) => [r.metric, r]));
+  const map = new Map(rows.map((r) => [r.variant ? `${r.metric}/${r.variant}` : r.metric, r]));
   if (rows.length !== map.size) throw new Error(`Duplicate metric in ${path}`);
   return map;
 }
@@ -94,10 +101,9 @@ if (import.meta.main) {
   if (!baseFile || !candidateFile) throw new Error("Expected baseline and candidate JSONL paths");
   const base = await reports(baseFile),
     candidate = await reports(candidateFile);
-  for (const metric of metricIds) {
+  for (const metric of new Set([...base.keys(), ...candidate.keys()])) {
     const a = base.get(metric),
       b = candidate.get(metric);
-    if (!a && !b) continue;
     if (!a || !b) throw new Error(`Missing final report for ${metric}`);
     console.log(JSON.stringify(compare(a, b)));
   }
