@@ -135,6 +135,7 @@ export const RoundSchema = v.strictObject({
         attemptId: AttemptIdSchema,
         messageId: MessageIdSchema,
         state: v.picklist(["pending", "completed"]),
+        submission: v.optional(v.picklist(["submitted", "rejected", "unknown"])),
       }),
     ),
   ),

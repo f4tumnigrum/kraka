@@ -4,11 +4,20 @@ import { attachFlow, type SocketApplication } from "./flow-socket";
 import { inputReads, inputReadMethods } from "./input-reads";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
 import { CodexInstances } from "./codex-instances";
-import { dispatchCodex } from "./durable-codex";
+import {
+  bindingContext,
+  dispatchCodex,
+  reconcileCodex,
+  resumeBinding,
+  type PreparedSession,
+} from "./durable-codex";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   acceptFirstInput,
+  OrdinaryStops,
+  savedBinding,
+  recordCommand,
   selectWorktreeBase,
   prepareClaim,
   retryPreparation,
@@ -42,6 +51,7 @@ import {
   CheckpointCaptureSchema,
   type CommandId,
   CommandIdSchema,
+  AttemptIdSchema,
   type CommandReceipt,
   canonicalJson,
   HostInstanceIdSchema,
@@ -61,6 +71,8 @@ import * as v from "valibot";
 import { type ActiveSteers, dispatchReplay, inspectOriginalInput } from "./durable-replay";
 
 const methods = v.variant("method", [
+  REQUEST_METHODS.stopRound.schema,
+  REQUEST_METHODS.readStop.schema,
   REQUEST_METHODS.configureExecutor.schema,
   REQUEST_METHODS.refreshExecutor.schema,
   REQUEST_METHODS.registerProject.schema,
@@ -116,6 +128,7 @@ export async function startWriter<H extends object>(
     store = transaction;
     lifecycle?.opened?.(transaction);
     const codex = new CodexInstances(transaction);
+    const stops = new OrdinaryStops(transaction);
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
@@ -132,7 +145,7 @@ export async function startWriter<H extends object>(
     const authHost = await openAccessHost(stateDir);
     auth = authHost;
     const reads = inputReads(transaction, actor);
-    transaction.onQueueChanged = (threadId) => queueMicrotask(() => reads.changed(threadId));
+
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
     const controller = new AbortController();
@@ -153,18 +166,177 @@ export async function startWriter<H extends object>(
       preparing.set(id, run);
       return run;
     }
-    const sendInput = (
+    const recovering = new Map<ThreadId, Promise<boolean>>();
+    function recoverRoot(threadId: ThreadId, roundId: RoundId) {
+      const active = recovering.get(threadId);
+      if (active) return active;
+      const recover = async () => {
+        const reg = codex.forThread(threadId),
+          thread = readThread(transaction.db, threadId);
+        if (!thread || !reg) return false;
+        const selection = await codex.resolve(reg, actor.id, thread),
+          round = readRound(transaction.db, roundId);
+        return (
+          !!(selection && round && accepting) &&
+          reconcileCodex(
+            transaction,
+            round,
+            selection,
+            () =>
+              accepting &&
+              codex.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+                selection.snapshot &&
+              transaction.directory(thread) === selection.cwd,
+            stops,
+          )
+        );
+      };
+      const work = recover().finally(() => recovering.delete(threadId));
+      recovering.set(threadId, work);
+      return work;
+    }
+    const prepared = new Map<RoundId, PreparedSession>();
+    function discardPrepared(roundId: RoundId) {
+      const session = prepared.get(roundId);
+      prepared.delete(roundId);
+      if (session?.opened.kind === "ok") {
+        const closing = session.adapter.close(session.opened.value, "restart");
+        codex.active.add(closing);
+        void closing.finally(() => codex.active.delete(closing)).catch(() => {});
+      }
+    }
+    transaction.onQueueChanged = (threadId) =>
+      queueMicrotask(() => {
+        reads.changed(threadId);
+        for (const [roundId, session] of prepared) {
+          const round = readRound(transaction.db, roundId);
+          if (
+            round?.threadId === threadId &&
+            (round.attempt.phase.kind !== "filed" ||
+              round.attempt.phase.gate !== "eligible" ||
+              session.opened.kind !== "ok" ||
+              session.opened.value.handle.attemptId !== round.attempt.attemptId)
+          )
+            discardPrepared(roundId);
+        }
+      });
+    const opening = new Map<ThreadId, Promise<CommandReceipt>>();
+    function sendInput(
+      sender: LocalActor,
+      command: Extract<SignedRequest, { method: "input.send" }>,
+    ) {
+      const threadId = command.payload.threadId;
+      if (!codex.forThread(threadId)) return fileInput(sender, command);
+      const work = (opening.get(threadId) ?? Promise.resolve())
+        .catch(() => {})
+        .then(async () => {
+          const target = { kind: "thread" as const, threadId },
+            ctx = { actor: sender, commandId: command.commandId, transaction };
+          let prior = savedBinding(transaction, threadId);
+          const thread = readThread(transaction.db, threadId),
+            reg = codex.forThread(threadId);
+          if (
+            !prior ||
+            !thread ||
+            !reg ||
+            !sender.allows("thread.send", target) ||
+            readReceipt(transaction.db, sender.id, command.commandId)
+          )
+            return fileInput(sender, command);
+          const refuse = () =>
+            recordCommand(ctx, REQUEST_METHODS.sendInput, command.payload, target, () => ({
+              kind: "rejected",
+              commandId: command.commandId,
+              failure: { kind: "invalidState" },
+            }));
+          let queue = loadQueue(transaction, threadId, true);
+          const head = firstPending(queue.rows);
+          if (head?.attempt.phase.kind === "unobserved") {
+            if (!(await recoverRoot(threadId, head.id))) return refuse();
+            prior = savedBinding(transaction, threadId);
+            if (!prior) return refuse();
+            queue = loadQueue(transaction, threadId, true);
+          }
+          if (
+            queue.rows.some((r) => r.attempt.phase.kind !== "closing") ||
+            !transaction.directory(thread)
+          )
+            return fileInput(sender, command);
+          const s = await codex.resolve(reg, actor.id, thread);
+          if (!accepting || !s || bindingContext(s) !== prior.context) return refuse();
+          const attempt = v.parse(AttemptIdSchema, crypto.randomUUID());
+          const candidate = await resumeBinding(s, prior.nativeSessionId, prior.epoch, attempt);
+          if (candidate.opened.kind === "rejected") return refuse();
+          let retained = false;
+          try {
+            if (
+              !accepting ||
+              transaction.directory(thread) !== s.cwd ||
+              !Bun.deepEquals(savedBinding(transaction, threadId), prior) ||
+              codex.current(s.reg.instanceId, actor.id, s.cwd)?.snapshot !== s.snapshot
+            )
+              return refuse();
+            const receipt = await fileInput(sender, command, attempt);
+            if (
+              receipt.kind === "accepted" &&
+              receipt.result.kind === "inputScheduled" &&
+              receipt.result.attemptId === attempt
+            ) {
+              prepared.set(receipt.result.roundId, candidate);
+              retained = true;
+            }
+            return receipt;
+          } finally {
+            if (!retained) await candidate.adapter.close(candidate.opened.value, "restart");
+          }
+        });
+      opening.set(threadId, work);
+      void work
+        .finally(() => {
+          if (opening.get(threadId) === work) opening.delete(threadId);
+        })
+        .catch(() => {});
+      return work;
+    }
+    const fileInput = (
       actor: LocalActor,
       command: Extract<SignedRequest, { method: "input.send" }>,
+      preparedAttempt?: import("@kraka/protocol").AttemptId,
     ) =>
       restoreForInput(
         { actor, transaction, commandId: command.commandId },
         command.payload,
         (m) => resume(m),
-        () => applyInputCommand({ actor, transaction, command }),
+        () =>
+          applyInputCommand({
+            actor,
+            transaction,
+            command,
+            ...(preparedAttempt ? { preparedAttempt } : {}),
+          }),
       );
     let accepting = true;
     const steers: ActiveSteers = new Map();
+    function steerInput(actor: LocalActor, cmd: Extract<SignedRequest, { method: "input.steer" }>) {
+      const prior = readReceipt(transaction.db, actor.id, cmd.commandId);
+      const receipt = applyInputCommand({
+        actor,
+        transaction,
+        command: cmd,
+        supportsSteer: (id) => steers.has(id),
+      });
+      if (!prior && receipt.kind === "accepted" && receipt.result.kind === "inputScheduled") {
+        const r = receipt.result;
+        if (cmd.payload.mode === "insertCurrent") {
+          const input = readMessage(transaction.db, r.messageId);
+          if (input)
+            void steers
+              .get(r.attemptId)?.(input, r.deliveryId)
+              .catch(() => {});
+        } else schedule(cmd.payload.threadId, cmd.commandId);
+      }
+      return receipt;
+    }
     const recipients = new Map<RoundId, Bun.ServerWebSocket<Session>>();
     function schedule(threadId: ThreadId, commandId: CommandId) {
       if (turns.has(threadId) || !accepting) return;
@@ -209,6 +381,10 @@ export async function startWriter<H extends object>(
             if (settled.kind === "rejected") return;
             continue;
           }
+          if (phase.kind === "unobserved" && phase.seen.kind === "root") {
+            if (await recoverRoot(threadId, head.id)) continue;
+            return;
+          }
           if (
             (phase.kind !== "filed" && phase.kind !== "recovering") ||
             phase.gate === "held" ||
@@ -226,6 +402,7 @@ export async function startWriter<H extends object>(
             if (!selection) {
               const current = readRound(transaction.db, round.id);
               if (current?.version !== round.version) continue;
+              discardPrepared(round.id);
               const reason = "Saved executor configuration unavailable";
               transaction.db.transaction(() => {
                 transaction.setPhase(current, { kind: "notDelivered", reason, lateReceipt: null });
@@ -245,6 +422,8 @@ export async function startWriter<H extends object>(
               recipients.delete(round.id);
               continue;
             }
+            const ready = prepared.get(round.id);
+            prepared.delete(round.id);
             await dispatchCodex(
               transaction,
               round,
@@ -257,6 +436,9 @@ export async function startWriter<H extends object>(
                 if (recipient?.readyState === 1) recipient.send(JSON.stringify(event));
               },
               controller.signal,
+              stops,
+              steers,
+              ready,
             );
           } else if (replay) {
             await dispatchReplay(
@@ -302,6 +484,8 @@ export async function startWriter<H extends object>(
             lifecycle?.threadCommand,
             lifecycle?.inspectPage,
             lifecycle?.beforeTodo,
+            (actor, cmd) => stops.command({ actor, transaction, commandId: cmd.commandId }, cmd),
+            (actor, cmd) => steerInput(actor, cmd),
           );
           if (!app) return new Response(null, { status: 403 });
           if (server.upgrade(req, { data: { app, flow: null } })) return;
@@ -395,17 +579,20 @@ export async function startWriter<H extends object>(
               req.method === "worktree.retrySetup" &&
               actor.allows("workspace.change") &&
               readReceipt(transaction.db, actor.id, req.commandId);
-            const priorSteer =
-              req.method === "input.steer" && actor.allows("thread.send")
-                ? readReceipt(transaction.db, actor.id, req.commandId)
-                : null;
             let receipt: CommandReceipt;
             switch (req.method) {
+              case "round.stop":
+              case "round.readStop":
+                receipt = stops.command(context, req);
+                break;
               case "worktree.prepare":
                 receipt = selectWorktreeBase(context, req.payload);
                 break;
               case "worktree.retrySetup":
                 receipt = retryPreparation(context, req.payload);
+                break;
+              case "input.steer":
+                receipt = steerInput(actor, req);
                 break;
               case "input.send":
                 receipt = await sendInput(actor, req);
@@ -503,24 +690,7 @@ export async function startWriter<H extends object>(
                 )
                   recipients.set(result.roundId, ws);
               }
-              if (
-                req.method === "input.steer" &&
-                req.payload.mode === "insertCurrent" &&
-                result.kind === "inputScheduled"
-              ) {
-                const send = steers.get(result.attemptId);
-                const message = readMessage(transaction.db, result.messageId);
-                if (!priorSteer && send && message)
-                  void send(
-                    {
-                      id: message.id,
-                      text: message.text,
-                      references: message.references,
-                      attachments: message.attachments,
-                    },
-                    result.deliveryId,
-                  ).catch(() => {});
-              } else if (result.kind === "threadStarted") {
+              if (result.kind === "threadStarted") {
                 const worktreeId = req.method === "thread.start" && req.payload.worktreeId;
                 const managed = worktreeId && readManaged(transaction.db, worktreeId);
                 if (
@@ -537,7 +707,11 @@ export async function startWriter<H extends object>(
               ) {
                 const m = readManaged(transaction.db, req.payload.worktreeId);
                 if (m) void resume(m, true);
-              } else if (req.method.startsWith("input.") && "threadId" in req.payload)
+              } else if (
+                req.method.startsWith("input.") &&
+                req.method !== "input.steer" &&
+                "threadId" in req.payload
+              )
                 schedule(req.payload.threadId, req.commandId);
             }
           } catch {
@@ -562,7 +736,7 @@ export async function startWriter<H extends object>(
     try {
       const pending = transaction.db
         .query<{ data: string }, []>(
-          "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE d.pending=1 AND d.round NOT IN (SELECT round FROM ready_dispatch)",
+          "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE (d.pending=1 OR (json_extract(r.data,'$.attempt.phase.kind')='unobserved' AND json_extract(d.frozen,'$.target.family')='codex' AND d.id=json_extract(r.data,'$.attempt.deliveryId'))) AND d.round NOT IN (SELECT round FROM ready_dispatch)",
         )
         .all();
       for (const row of pending) {
@@ -607,11 +781,15 @@ export async function startWriter<H extends object>(
         try {
           await server.stop(true);
           await Promise.allSettled([...turns.values(), ...preparing.values()]);
+          await Promise.allSettled(opening.values());
+          for (const r of prepared.values())
+            if (r.opened.kind === "ok") await r.adapter.close(r.opened.value, "shutdown");
+          stops.close();
           await codex.close();
         } finally {
           try {
             authHost.close();
-            transaction.db.close();
+            transaction.db.close(true);
           } finally {
             lock.close();
           }

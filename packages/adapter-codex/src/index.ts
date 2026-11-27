@@ -15,9 +15,11 @@ import type {
   SessionInvocationResult,
   SessionSetup,
 } from "@kraka/environment";
+import { Callbacks, serverRequest } from "./requests";
+import type { AdapterEventPayload } from "@kraka/environment";
 import { CodexConnection, type Launch } from "./stdio";
 import { type CodexNativeFrame, NativeError, notification, object } from "./native";
-import { openThread, selectedModel, type CodexProbe } from "./discovery";
+import { accountFingerprint, openThread, selectedModel, type CodexProbe } from "./discovery";
 import { translateCodexFrame, type CodexTurnState } from "./translate";
 export { probeCodex, selectedModel, type CodexProbe } from "./discovery";
 export type { Launch } from "./stdio";
@@ -35,6 +37,7 @@ export class CodexSessionHandle {
   private discarded = 0;
   private wake = Promise.withResolvers<void>();
   private early: Frame[] = [];
+  readonly callbacks = new Callbacks();
   state: CodexTurnState | null = null;
   busy = false;
   closed = false;
@@ -46,6 +49,8 @@ export class CodexSessionHandle {
     readonly epoch: number,
     readonly attemptId: AttemptId,
     readonly secrets: readonly string[],
+    readonly policy: import("@kraka/protocol").CodexEffectivePolicy,
+    capabilities: CodexProbe["declaration"]["matrix"],
   ) {
     rpc.onNotice = (method, params, ordinal, observedAt) => {
       if (!this.busy) return;
@@ -55,7 +60,24 @@ export class CodexSessionHandle {
       if (this.state) this.accept(entry);
       else this.early.push(entry);
     };
+    rpc.onRequest = (method, params, id, ordinal) => {
+      if (!this.busy || this.closed) return false;
+      const capability =
+        method === "item/commandExecution/requestApproval"
+          ? "requestCommandApproval"
+          : method === "item/fileChange/requestApproval"
+            ? "requestFileApproval"
+            : "askStructuredQuestion";
+      if (capabilities[capability].kind !== "native") return false;
+      const frame = serverRequest(method, params, id);
+      if (!frame || frame.threadId !== nativeSessionId) return false;
+      const entry = { frame, ordinal, observedAt: null };
+      if (this.state) this.accept(entry);
+      else this.early.push(entry);
+      return true;
+    };
     rpc.onLost = (error) => {
+      this.callbacks.clear();
       this.lost = error;
       this.wake.resolve();
     };
@@ -64,7 +86,28 @@ export class CodexSessionHandle {
     if (!this.state) return;
     const result = translateCodexFrame(frame, this.state, observedAt);
     this.state = result.state;
-    for (const [i, payload] of result.events.entries()) {
+    const events: AdapterEventPayload[] = result.events;
+    if (
+      frame.method === "callback" &&
+      !this.state.ended &&
+      !this.state.terminal &&
+      frame.turnId === this.state.root &&
+      this.callbacks.open(frame)
+    ) {
+      events.push({
+        kind: "requestOpened",
+        attemptId: this.attemptId,
+        requestId: frame.requestId,
+        ...frame.opened,
+        ...(frame.opened.recovery === "messageFallback" ? { nativeNode: frame.itemId } : {}),
+      });
+    }
+    if (frame.method === "serverRequest/resolved") {
+      this.callbacks.close(frame.requestId);
+      events.push({ kind: "requestClosed", attemptId: this.attemptId, requestId: frame.requestId });
+    }
+    if (this.state.ended) this.callbacks.clear();
+    for (const [i, payload] of events.entries()) {
       this.events.push({
         ...this.instance,
         sessionId: this.nativeSessionId,
@@ -81,7 +124,7 @@ export class CodexSessionHandle {
     this.wake.resolve();
     this.wake = Promise.withResolvers<void>();
   }
-  private async lookup(root: string) {
+  private async historyEnd(root: string) {
     const { result, ordinal } = await this.rpc.reply("thread/read", {
       threadId: this.nativeSessionId,
       includeTurns: true,
@@ -92,7 +135,33 @@ export class CodexSessionHandle {
     const turn = thread.turns.map(object).find((t) => t.id === root && t.status !== "inProgress");
     if (!turn) return;
     const frame = notification("turn/completed", { threadId: thread.id, turn }, this.secrets);
-    if (frame) this.accept({ frame, ordinal, observedAt: null });
+    return frame ? { frame, ordinal, observedAt: null } : null;
+  }
+  private turn(
+    root: CodexTurnState["root"],
+    deliveryId: CodexTurnState["deliveryId"],
+  ): CodexTurnState {
+    return {
+      sessionId: this.nativeSessionId,
+      root,
+      attemptId: this.attemptId,
+      deliveryId,
+      startedAt: null,
+      received: false,
+      ended: false,
+      finals: new Set(),
+      tools: new Set(),
+      terminal: null,
+    };
+  }
+  async lookup(root: CodexTurnState["root"], deliveryId?: CodexTurnState["deliveryId"]) {
+    if (this.state && this.state.root !== root) return false;
+    const end = await this.historyEnd(root);
+    if (end) {
+      if (!this.state && deliveryId) this.state = this.turn(root, deliveryId);
+      this.accept(end);
+    }
+    return this.state?.ended === true;
   }
   async deliver(
     command: Extract<AdapterCommand, { kind: "deliverInput" }>,
@@ -115,18 +184,7 @@ export class CodexSessionHandle {
         root = v.parse(NativeRootTurnIdSchema, turn.id);
       if (turn.rootTurnId != null && turn.rootTurnId !== root)
         throw new Error("Foreign root in start response");
-      this.state = {
-        sessionId: this.nativeSessionId,
-        root,
-        attemptId: this.attemptId,
-        deliveryId: command.deliveryId,
-        startedAt: null,
-        received: false,
-        ended: false,
-        finals: new Set(),
-        tools: new Set(),
-        terminal: null,
-      };
+      this.state = this.turn(root, command.deliveryId);
       for (const frame of this.early) this.accept(frame);
       return ok({ kind: "written", deliveryId: command.deliveryId } as const);
     } catch (error) {
@@ -162,17 +220,24 @@ export class CodexSessionHandle {
     }
   }
   async close() {
+    this.callbacks.clear();
     this.closed = true;
     this.wake.resolve();
     await this.rpc.close();
   }
 }
+export async function stopBoundRoot(session: CodexSessionHandle, attempt: AttemptId, root: string) {
+  if (session.state?.root !== root || session.state.attemptId !== attempt || session.state.ended)
+    throw Error("Stop target changed");
+  await session.rpc.request("turn/interrupt", { threadId: session.nativeSessionId, turnId: root });
+}
 export function createCodexAdapter(
   instance: Instance,
   launch: Launch,
   probe: CodexProbe,
+  previousEpoch = 0,
 ): ProviderAdapter<"codex", CodexSessionHandle> {
-  let epoch = 0;
+  let epoch = previousEpoch;
   const handles = new WeakMap<CodexSessionHandle, SessionSetup["model"]>();
   const matches = (i: Instance) =>
     i.family === instance.family && i.instanceId === instance.instanceId;
@@ -219,6 +284,53 @@ export function createCodexAdapter(
       return denied("unsupported");
     }
     if (!owns(target) || target.handle.closed) return denied("invalidState");
+    const h = target.handle;
+    if (cmd.kind === "deliverAnswer")
+      return h.callbacks.replyToNative(cmd, (id, body) => h.rpc.respond(id, body));
+    if (cmd.kind === "nativeAction" && cmd.action === "readHistory" && cmd.target) {
+      try {
+        const ended = await h.lookup(cmd.target, cmd.deliveryId);
+        return ok({ kind: "history", rows: ended ? [{ id: cmd.target, ended }] : [], next: null });
+      } catch {
+        return denied("invalidState", "Original Codex history unavailable");
+      }
+    }
+    if (cmd.kind === "stop" || cmd.kind === "steer") {
+      const state = h.state;
+      if (!state || state.attemptId !== cmd.attemptId || state.ended || h.lost)
+        return denied("invalidState");
+      try {
+        if (cmd.kind === "stop") await stopBoundRoot(h, cmd.attemptId, state.root);
+        else {
+          if (
+            cmd.mode !== "insertCurrent" ||
+            cmd.input.attachments.length ||
+            cmd.input.references.length
+          )
+            return denied("unsupported");
+          const reply = object(
+            await h.rpc.request("turn/steer", {
+              threadId: h.nativeSessionId,
+              expectedTurnId: state.root,
+              input: [{ type: "text", text: cmd.input.text, text_elements: [] }],
+            }),
+          );
+          if (reply.turnId !== state.root)
+            return {
+              kind: "rejected",
+              reason: "unsafeToRetry",
+              message: "Unmatched Codex steer response",
+            };
+        }
+        return ok({ kind: "written", deliveryId: cmd.deliveryId });
+      } catch (error) {
+        return {
+          kind: "rejected",
+          reason: error instanceof NativeError ? error.reason : "unsafeToRetry",
+          message: null,
+        };
+      }
+    }
     const model = handles.get(target.handle);
     if (cmd.kind !== "deliverInput" || cmd.capability !== "submitTextInput" || !model)
       return denied("unsupported");
@@ -232,8 +344,9 @@ export function createCodexAdapter(
     async open({ instance: i, attemptId, resume, setup }) {
       if (
         !matches(i) ||
-        resume !== null ||
-        setup.permission.selected !== "ask" ||
+        (resume !== null &&
+          probe.declaration.matrix.resumeSessionAfterProcessExit.kind !== "native") ||
+        !probe.declaration.permission.modes.includes(setup.permission.selected) ||
         setup.workingDirectory !== launch.cwd ||
         setup.additionalDirectories.length ||
         Object.values(probe.declaration.readiness).some((l) => l.state !== "yes") ||
@@ -245,8 +358,22 @@ export function createCodexAdapter(
       let rpc: CodexConnection | undefined;
       try {
         rpc = new CodexConnection(launch);
-        await rpc.initialize();
-        const nativeSessionId = await openThread(rpc, launch.cwd, model);
+        if ((await rpc.initialize()) !== probe.nativeHome)
+          throw new NativeError("invalidState", "Codex history location changed");
+        if (
+          accountFingerprint(object(await rpc.request("account/read", { refreshToken: false }))) !==
+          probe.accountContext
+        )
+          throw new NativeError("invalidState", "Codex account changed");
+        const { nativeSessionId, policy } = await openThread(
+          rpc,
+          launch.cwd,
+          model,
+          false,
+          setup.permission.selected,
+          resume,
+          probe.historyRoot,
+        );
         const handle = new CodexSessionHandle(
           rpc,
           i,
@@ -254,6 +381,8 @@ export function createCodexAdapter(
           ++epoch,
           attemptId,
           Object.values(launch.env),
+          policy,
+          probe.declaration.matrix,
         );
         handles.set(handle, model);
         return ok({ ...i, epoch, nativeSessionId, handle });
@@ -276,4 +405,5 @@ export function createCodexAdapter(
     },
   };
 }
+
 export type CodexAdapterFactory = typeof createCodexAdapter;

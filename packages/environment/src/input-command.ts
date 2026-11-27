@@ -37,10 +37,12 @@ export function applyInputCommand({
   command,
   transaction,
   supportsSteer,
+  preparedAttempt,
 }: {
   actor: LocalActor;
   command: InputCommand;
   transaction: FirstSendStore;
+  preparedAttempt?: Round["attempt"]["attemptId"];
   supportsSteer?: (id: string) => boolean;
 }): CommandReceipt {
   const { threadId } = command.payload,
@@ -119,7 +121,9 @@ export function applyInputCommand({
         });
         const deliveryId = v.parse(DeliveryIdSchema, crypto.randomUUID());
         const attemptId =
-          active && head ? head.attempt.attemptId : v.parse(AttemptIdSchema, crypto.randomUUID());
+          active && head
+            ? head.attempt.attemptId
+            : (preparedAttempt ?? v.parse(AttemptIdSchema, crypto.randomUUID()));
         transaction.db.run("INSERT INTO messages VALUES(?,?)", [
           message.id,
           JSON.stringify(message),
@@ -213,6 +217,27 @@ export function applyInputCommand({
       return { kind: "actionAccepted" };
     },
   );
+}
+export function recordSteerSubmission(
+  store: FirstSendStore,
+  roundId: Round["id"],
+  attemptId: Round["attempt"]["attemptId"],
+  messageId: Round["messageId"],
+  submission: "submitted" | "rejected" | "unknown",
+) {
+  store.db.transaction(() => {
+    const round = readRound(store.db, roundId);
+    const steer = round?.steering?.find(
+      (s) => s.attemptId === attemptId && s.messageId === messageId,
+    );
+    if (!round || !steer || steer.submission !== undefined) return;
+    steer.submission = submission;
+    const updated = { ...round, version: nextVersion(round.version) };
+    store.sync.record([{ objectType: "round", value: updated }]);
+    store.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(updated), round.id]);
+    advanceQueue(store, round.threadId);
+  })();
+  store.sync.notify();
 }
 export function recordSteerRead(
   store: FirstSendStore,

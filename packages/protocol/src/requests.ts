@@ -127,6 +127,8 @@ import {
   DeviceIdSchema,
   DeviceKeyIdSchema,
   ExecutorInstanceIdSchema,
+  NativeSessionIdSchema,
+  NativeRootTurnIdSchema,
   ExecutorKeyIdSchema,
   PrincipalIdSchema,
   EnvironmentIdSchema,
@@ -787,6 +789,12 @@ export const REQUEST_METHODS = {
     "thread",
     v.strictObject({ threadId: ThreadIdSchema }),
   ),
+  readStop: defineRequestMethod(
+    "round.readStop",
+    "thread.view",
+    "thread",
+    v.strictObject({ threadId: ThreadIdSchema, stopCommandId: CommandIdSchema }),
+  ),
   stopRound: defineRequestMethod("round.stop", "thread.send", "thread", RoundTargetPayloadSchema),
   resendUnknownInput: defineRequestMethod(
     "input.resendUnknown",
@@ -1070,7 +1078,25 @@ export const DevicePairingResultSchema = v.variant("kind", [
 ]);
 
 export type DevicePairingResult = v.InferOutput<typeof DevicePairingResultSchema>;
+export const StopResultSchema = v.strictObject({
+  kind: v.literal("stopResult"),
+  stopCommandId: CommandIdSchema,
+  threadId: ThreadIdSchema,
+  roundId: RoundIdSchema,
+  attemptId: AttemptIdSchema,
+  instanceId: ExecutorInstanceIdSchema,
+  epoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  sessionId: NativeSessionIdSchema,
+  rootId: NativeRootTurnIdSchema,
+  requestedAt: unixMilliseconds,
+  dispatchedAt: v.nullable(unixMilliseconds),
+  reachedAt: v.nullable(unixMilliseconds),
+  timedOutAt: v.nullable(unixMilliseconds),
+  disposition: v.picklist(["pending", "unconfirmed", "stopped", "alreadyEnded"]),
+});
+export type StopResult = v.InferOutput<typeof StopResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
+  StopResultSchema,
   ExecutorRefreshedSchema,
   v.strictObject({
     kind: v.literal("executorConfigured"),

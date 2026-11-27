@@ -28,9 +28,15 @@ export function translateCodexFrame(
   let lookup = false;
   const { attemptId, root } = state;
   if (frame.threadId !== state.sessionId || state.ended) return { state, events, lookup };
+  if (frame.method === "serverRequest/resolved" || frame.method === "callback")
+    return { state, events, lookup };
   if ("turn" in frame) {
     const { turn } = frame;
-    if (turn.id !== root || (turn.rootTurnId != null && turn.rootTurnId !== root))
+    if (
+      (frame.method === "turn/completed" && turn.status === "inProgress") ||
+      turn.id !== root ||
+      (turn.rootTurnId != null && turn.rootTurnId !== root)
+    )
       return { state, events, lookup };
     if (frame.method === "turn/started") {
       const at = milliseconds(turn.startedAt);

@@ -37,6 +37,6 @@ export class SqliteThreadCache implements ThreadCacheStore {
       .immediate();
   }
   close() {
-    this.database.close();
+    this.database.close(true);
   }
 }

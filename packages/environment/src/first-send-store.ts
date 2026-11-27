@@ -164,6 +164,9 @@ export class FirstSendStore {
     readonly db: Database,
     readonly writer: DirectoryWriter,
   ) {
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));",
+    );
     this.sync = new ThreadJournal(db, writer.environmentId);
     this.todos = new TodoLedger(this);
   }

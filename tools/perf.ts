@@ -49,7 +49,12 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "installed" | "access.listSessions" | "worktree.recovery" | "browserTLS";
+  variant?:
+    | "installed"
+    | "access.listSessions"
+    | "worktree.recovery"
+    | "browserTLS"
+    | "codex.recovery";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -338,7 +343,11 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
               ...(metric === "P2" ? [{ metric, variant: "installed" } as const] : []),
             ]
           : metric === "P7"
-            ? [{ metric }, { metric, variant: "worktree.recovery" }]
+            ? [
+                { metric },
+                { metric, variant: "worktree.recovery" },
+                { metric, variant: "codex.recovery" },
+              ]
             : [{ metric }],
     );
 }
@@ -412,7 +421,24 @@ export async function prepareBudget(root: string, role: Role) {
         }
       } else if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (
+      else if (variant === "codex.recovery") {
+        base.workload = "Five interrupted Codex approvals on isolated persistent threads";
+        base.endpoint =
+          "Same request expired and same attempt reconciled to the verified native root end";
+        base.thresholds = [{ series: "codexRecovery", unit: "ms", statistic: "each", limit: 2000 }];
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, "packages/environment/src/codex-bindings.ts")).exists())
+        )
+          report = unavailable(
+            base,
+            "Parent has no durable Codex thread resume or native approval restoration workload",
+          );
+        else {
+          const { measureCodexResume } = await import("./measure-codex-resume");
+          report = measured(base, await measureCodexResume(base, root, nextBlock));
+        }
+      } else if (
         variant === "browserTLS" &&
         (metric === "P1" || metric === "P2" || metric === "P9")
       ) {

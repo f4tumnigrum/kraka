@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { PermissionModeSchema } from "./access";
 import {
   AdapterFamilySchema,
   ExecutorInstanceSnapshotSchema,
@@ -91,6 +92,33 @@ export const ExecutorRefreshedSchema = v.strictObject({
   versionAdvisory: v.nullable(text),
 });
 export type ExecutorRefreshed = v.InferOutput<typeof ExecutorRefreshedSchema>;
+export const CodexEffectivePolicySchema = v.object({
+  approvalsReviewer: v.literal("user"),
+  approvalPolicy: v.union([
+    v.picklist(["untrusted", "on-request"]),
+    v.object({
+      granular: v.object({
+        rules: v.literal(false),
+        sandbox_approval: v.literal(false),
+        skill_approval: v.literal(false),
+        request_permissions: v.literal(false),
+        mcp_elicitations: v.literal(true),
+      }),
+    }),
+  ]),
+  sandbox: v.variant("type", [
+    v.object({ type: v.literal("readOnly"), networkAccess: v.literal(false) }),
+    v.object({
+      type: v.literal("workspaceWrite"),
+      writableRoots: v.array(v.string()),
+      networkAccess: v.literal(false),
+      excludeSlashTmp: v.literal(true),
+      excludeTmpdirEnvVar: v.literal(true),
+    }),
+    v.object({ type: v.literal("dangerFullAccess") }),
+  ]),
+});
+export type CodexEffectivePolicy = v.InferOutput<typeof CodexEffectivePolicySchema>;
 const target = { roundId: RoundIdSchema, attemptId: AttemptIdSchema };
 const item = { ...target, itemId: NativeItemIdSchema };
 const root = { ...target, nativeRootTurnId: NativeRootTurnIdSchema };
@@ -100,9 +128,10 @@ export const ExecutorTurnUpdateSchema = v.variant("kind", [
     ...root,
     nativeSessionId: NativeSessionIdSchema,
     startedAt: time,
-    selectedMode: v.literal("ask"),
-    effectiveMode: v.literal("ask"),
-    supportedModes: v.strictTuple([v.literal("ask")]),
+    selectedMode: PermissionModeSchema,
+    effectiveMode: PermissionModeSchema,
+    effectivePolicy: v.optional(CodexEffectivePolicySchema),
+    supportedModes: v.array(PermissionModeSchema),
     enforcement: v.literal("native"),
   }),
   v.strictObject({

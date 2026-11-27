@@ -10,6 +10,7 @@ export type Profile = {
   version?: string;
   absent?: boolean;
   gate?: string;
+  control?: string;
 };
 export async function buildPeer(dir: string, root = productRoot) {
   const exe = join(dir, process.platform === "win32" ? "codex-peer.exe" : "codex-peer");
@@ -63,9 +64,10 @@ export async function codexFixture(
   root = productRoot,
   hostSecret = true,
   installedBinary?: string,
+  stateDir = join(dir, "state"),
+  onUpdate?: (event: ExecutorTurnUpdate) => void,
 ) {
-  const stateDir = join(dir, "state"),
-    projectDir = join(dir, "project");
+  const projectDir = join(dir, "project");
   mkdirSync(projectDir, { recursive: true });
   const cwd = realpathSync.native(projectDir),
     binary = installedBinary ?? (await buildPeer(dir, root)),
@@ -81,7 +83,10 @@ export async function codexFixture(
   try {
     const { publication: instance } = await launch.ready();
     const updates: ExecutorTurnUpdate[] = [];
-    const client = await connectFirstSend(stateDir, instance, (e) => updates.push(e));
+    const client = await connectFirstSend(stateDir, instance, (e) => {
+      updates.push(e);
+      onUpdate?.(e);
+    });
     try {
       const project = accepted(
         (await client.send("project.register", { realPath: cwd })).receipt,
@@ -90,6 +95,7 @@ export async function codexFixture(
       const instanceId = "codex-test",
         credential = { ownerId: fixtureActor, namespace: instanceId, key: "marker", version: "1" };
       const variables = {
+        ...(profile.control ? { PEER_CONTROL: { kind: "literal", value: profile.control } } : {}),
         PEER_LEDGER: { kind: "literal", value: ledgerPath },
         PEER_PROFILE: { kind: "literal", value: profile.kind ?? "ready" },
         PEER_RECORDING: { kind: "literal", value: join(root, fixture) },
