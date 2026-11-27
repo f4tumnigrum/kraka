@@ -15,6 +15,7 @@ import {
   type TodoState,
   type DeliveryId,
   type SecretTarget,
+  type AdapterFamily,
 } from "@kraka/protocol";
 import { readRound, readMessage, readThread, type FirstSendStore } from "./first-send-store";
 import { frozenInput, nextVersion } from "./input-store";
@@ -23,6 +24,8 @@ import type { ApprovalAuthority } from "./adapter-contract";
 
 export type LiveTodo = {
   instanceId: SecretTarget["instanceId"];
+  family: AdapterFamily;
+  epoch: number;
   attemptId: SecretTarget["attemptId"];
   approval?: ApprovalAuthority;
   send: (answer: TodoAnswer, content: TodoReplyContent | null) => Promise<DeliveryId>;
@@ -69,9 +72,8 @@ export class TodoLedger {
       .get(message);
     return row && v.parse(TodoReplyRecordSchema, JSON.parse(row.data));
   }
-  isLive(todo: TodoRequest) {
-    const native = this.live.get(todo.id);
-    if (!native || todo.state.kind === "expired" || todo.state.route.kind !== "live") return false;
+  private bound(todo: TodoRequest, native: LiveTodo) {
+    if (todo.state.kind === "expired" || todo.state.route.kind !== "live") return false;
     const round = readRound(this.store.db, todo.roundId);
     if (
       !round ||
@@ -83,16 +85,19 @@ export class TodoLedger {
     const frozen = frozenInput(this.store, round.attempt.deliveryId);
     return (
       frozen?.target.instanceId === native.instanceId &&
+      frozen.target.family === native.family &&
+      frozen.target.epoch === native.epoch &&
       frozen.target.nativeSessionId === todo.state.route.sessionId
     );
   }
+  isLive(todo: TodoRequest) {
+    const native = this.live.get(todo.id);
+    return !!native && this.bound(todo, native);
+  }
   open(todo: TodoRequest, native: LiveTodo) {
     const metadata = v.parse(binding, native);
-    const round = readRound(this.store.db, todo.roundId);
     if (
-      !round ||
-      round.threadId !== todo.threadId ||
-      round.attempt.attemptId !== native.attemptId ||
+      !this.bound(todo, native) ||
       !readThread(this.store.db, todo.threadId) ||
       todo.state.kind !== "open" ||
       todo.state.route.kind !== "live" ||
@@ -100,12 +105,6 @@ export class TodoLedger {
     )
       throw Error("Unbound todo request");
     const route = todo.state.route;
-    const frozen = frozenInput(this.store, round.attempt.deliveryId);
-    if (
-      frozen?.target.instanceId !== native.instanceId ||
-      frozen.target.nativeSessionId !== route.sessionId
-    )
-      throw Error("Unbound native callback");
     this.store.db.transaction(() => {
       this.store.db.run("INSERT INTO todo_requests VALUES(?,?,?)", [
         todo.id,
@@ -175,10 +174,11 @@ export class TodoLedger {
     return result.kind === "ok";
   }
   observe(id: TodoRequestId, event: Extract<TodoEvent, { kind: "delivery" }>) {
-    if (event.event.kind === "redeliver" && !this.live.has(id)) return false;
     const applied = this.store.db.transaction(() => {
       const todo = this.get(id)?.todo;
-      return !!todo && this.apply(todo, event);
+      return (
+        !!todo && (event.event.kind !== "redeliver" || this.isLive(todo)) && this.apply(todo, event)
+      );
     })();
     this.store.sync.notify();
     if (applied && event.event.kind === "redeliver") void this.dispatch(id);

@@ -59,6 +59,8 @@ export function bindTodoSession<F extends AdapterFamily, H extends object>(
           p.requestId,
           ledger.open(todo, {
             instanceId: session.instanceId,
+            family: session.family,
+            epoch: session.epoch,
             attemptId: p.attemptId,
             ...(p.approval ? { approval: p.approval } : {}),
             async send(answer, reply) {

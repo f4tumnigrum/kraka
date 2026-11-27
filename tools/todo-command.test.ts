@@ -243,7 +243,7 @@ test("Only one reply commits, retries keep the first receipt, and the round and 
         captureId: v.parse(CaptureIdSchema, "capture"),
       };
       if (!ended.root) throw Error("Missing fixture root");
-      expect(recordInputEvidence(store, native, { ...ended, root: ended.root }).kind).toBe("ok");
+
       const fallback = v.parse(TodoRequestSchema, {
         ...todo,
         id: "fallback",
@@ -264,6 +264,7 @@ test("Only one reply commits, retries keep the first receipt, and the round and 
         },
       });
       path.close();
+      expect(recordInputEvidence(store, native, { ...ended, root: ended.root }).kind).toBe("ok");
       expect(
         submit({
           ...command,
