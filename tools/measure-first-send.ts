@@ -13,7 +13,7 @@ import { currentFootprint, noChildren } from "./measure-replay";
 import { startFirstSendFixture, accepted, waitFile } from "./fixtures/first-send";
 import { connectFirstSend, fixtureActor } from "./fixtures/first-send-client";
 import { withState } from "./fixtures/replay-process";
-import { codexFixture } from "./fixtures/codex-turn";
+import { buildPeer, codexFixture } from "./fixtures/codex-turn";
 import type { Unit } from "./perf-catalog";
 
 type Fixture = Awaited<ReturnType<typeof startFirstSendFixture>>;
@@ -50,108 +50,113 @@ async function startup(
   base.expected = { launches: count, accepted: count, completed: count, joined: count };
   const counts = { launches: 0, accepted: 0, completed: 0, joined: 0 };
   base.actual = counts;
-  for (let i = 0; i < 10; i++)
-    await withState(async (dir) => {
-      for (const series of idle ? ["idle"] : ["fresh", "reused"]) {
-        const opts = options(dir, root);
-        const f = await codexFixture(dir, {}, root, false);
-        const before = f.ledger.rows().length;
-        counts.launches++;
-        try {
-          if (series !== "reused") accepted((await f.configure()).receipt, "executorConfigured");
-          accepted((await f.refresh()).receipt, "executorRefreshed");
-          const { receipt } = await f.send();
-          const at = performance.now();
-          const ids = accepted(receipt, "threadStarted");
-          const reader = openReceiptReader(opts.stateDir);
-          let position: string;
+  await withState(async (installation) => {
+    const binary = await buildPeer(installation, root);
+    for (let i = 0; i < 10; i++)
+      await withState(async (dir) => {
+        for (const series of idle ? ["idle"] : ["fresh", "reused"]) {
+          const opts = options(dir, root);
+          const f = await codexFixture(dir, {}, root, false, binary);
+          const before = f.ledger.rows().length;
+          counts.launches++;
           try {
-            const row = readReceipt(
-              reader,
-              v.parse(PrincipalIdSchema, fixtureActor),
-              receipt.commandId,
-            );
-            verifyObservation(
-              row && Bun.deepEquals(row.receipt, receipt),
-              "Missing durable Codex receipt",
-            );
-            position = row.position;
-          } finally {
-            reader.close();
-          }
-          counts.accepted++;
-          await waitIdle(f);
-          const native = f.ledger.rows().slice(before);
-          const peers = native.filter((r) => r.event === "spawn").map((r) => r.handle);
-          verifyObservation(
-            peers.length === 2 &&
-              native.filter((r) => r.event === "exit").length === peers.length &&
-              native.filter((r) => r.event === "root").length === 1,
-            "Missing probe/turn exit or root evidence",
-          );
-          const processes = {
-            appServers: peers.length,
-            protocolSchemas: native.filter((r) => r.event === "protocolSchema").length,
-            versions: native.filter((r) => r.event === "version").length,
-            remaining: 0,
-          };
-          const db = openReceiptReader(opts.stateDir);
-          try {
-            const phase = readRound(db, ids.roundId)?.attempt.phase;
-            verifyObservation(
-              phase?.kind === "closing" && phase.endTimeEvidence?.source === "executorReported",
-              "Incomplete Codex turn",
-            );
-          } finally {
-            db.close();
-          }
-          counts.completed++;
-          const pid = f.child.pid;
-          if (idle) {
-            await Bun.sleep(Math.max(0, Math.ceil(at + 60000 - performance.now())));
-            const alive = () => {
-              verifyObservation(
-                f.child.exitCode === null && f.child.signalCode === null && f.instance.pid === pid,
-                "Original PID exited",
+            if (series !== "reused") accepted((await f.configure()).receipt, "executorConfigured");
+            accepted((await f.refresh()).receipt, "executorRefreshed");
+            const { receipt } = await f.send();
+            const at = performance.now();
+            const ids = accepted(receipt, "threadStarted");
+            const reader = openReceiptReader(opts.stateDir);
+            let position: string;
+            try {
+              const row = readReceipt(
+                reader,
+                v.parse(PrincipalIdSchema, fixtureActor),
+                receipt.commandId,
               );
-              process.kill(pid, 0);
-              noChildren(pid);
-            };
-            alive();
-            const elapsedMs = performance.now() - at;
-            const memory = await currentFootprint(pid);
-            alive();
+              verifyObservation(
+                row && Bun.deepEquals(row.receipt, receipt),
+                "Missing durable Codex receipt",
+              );
+              position = row.position;
+            } finally {
+              reader.close();
+            }
+            counts.accepted++;
+            await waitIdle(f);
+            const native = f.ledger.rows().slice(before);
+            const peers = native.filter((r) => r.event === "spawn").map((r) => r.handle);
             verifyObservation(
-              (await confirmWriter(f.instance.stateDirectory, performance.now() + 500, true))
-                ?.instanceId === f.instance.instanceId,
-              "Writer became active",
+              peers.length === 2 &&
+                native.filter((r) => r.event === "exit").length === peers.length &&
+                native.filter((r) => r.event === "root").length === 1,
+              "Missing probe/turn exit or root evidence",
             );
-            base.observations.push({
-              pid,
-              elapsedMs,
-              commandId: receipt.commandId,
-              position,
-              nativeProcesses: processes,
-              ...memory,
-            });
-            sample(base, "idle", memory.mib, "MiB");
-          } else {
-            base.observations.push({
-              pid,
-              series,
-              commandId: receipt.commandId,
-              position,
-              nativeProcesses: processes,
-              elapsedMs: at - f.started,
-            });
-            sample(base, series, at - f.started);
+            const processes = {
+              appServers: peers.length,
+              protocolSchemas: native.filter((r) => r.event === "protocolSchema").length,
+              versions: native.filter((r) => r.event === "version").length,
+              remaining: 0,
+            };
+            const db = openReceiptReader(opts.stateDir);
+            try {
+              const phase = readRound(db, ids.roundId)?.attempt.phase;
+              verifyObservation(
+                phase?.kind === "closing" && phase.endTimeEvidence?.source === "executorReported",
+                "Incomplete Codex turn",
+              );
+            } finally {
+              db.close();
+            }
+            counts.completed++;
+            const pid = f.child.pid;
+            if (idle) {
+              await Bun.sleep(Math.max(0, Math.ceil(at + 60000 - performance.now())));
+              const alive = () => {
+                verifyObservation(
+                  f.child.exitCode === null &&
+                    f.child.signalCode === null &&
+                    f.instance.pid === pid,
+                  "Original PID exited",
+                );
+                process.kill(pid, 0);
+                noChildren(pid);
+              };
+              alive();
+              const elapsedMs = performance.now() - at;
+              const memory = await currentFootprint(pid);
+              alive();
+              verifyObservation(
+                (await confirmWriter(f.instance.stateDirectory, performance.now() + 500, true))
+                  ?.instanceId === f.instance.instanceId,
+                "Writer became active",
+              );
+              base.observations.push({
+                pid,
+                elapsedMs,
+                commandId: receipt.commandId,
+                position,
+                nativeProcesses: processes,
+                ...memory,
+              });
+              sample(base, "idle", memory.mib, "MiB");
+            } else {
+              base.observations.push({
+                pid,
+                series,
+                commandId: receipt.commandId,
+                position,
+                nativeProcesses: processes,
+                elapsedMs: at - f.started,
+              });
+              sample(base, series, at - f.started);
+            }
+          } finally {
+            await f.close();
+            counts.joined++;
           }
-        } finally {
-          await f.close();
-          counts.joined++;
         }
-      }
-    });
+      });
+  });
   return idle ? { idle: 10 } : { fresh: 10, reused: 10 };
 }
 async function restart(base: ReportBase, root: string) {

@@ -62,12 +62,13 @@ export async function codexFixture(
   profile: Profile = {},
   root = productRoot,
   hostSecret = true,
+  installedBinary?: string,
 ) {
   const stateDir = join(dir, "state"),
     projectDir = join(dir, "project");
   mkdirSync(projectDir, { recursive: true });
   const cwd = realpathSync.native(projectDir),
-    binary = await buildPeer(dir, root),
+    binary = installedBinary ?? (await buildPeer(dir, root)),
     ledgerPath = join(dir, "peer.jsonl"),
     ledger = peerLedger(ledgerPath);
   configureLocalOwner(stateDir, [
