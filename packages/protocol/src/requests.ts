@@ -145,6 +145,7 @@ import {
 import {
   AttachmentReferenceSchema,
   EnvironmentSchema,
+  ProjectSchema,
   MessageReferenceSchema,
   ObjectKeySchema,
   TodoRequestSchema,
@@ -717,6 +718,20 @@ export const REQUEST_METHODS = {
     "thread",
     AttentionReadSchema,
   ),
+  registerProject: defineRequestMethod(
+    "project.register",
+    "workspace.change",
+    "environment",
+    v.strictObject({
+      realPath: v.pipe(v.string(), v.regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/)),
+    }),
+  ),
+  renameThread: defineRequestMethod(
+    "thread.rename",
+    "thread.send",
+    "thread",
+    v.strictObject({ threadId: ThreadIdSchema, title: v.pipe(v.string(), v.minLength(1)) }),
+  ),
   startThread: defineRequestMethod(
     "thread.start",
     "thread.send",
@@ -1010,6 +1025,12 @@ export const DevicePairingResultSchema = v.variant("kind", [
 export type DevicePairingResult = v.InferOutput<typeof DevicePairingResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
   ContextOperationReceiptSchema,
+  v.strictObject({ kind: v.literal("projectRegistered"), project: ProjectSchema }),
+  v.strictObject({
+    kind: v.literal("threadRenamed"),
+    threadId: ThreadIdSchema,
+    version: ObjectVersionSchema,
+  }),
   TextReturnResultSchema,
   v.strictObject({
     kind: v.literal("grantsListed"),
