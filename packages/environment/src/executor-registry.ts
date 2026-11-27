@@ -17,7 +17,7 @@ import type {
   ExecutorRegistry,
   InstanceProbe,
 } from "./executor-records";
-import { recordCommand, type FirstSendContext } from "./first-send";
+import { recordCommand, type FirstSendContext } from "./command-receipts";
 import type { FirstSendStore } from "./first-send-store";
 
 export class WriterExecutorRegistry implements ExecutorRegistry {

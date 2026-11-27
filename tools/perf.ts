@@ -49,7 +49,7 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions";
+  variant?: "access.listSessions" | "worktree.recovery";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -318,7 +318,11 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
   return metricIds
     .filter((m) => !metrics.length || metrics.includes(m))
     .flatMap((metric): Workload[] =>
-      metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
+      metric === "P1"
+        ? [{ metric, variant: "access.listSessions" }, { metric }]
+        : metric === "P7"
+          ? [{ metric }, { metric, variant: "worktree.recovery" }]
+          : [{ metric }],
     );
 }
 
@@ -369,7 +373,20 @@ export async function prepareBudget(root: string, role: Role) {
       if (setupError) throw setupError;
       if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
-      else if (variant === "access.listSessions") {
+      else if (variant === "worktree.recovery") {
+        base.workload = "Five restarts of a daemon with an unfinished managed checkout";
+        base.endpoint = "original worktree claim's evidenced disposition";
+        base.thresholds = [{ series: "claimRecovery", unit: "ms", statistic: "each", limit: 2000 }];
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, "packages/environment/src/worktree-prepare.ts")).exists())
+        ) {
+          report = unavailable(base, "Parent lacks managed worktree recovery");
+        } else {
+          const { measureClaimRecovery } = await import("./measure-first-send");
+          report = measured(base, await measureClaimRecovery(base, root, nextBlock));
+        }
+      } else if (variant === "access.listSessions") {
         base.workload =
           "Ten provisioned fresh/reused directory pairs, daemon spawn through first signed access.listSessions acceptance, existing OS cache";
         base.endpoint = "access serve with a registered device";

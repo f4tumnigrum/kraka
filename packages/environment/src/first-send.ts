@@ -1,78 +1,25 @@
 import * as v from "valibot";
 import {
-  canonicalJson,
-  CommandReceiptSchema,
   DirectoryRecordSchema,
   ProjectSchema,
   ThreadSchema,
+  ThreadIdSchema,
+  RoundIdSchema,
   MessageSchema,
   RoundSchema,
-  type AuthorizationTarget,
   type CommandId,
-  type CommandReceipt,
   type EnvironmentId,
-  type PrincipalId,
-  type PermissionItem,
   type SignedRequest,
-  type RequestMethodDefinition,
   REQUEST_METHODS,
-  type RequestResult,
   type ThreadId,
 } from "@kraka/protocol";
-import { type FirstSendStore, readReceipt, readProject, readThread } from "./first-send-store";
+import { type FirstSendStore, readProject, readThread } from "./first-send-store";
 import { physicalDirectory, projectRoot } from "./project-directory";
 
-export type LocalActor = {
-  id: PrincipalId;
-  environmentId: EnvironmentId;
-  allows: (permission: PermissionItem, target: AuthorizationTarget) => boolean;
-};
+import { recordCommand, reject, type FirstSendContext, type LocalActor } from "./command-receipts";
+import { acceptIsolatedStart } from "./isolated-start";
+import { selection } from "./worktree-storage";
 type Start = Extract<SignedRequest, { method: "thread.start" }>["payload"];
-export type FirstSendContext = {
-  actor: LocalActor;
-  commandId: CommandId;
-  transaction: FirstSendStore;
-};
-function reject(
-  commandId: CommandId,
-  kind: "idConflict" | "notFound" | "invalidState" | "unsupported",
-): CommandReceipt {
-  return { kind: "rejected", commandId, failure: { kind } };
-}
-export function recordCommand(
-  context: FirstSendContext,
-  operation: RequestMethodDefinition,
-  payload: unknown,
-  target: AuthorizationTarget,
-  apply: () => RequestResult | CommandReceipt,
-) {
-  const { actor, transaction, commandId } = context;
-  const { method, permission } = operation;
-  if (actor.environmentId !== transaction.writer.environmentId || !actor.allows(permission, target))
-    return {
-      kind: "rejected",
-      commandId,
-      failure: { kind: "missingPermission", permission, target },
-    } as const;
-  const intent = canonicalJson({ method, target, payload });
-  const committed = transaction.db.transaction((): CommandReceipt => {
-    const previous = readReceipt(transaction.db, actor.id, commandId);
-    if (previous)
-      return previous.intent === intent ? previous.receipt : reject(commandId, "idConflict");
-    const result = apply();
-    const receipt = v.parse(
-      CommandReceiptSchema,
-      "commandId" in result ? result : { kind: "accepted", commandId, result },
-    );
-    transaction.db
-      .query("INSERT INTO receipts(actor,command,intent,data) VALUES(?,?,?,?)")
-      .run(actor.id, commandId, intent, JSON.stringify(receipt));
-    transaction.beforeCommit?.(method);
-    return receipt;
-  })();
-  transaction.sync.notify();
-  return committed;
-}
 export function registerProject(
   context: FirstSendContext & { environmentId: EnvironmentId; realPath: string },
 ) {
@@ -154,10 +101,30 @@ export function acceptFirstInput({
       const project = readProject(transaction.db, projectId);
       if (!project?.root || project.environmentId !== verifiedActor.environmentId)
         return reject(commandId, "notFound");
-      if (worktreeId !== null || content.attachments.length || content.references.length)
+      if (content.attachments.length || content.references.length)
         return reject(commandId, "unsupported");
+      const threadId = v.parse(ThreadIdSchema, crypto.randomUUID()),
+        roundId = v.parse(RoundIdSchema, crypto.randomUUID());
+      const directory =
+        worktreeId !== null
+          ? acceptIsolatedStart({
+              actor: verifiedActor,
+              commandId,
+              transaction,
+              project,
+              threadId,
+              roundId,
+              worktreeId,
+              selectedOrigin: selection(transaction.db, verifiedActor.id, projectId, worktreeId),
+            })
+          : {
+              kind: "projectRoot",
+              directoryId: project.root.directoryId,
+              generation: project.root.generation,
+            };
+      if (!directory) return reject(commandId, "invalidState");
       const thread = v.parse(ThreadSchema, {
-        id: crypto.randomUUID(),
+        id: threadId,
         projectId,
         worktreeId,
         title: content.text,
@@ -173,14 +140,11 @@ export function acceptFirstInput({
             snoozedUntil: null,
           },
         },
-        directory: {
-          kind: "projectRoot",
-          directoryId: project.root.directoryId,
-          generation: project.root.generation,
-        },
+        directory,
       });
-      if (!transaction.directory(thread)) return reject(commandId, "invalidState");
-      const roundId = crypto.randomUUID();
+      if (worktreeId === null && !transaction.directory(thread))
+        return reject(commandId, "invalidState");
+
       const message = v.parse(MessageSchema, {
         id: crypto.randomUUID(),
         threadId: thread.id,
@@ -198,7 +162,7 @@ export function acceptFirstInput({
         attempt: {
           attemptId: crypto.randomUUID(),
           deliveryId: crypto.randomUUID(),
-          phase: { kind: "filed", gate: "eligible" },
+          phase: { kind: "filed", gate: worktreeId === null ? "eligible" : "held" },
         },
       });
       transaction.sync.record([
@@ -217,7 +181,9 @@ export function acceptFirstInput({
       transaction.db
         .query("INSERT INTO rounds VALUES(?,?,'person')")
         .run(round.id, JSON.stringify(round));
-      transaction.db.query("INSERT INTO deliveries VALUES(?,?,1,NULL)").run(deliveryId, round.id);
+      transaction.db
+        .query("INSERT INTO deliveries VALUES(?,?,?,NULL)")
+        .run(deliveryId, round.id, Number(worktreeId === null));
       return {
         kind: "threadStarted",
         threadId: thread.id,
@@ -227,6 +193,7 @@ export function acceptFirstInput({
         deliveryId,
       };
     },
+    worktreeId === null ? [] : ["workspace.change"],
   );
 }
 export function renameThread(context: FirstSendContext & { threadId: ThreadId; title: string }) {

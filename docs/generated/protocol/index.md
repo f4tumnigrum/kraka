@@ -4787,6 +4787,40 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
               "type": "object",
               "properties": {
                 "kind": {
+                  "const": "worktreeBaseSelected"
+                },
+                "projectId": {
+                  "$ref": "#/$defs/ProjectId"
+                },
+                "worktreeId": {
+                  "$ref": "#/$defs/WorktreeId"
+                },
+                "branch": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "baseRef": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "commit": {
+                  "$ref": "#/$defs/GitObjectId"
+                }
+              },
+              "required": [
+                "kind",
+                "projectId",
+                "worktreeId",
+                "branch",
+                "baseRef",
+                "commit"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
                   "const": "worktreeStatus"
                 },
                 "view": {
@@ -5167,6 +5201,43 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
             },
             {
               "$ref": "#/$defs/QueueConflict"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "worktreeRestoreFailed"
+                },
+                "threadId": {
+                  "$ref": "#/$defs/ThreadId"
+                },
+                "worktreeId": {
+                  "$ref": "#/$defs/WorktreeId"
+                },
+                "generation": {
+                  "$ref": "#/$defs/WorktreeGeneration"
+                },
+                "reason": {
+                  "enum": [
+                    "sourceUnavailable",
+                    "ownershipUnconfirmed",
+                    "setupFailed"
+                  ],
+                  "type": "string"
+                },
+                "view": {
+                  "$ref": "#/$defs/WorktreeView"
+                }
+              },
+              "required": [
+                "kind",
+                "threadId",
+                "worktreeId",
+                "generation",
+                "reason",
+                "view"
+              ],
+              "additionalProperties": false
             },
             {
               "type": "object",
@@ -34956,41 +35027,71 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "const": "worktree.prepare"
     },
     "payload": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "$ref": "#/$defs/ProjectId"
-        },
-        "threadId": {
-          "$ref": "#/$defs/ThreadId"
-        },
-        "worktreeId": {
-          "$ref": "#/$defs/WorktreeId"
-        },
-        "branch": {
-          "type": "string",
-          "minLength": 1
-        },
-        "baseRef": {
-          "anyOf": [
-            {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "projectId": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/WorktreeId"
+            },
+            "branch": {
               "type": "string",
               "minLength": 1
             },
-            {
-              "type": "null"
+            "baseRef": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
-          ]
+          },
+          "required": [
+            "projectId",
+            "threadId",
+            "worktreeId",
+            "branch",
+            "baseRef"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "projectId": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/WorktreeId"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "baseRef": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "projectId",
+            "worktreeId",
+            "branch",
+            "baseRef"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "projectId",
-        "threadId",
-        "worktreeId",
-        "branch",
-        "baseRef"
-      ],
-      "additionalProperties": false
+      ]
     },
     "signature": {
       "$ref": "#/$defs/P256Signature"
