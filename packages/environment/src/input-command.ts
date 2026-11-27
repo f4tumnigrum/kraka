@@ -11,7 +11,7 @@ import {
   type Round,
 } from "@kraka/protocol";
 import * as v from "valibot";
-import { type LocalActor, recordCommand } from "./first-send";
+import { type LocalActor, recordCommand } from "./command-receipts";
 import { type FirstSendStore, readMessage, readRound, readThread } from "./first-send-store";
 import { advanceQueue, loadQueue, nextVersion, persistQueue } from "./input-store";
 import {
@@ -181,8 +181,10 @@ export function applyInputCommand({
         };
       }
       let event: UnknownDeliveryDecision | { kind: "release" };
-      if (command.method === "input.releaseQueue") event = { kind: "release" };
-      else {
+      if (command.method === "input.releaseQueue") {
+        if (thread.worktreeId && !transaction.directory(thread)) return refuse("queueHeld");
+        event = { kind: "release" };
+      } else {
         const target = command.payload.attemptId;
         if (
           !queue.rows.some(

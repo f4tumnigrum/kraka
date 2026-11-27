@@ -362,7 +362,8 @@ export function projectWorktree(claim: WorktreeClaim, seen: WorktreeObservation)
     availability:
       recovery.action === "useReady"
         ? "usable"
-        : recovery.action === "inspect"
+        : recovery.action === "inspect" ||
+            (phase.kind === "preparing" && phase.script.kind === "unknown")
           ? "needsInspection"
           : "unavailable",
   };

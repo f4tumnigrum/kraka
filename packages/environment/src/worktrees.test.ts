@@ -1,4 +1,6 @@
 import { DirectoryRecordSchema, ProjectSchema, ThreadSchema } from "@kraka/protocol";
+import { hashId, worktreeName } from "./worktree-storage";
+import { WorktreeIdSchema } from "@kraka/protocol";
 import { directoryForThread } from "./worktrees";
 import { expect, test } from "bun:test";
 import * as v from "valibot";
@@ -291,4 +293,35 @@ test("a stale or foreign temporary directory never resolves to the project root"
     binding: { ...directory.binding, generation: "2" },
   });
   expect(directoryForThread(thread, project, stale, null)).toBeNull();
+});
+
+test("branch policy is frozen at reservation, the path always hashes the original UUID", () => {
+  const id = v.parse(WorktreeIdSchema, "12345678-1234-4123-8123-123456789abc");
+  const first = worktreeName(id, { kind: "generated" });
+  const second = worktreeName(id, { kind: "fixedPrefix", prefix: "feature" });
+  expect(first).toBe("kraka/wt-12345678123441238123123456789abc");
+  expect(second).toBe("feature-56789abc");
+  expect(hashId(id)).toBe(
+    new Bun.CryptoHasher("sha256").update("12345678-1234-4123-8123-123456789abc").digest("hex"),
+  );
+  const claim = reserveWorktree({ ...address, worktreeId: id }, first, generation, op, origin);
+  const ready = step(step(claim, { ...ticket, kind: "verified" }), {
+    ...ticket,
+    kind: "skipSetup",
+  });
+  const observed = { ...complete, address: { ...address, worktreeId: id } };
+  expect(projectWorktree(ready, observed)).toMatchObject({
+    availability: "usable",
+    status: { branch: first },
+  });
+  expect(
+    projectWorktree(ready, { ...observed, generation: v.parse(WorktreeGenerationSchema, "2") })
+      .availability,
+  ).toBe("needsInspection");
+  expect(
+    projectWorktree(ready, {
+      ...observed,
+      child: { kind: "alive", process: { ...proc, startedAt: proc.startedAt + 1 } },
+    }).availability,
+  ).toBe("needsInspection");
 });

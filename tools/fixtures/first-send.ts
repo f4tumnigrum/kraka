@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import {
   confirmWriter,
   InstancePublicationSchema,
+  type InstancePublication,
   openReceiptReader,
   readReceipt,
 } from "@kraka/environment";
@@ -25,6 +26,10 @@ export type Fault =
   | "afterCommit"
   | "externalWrite"
   | "peer"
+  | "claimed"
+  | "registered"
+  | "beforeSetup"
+  | "setupExited"
   | "resume"
   | "recovery";
 export async function configureLocalOwner(
@@ -57,8 +62,9 @@ export function launchWriter(
   point?: Fault | "codex" | "codex-cli",
   recording = join(root, fixture),
   ipc?: (message: unknown) => void,
+  executable?: string,
 ) {
-  const args =
+  const argv =
     point === "codex-cli"
       ? [join(root, entry), "start", "--state-dir", stateDir]
       : point === "codex"
@@ -67,13 +73,16 @@ export function launchWriter(
           ? [join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, point]
           : [join(root, entry), "start", "--state-dir", stateDir, "--recording", recording];
   const started = performance.now();
-  const child = Bun.spawn([process.execPath, ...args], {
-    cwd: root,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    ...(ipc && { ipc }),
-  });
+  const child = Bun.spawn(
+    executable ? [executable, ...argv.slice(1)] : [process.execPath, ...argv],
+    {
+      cwd: root,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      ...(ipc && { ipc }),
+    },
+  );
   const stderr = new Response(child.stderr).text();
   const line = Promise.withResolvers<string>();
   const drained = (async () => {
@@ -94,7 +103,12 @@ export function launchWriter(
       }),
       JSON.parse(raw),
     );
-    const confirmed = await confirmWriter(realpathSync.native(stateDir), performance.now() + 1000);
+    const deadline = performance.now() + 10000;
+    let confirmed: InstancePublication | null;
+    do {
+      confirmed = await confirmWriter(realpathSync.native(stateDir), deadline);
+      if (!confirmed) await Bun.sleep(10);
+    } while (!confirmed && performance.now() < deadline);
     if (
       !Bun.deepEquals(confirmed, result.instance) ||
       (result.kind === "ready" && result.instance.pid !== child.pid)
@@ -131,6 +145,7 @@ export async function startFirstSendFixture({
   adapter,
   root = productRoot,
   point,
+  executable,
   recording,
   ipc,
 }: {
@@ -139,13 +154,14 @@ export async function startFirstSendFixture({
   adapter: "replay";
   root?: string;
   point?: Fault;
+  executable?: string;
   recording?: string;
   ipc?: (message: unknown) => void;
 }) {
   if (adapter !== "replay") throw new Error("Expected replay adapter");
   await configureLocalOwner(stateDir);
   mkdirSync(projectDirectory, { recursive: true });
-  const launcher = launchWriter(stateDir, root, point, recording, ipc);
+  const launcher = launchWriter(stateDir, root, point, recording, ipc, executable);
   try {
     const { kind, instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");
