@@ -74,6 +74,7 @@ Supply a fresh public nonce in the upgrade query and verify its signed echo with
 | `round.stop` | `thread.send` | thread |
 | `input.resendUnknown` | `thread.send` | thread |
 | `input.dropUnknown` | `thread.send` | thread |
+| `todo.readAnswer` | `thread.view` | thread |
 | `todo.answer` | `thread.reply` | thread |
 | `todo.decide` | `owner.decide` | thread |
 | `access.grant` | `access.give` | authorizationTarget |
@@ -4969,6 +4970,139 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
               },
               "required": [
                 "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "todoAnswerRead"
+                },
+                "todoRequestId": {
+                  "$ref": "#/$defs/TodoRequestId"
+                },
+                "messageId": {
+                  "$ref": "#/$defs/MessageId"
+                },
+                "authorId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "content": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "question"
+                        },
+                        "answers": {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "questionKey": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "answer": {
+                                  "type": "string",
+                                  "maxLength": 8192
+                                }
+                              },
+                              "required": [
+                                "questionKey",
+                                "answer"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ],
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "questionKey": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              },
+                              "answer": {
+                                "type": "string",
+                                "maxLength": 8192
+                              }
+                            },
+                            "required": [
+                              "questionKey",
+                              "answer"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "answers"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "approval"
+                        },
+                        "choiceKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        },
+                        "decision": {
+                          "enum": [
+                            "allow",
+                            "deny",
+                            "allowEdited"
+                          ],
+                          "type": "string"
+                        },
+                        "scope": {
+                          "enum": [
+                            "once",
+                            "session",
+                            "project",
+                            "persistent"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "choiceKey",
+                        "decision",
+                        "scope"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "todoRequestId",
+                "messageId",
+                "authorId",
+                "deviceId",
+                "at",
+                "content"
               ],
               "additionalProperties": false
             },
@@ -20707,6 +20841,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/input.dropUnknown"
     },
     {
+      "$ref": "#/$defs/todo.readAnswer"
+    },
+    {
       "$ref": "#/$defs/todo.answer"
     },
     {
@@ -34155,6 +34292,124 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
   ],
   "additionalProperties": false,
   "description": "Requires owner.decide on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
+## todo.readAnswer
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "todo.readAnswer"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "todoRequestId": {
+          "$ref": "#/$defs/TodoRequestId"
+        }
+      },
+      "required": [
+        "threadId",
+        "todoRequestId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
 }
 ```
 

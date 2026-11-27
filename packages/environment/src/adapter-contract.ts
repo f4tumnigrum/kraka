@@ -213,6 +213,7 @@ export type AdapterCommand =
       attemptId: AttemptId;
       requestId: NativeRequestId;
       answer: TodoAnswer;
+      reply?: import("@kraka/protocol").TodoReplyContent;
     }
   | { kind: "stop"; capability: "stopRound"; deliveryId: DeliveryId; attemptId: AttemptId }
   | {
@@ -264,6 +265,10 @@ export type AdapterFailure =
   | { kind: "transportError"; message: string }
   | { kind: "operationRejected"; message: string }
   | { kind: "unknown"; message: string };
+export type ApprovalAuthority = {
+  permission: import("@kraka/protocol").PermissionItem;
+  choices: readonly Extract<import("@kraka/protocol").TodoReplyContent, { kind: "approval" }>[];
+};
 export type RequestBody = TodoRequestBody;
 export type Recovery = SessionRecovery;
 export type RoundEnd =
@@ -311,6 +316,14 @@ export type AdapterEventPayload =
       requestId: NativeRequestId;
       recovery: Recovery;
       body: RequestBody;
+      approval?: ApprovalAuthority;
+      fallback?: Extract<
+        Extract<
+          import("@kraka/protocol").TodoRoute,
+          { kind: "live"; subject: "question" }
+        >["fallback"],
+        { kind: "asMessage" }
+      >;
     }
   | { kind: "steerRead"; attemptId: AttemptId; messageId: MessageId }
   | {

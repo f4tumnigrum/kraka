@@ -1,35 +1,13 @@
 import { ownedDirectory } from "../../packages/cli-client/src/private-directory";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  AttemptIdSchema,
-  DeliveryIdSchema,
-  MessageIdSchema,
-  NativeSessionIdSchema,
-} from "@kraka/protocol";
+import type { AttemptId, DeliveryId } from "@kraka/protocol";
+import { entrySchema, type PeerEntry, type PeerCommand } from "./input-peer-control";
 import * as v from "valibot";
-import { accepted, productRoot, startFirstSendFixture, waitFile } from "./first-send";
+import { accepted, productRoot, startFirstSendFixture } from "./first-send";
 import { connectFirstSend } from "./first-send-client";
-import { terminate, withState } from "./replay-process";
+import { terminate, within, withState } from "./replay-process";
 
-const entry = v.object({
-  step: v.string(),
-  attemptId: AttemptIdSchema,
-  deliveryId: DeliveryIdSchema,
-  messageId: MessageIdSchema,
-  sessionId: NativeSessionIdSchema,
-  data: v.unknown(),
-});
-export async function eventually<T>(observe: () => Promise<T> | T, match: (x: T) => boolean) {
-  const until = performance.now() + 5000;
-  let result = await observe();
-  while (!match(result)) {
-    if (performance.now() >= until) throw Error("Missing observation: " + JSON.stringify(result));
-    await Bun.sleep(5);
-    result = await observe();
-  }
-  return result;
-}
 export function withInputPeer(
   run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>,
   holds: string[] = [],
@@ -46,31 +24,58 @@ export function withInputPeer(
 async function setup(dir: string, holds: string[]) {
   const stateDir = join(dir, "state");
   await ownedDirectory(stateDir);
-  const hold = (step: string) => writeFileSync(join(stateDir, "hold-" + step), "");
-  const release = (step: string) => rmSync(join(stateDir, "hold-" + step), { force: true });
-  for (const step of holds) hold(step);
+  const ready = Promise.withResolvers<string>();
+  const pending = new Map<string, ReturnType<typeof Promise.withResolvers<PeerEntry[]>>>();
+  let failure: Error | undefined;
+  function fail(error: Error) {
+    failure = error;
+    ready.reject(error);
+    for (const waiter of pending.values()) waiter.reject(error);
+  }
   const peer = Bun.spawn(
-    [process.execPath, join(productRoot, "tools/fixtures/input-peer.ts"), stateDir],
-    { stdout: "ignore", stderr: "inherit" },
+    [process.execPath, join(productRoot, "tools/fixtures/input-peer.ts"), stateDir, ...holds],
+    {
+      stdout: "ignore",
+      stderr: "inherit",
+      ipc(message) {
+        try {
+          const reply = v.parse(
+            v.variant("kind", [
+              v.object({ kind: v.literal("ready"), origin: v.string() }),
+              v.object({ kind: v.literal("reply"), id: v.string(), rows: v.array(entrySchema) }),
+            ]),
+            message,
+          );
+          if (reply.kind === "ready") ready.resolve(reply.origin);
+          else pending.get(reply.id)?.resolve(reply.rows);
+        } catch (error) {
+          fail(Error(String(error)));
+        }
+      },
+    },
   );
+  void peer.exited.then((code) => fail(Error("Input peer exited: " + (peer.signalCode ?? code))));
+  async function control(command: PeerCommand) {
+    if (failure) throw failure;
+    const id = crypto.randomUUID(),
+      waiter = Promise.withResolvers<PeerEntry[]>();
+    pending.set(id, waiter);
+    try {
+      peer.send({ id, command });
+      return await within(waiter.promise, 5000, "Input peer " + command.kind + " " + id);
+    } finally {
+      pending.delete(id);
+    }
+  }
   const options = {
     stateDir,
     projectDirectory: join(dir, "project"),
     adapter: "replay",
     point: "recovery",
   } as const;
-  const ledger = () => {
-    const file = join(stateDir, "peer.jsonl");
-    return existsSync(file)
-      ? readFileSync(file, "utf8")
-          .trim()
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => v.parse(entry, JSON.parse(line)))
-      : [];
-  };
   try {
-    await waitFile(join(stateDir, "peer.url"));
+    const origin = await within(ready.promise, 5000, "Input peer ready");
+    writeFileSync(join(stateDir, "peer.url"), origin);
     let writer = await startFirstSendFixture(options);
     let client = writer.client;
     return {
@@ -81,9 +86,11 @@ async function setup(dir: string, holds: string[]) {
         return client;
       },
       stateDir,
-      ledger,
-      hold,
-      release,
+      ledger: () => control({ kind: "ledger" }),
+      hold: (step: string) => control({ kind: "hold", step }),
+      release: (step: string) => control({ kind: "release", step }),
+      late: (attemptId: AttemptId, source: PeerEntry) =>
+        control({ kind: "late", attemptId, source }),
       async reconnect() {
         client.close();
         client = await connectFirstSend(stateDir, writer.instance);
@@ -111,29 +118,22 @@ async function setup(dir: string, holds: string[]) {
           "inputScheduled",
         );
       },
-      async seen(step: string, delivery?: string) {
-        const rows = await eventually(ledger, (rows) =>
-          rows.some((r) => r.step === step && (!delivery || r.deliveryId === delivery)),
-        );
-        return rows.find((r) => r.step === step && (!delivery || r.deliveryId === delivery))!;
+      async seen(step: string, deliveryId: DeliveryId) {
+        const [row] = await control({ kind: "seen", step, deliveryId });
+        if (row?.step !== step || row.deliveryId !== deliveryId)
+          throw Error("Unmatched input observation");
+        return row;
       },
       async close() {
-        for (const gate of [
-          "claim",
-          "beforeWrite",
-          "afterWrite",
-          "receipt",
-          "turn",
-          "start",
-          "steer",
-          "handoff",
-        ])
-          release(gate);
-        client.close();
         try {
-          await writer.close();
+          if (!failure) await control({ kind: "releaseAll" });
         } finally {
-          await terminate(peer);
+          client.close();
+          try {
+            await writer.close();
+          } finally {
+            await terminate(peer);
+          }
         }
       },
     };

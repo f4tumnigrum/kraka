@@ -55,6 +55,7 @@ export async function dispatchReplay<H extends object>(
       workingDirectory: directory(),
       signal,
       persisted: {
+        todos: store.todos,
         thread,
         round: initial,
         directory,
