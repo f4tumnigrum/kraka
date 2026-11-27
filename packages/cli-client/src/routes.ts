@@ -142,6 +142,6 @@ export class DeviceRouteDirectory {
   close() {
     for (const selector of this.connections.values()) selector.close();
     this.connections.clear();
-    this.db.close();
+    this.db.close(true);
   }
 }

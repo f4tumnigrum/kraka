@@ -4,9 +4,8 @@ import { createInterface } from "node:readline";
 import * as v from "valibot";
 
 const profile = process.env.PEER_PROFILE ?? "ready",
-  ledger = process.env.PEER_LEDGER,
-  recording = process.env.PEER_RECORDING;
-if (!ledger || !recording) throw new Error("Missing fixture paths");
+  ledger = process.env.PEER_LEDGER ?? "peer.log",
+  recording = process.env.PEER_RECORDING ?? "frames";
 const ledgerPath = ledger;
 const args = process.argv.slice(2);
 const handle = process.pid;

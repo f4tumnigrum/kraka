@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import {
   EnvironmentIdentitySchema,
+  DEFAULT_DEVICE_PERMISSIONS,
   PairingInviteIdSchema,
   ProjectIdSchema,
   PairingRequestIdSchema,
@@ -92,35 +93,38 @@ export async function startBrowserPage(main: HTMLElement) {
       status.value = s.phase === "failed" ? JSON.stringify(s.failure) : s.phase;
     });
   }
-  form("Confirm host", ["Environment ID", "Public key", "Key version"], async (data) => {
-    const verified = v.parse(EnvironmentIdentitySchema, {
-      id: data.get("Environment ID"),
-      publicKey: data.get("Public key"),
-      keyVersion: Number(data.get("Key version")),
-    });
-    const pinned = await browserPins.pin({
-      origin: location.origin,
-      environmentId: verified.id,
-      verifiedIdentity: verified,
-      confirmed: true,
-    });
-    if (pinned !== "pinned" && pinned !== "alreadyPinned") throw Error(pinned);
-    identity = verified;
-    await addBrowserRoute(verified.id, {
-      id: v.parse(RouteIdSchema, `${verified.id}-browser`),
-      environmentId: verified.id,
-      kind: location.protocol === "https:" ? "lan" : "local",
-      endpoint: location.origin,
-      lastObservedSecureContext: window.isSecureContext,
-      status: { kind: "untested" },
-    });
-    await connect();
-  });
+  const confirmHost = form(
+    "Confirm host",
+    ["Environment ID", "Public key", "Key version"],
+    async (data) => {
+      const verified = v.parse(EnvironmentIdentitySchema, {
+        id: data.get("Environment ID"),
+        publicKey: data.get("Public key"),
+        keyVersion: Number(data.get("Key version")),
+      });
+      const pinned = await browserPins.pin({
+        origin: location.origin,
+        environmentId: verified.id,
+        verifiedIdentity: verified,
+        confirmed: true,
+      });
+      if (pinned !== "pinned" && pinned !== "alreadyPinned") throw Error(pinned);
+      identity = verified;
+      await addBrowserRoute(verified.id, {
+        id: v.parse(RouteIdSchema, `${verified.id}-browser`),
+        environmentId: verified.id,
+        kind: location.protocol === "https:" ? "lan" : "local",
+        endpoint: location.origin,
+        lastObservedSecureContext: window.isSecureContext,
+        status: { kind: "untested" },
+      });
+      await connect();
+    },
+  );
   const pair = form("Request pairing", ["Project ID", "Invite ID"], async (data) => {
     if (!identity) throw Error("Confirm the host identity first");
     const permissions: PermissionItem[] = [];
-    if (data.has("thread.view")) permissions.push("thread.view");
-    if (data.has("access.give")) permissions.push("access.give");
+    for (const right of DEFAULT_DEVICE_PERMISSIONS) if (data.has(right)) permissions.push(right);
     if (!permissions.length) throw Error("Choose a permission");
     const credentials = createBrowserCredentials({
       origin: location.origin,
@@ -140,13 +144,35 @@ export async function startBrowserPage(main: HTMLElement) {
     if (result !== "stored" && result !== "unchanged") throw Error(result);
     await connect();
   });
-  for (const right of ["thread.view", "access.give"]) {
+  for (const right of DEFAULT_DEVICE_PERMISSIONS) {
     const label = document.createElement("label"),
       input = document.createElement("input");
     input.type = "checkbox";
     input.name = right;
     label.append(input, right);
     pair.prepend(label);
+  }
+  const invite = new URLSearchParams(location.hash.slice(1));
+  if (invite.has("inviteId")) {
+    for (const [form, fields] of [
+      [
+        confirmHost,
+        {
+          "Environment ID": "environmentId",
+          "Public key": "publicKey",
+          "Key version": "keyVersion",
+        },
+      ],
+      [pair, { "Project ID": "projectId", "Invite ID": "inviteId" }],
+    ] as const) {
+      for (const [name, param] of Object.entries(fields)) {
+        const input = form.elements.namedItem(name);
+        if (input instanceof HTMLInputElement) input.value = invite.get(param) ?? "";
+      }
+    }
+    for (const input of pair.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      input.checked = true;
+    history.replaceState(null, "", location.pathname);
   }
   await connect().catch((error) => {
     status.value = String(error);

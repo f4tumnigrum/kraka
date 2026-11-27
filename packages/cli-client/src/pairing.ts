@@ -120,7 +120,30 @@ export async function openDeviceCredentials(filename: string) {
       publicKey,
       sign: (text: string) => signP256(key, text),
       load,
-      close: () => db.close(),
+      close: () => db.close(true),
+      saveHostRegistration(input: Extract<DeviceRegistration, { kind: "registered" }>) {
+        const row = v.parse(DeviceRegistrationSchema, input);
+        if (
+          row.deviceId !== deviceId ||
+          row.keyId !== keyId ||
+          row.publicKey !== publicKey ||
+          row.kind !== "registered" ||
+          row.deviceKey.publicKey !== publicKey ||
+          row.deviceKey.deviceId !== deviceId ||
+          row.principal.deviceId !== deviceId ||
+          row.deviceKey.id !== keyId
+        )
+          throw Error("Host registration does not match local key");
+        const previous = load(row.identity.id);
+        if (
+          previous &&
+          (!sameEnvironmentIdentity(previous.identity, row.identity) ||
+            previous.kind !== "registered" ||
+            previous.principal.id !== row.principal.id)
+        )
+          throw Error("Host registration conflicts with pinned device");
+        save(row);
+      },
       freeze(command: RouteCommand): RouteCommand {
         const intent = canonicalJson(command);
         return db

@@ -215,6 +215,8 @@ export class CodexInstances {
         if (registration.enabled) this.registry.setDefault(projectId, instanceId);
         return {
           kind: "executorRefreshed",
+          displayName: registration.displayName,
+          enabled: registration.enabled,
           configurationVersion: registration.version,
           instanceId,
           snapshot,

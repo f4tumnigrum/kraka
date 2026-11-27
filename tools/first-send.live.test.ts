@@ -247,13 +247,13 @@ test("4 competing launchers follow the lock holder and an ambiguous write stays 
         expect(incumbent.kind).toBe("ready");
         expect(await contender.ready()).toEqual({
           kind: "existingInstance",
-          instance: incumbent.instance,
+          publication: incumbent.publication,
         });
         const after = launchWriter(stateDir, productRoot);
         try {
           expect(await after.ready()).toEqual({
             kind: "existingInstance",
-            instance: incumbent.instance,
+            publication: incumbent.publication,
           });
         } finally {
           await after.stop();

@@ -78,6 +78,8 @@ export const ModelCatalogSchema = v.strictObject({
 });
 export const ExecutorRefreshedSchema = v.strictObject({
   kind: v.literal("executorRefreshed"),
+  displayName: v.optional(text),
+  enabled: v.optional(v.boolean()),
   instanceId: ExecutorInstanceIdSchema,
   configurationVersion: ObjectVersionSchema,
   snapshot: v.nullable(ExecutorInstanceSnapshotSchema),

@@ -1,6 +1,8 @@
 import { listenBrowserDaemon } from "./browser-daemon";
 import { accessCli } from "./access";
-import "@kraka/cli-client";
+import { identityCommand } from "@kraka/cli-client";
+import { readInstancePublication } from "@kraka/environment";
+import { startForeground } from "./foreground";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -151,7 +153,52 @@ export async function listenReplay<H extends object>({
   }
   return { shutdown, ready, url };
 }
-if (import.meta.main && process.argv.length > 2) {
+type InstalledCommand =
+  | { kind: "identity"; stateDir: string }
+  | { kind: "foreground"; stateDir: string; action: "print" | "open" }
+  | { kind: "writer"; stateDir: string; recording: string | null };
+export function parseInstalledCommand(
+  command: "identity" | "start",
+  args: string[],
+): InstalledCommand {
+  if (command === "identity") {
+    const { values } = parseArgs({
+      args,
+      options: { "state-dir": { type: "string" }, json: { type: "boolean" } },
+      allowPositionals: false,
+    });
+    if (!values["state-dir"] || !values.json)
+      throw Error("Expected identity --state-dir DIR --json");
+    return { kind: "identity", stateDir: resolve(values["state-dir"]) };
+  }
+  const { values } = parseArgs({
+    args,
+    options: {
+      "state-dir": { type: "string" },
+      recording: { type: "string" },
+      "local-owner": { type: "boolean" },
+      "print-pairing": { type: "boolean" },
+      "open-browser": { type: "boolean" },
+    },
+    allowPositionals: false,
+  });
+  if (!values["state-dir"])
+    throw Error("Expected start --state-dir DIR [--print-pairing | --open-browser]");
+  const stateDir = resolve(values["state-dir"]);
+  if (
+    [
+      values.recording,
+      values["local-owner"],
+      values["print-pairing"],
+      values["open-browser"],
+    ].filter((value) => value !== undefined).length > 1
+  )
+    throw Error("Choose one startup mode");
+  if (values.recording !== undefined || values["local-owner"])
+    return { kind: "writer", stateDir, recording: values.recording ?? null };
+  return { kind: "foreground", stateDir, action: values["open-browser"] ? "open" : "print" };
+}
+if (import.meta.main) {
   try {
     const [command, ...args] = process.argv.slice(2);
     if (command === worktreeWorkerCommand) await runWorktreeWorker(args[0]);
@@ -179,36 +226,44 @@ if (import.meta.main && process.argv.length > 2) {
       process.once("SIGTERM", listener.shutdown);
       process.once("SIGINT", listener.shutdown);
       process.stdout.write(`${JSON.stringify(listener.ready)}\n`);
-    } else if (command === "start") {
-      const { values } = parseArgs({
-        args,
-        options: { "state-dir": { type: "string" }, recording: { type: "string" } },
-        strict: true,
-      });
-      if (!values["state-dir"])
-        throw new Error("Expected start --state-dir DIR [--recording FILE]");
-      const recording = values.recording
-        ? parseReplayRecording(await Bun.file(values.recording).text())
-        : null;
-      const writer = await startWriter(
-        values["state-dir"],
-        recording
-          ? {
-              adapter: createReplayAdapter(recording),
-              modelId: recording.modelId,
-              expectedText: recording.expectedText,
-            }
-          : null,
-      );
-      if (writer.kind === "unconfirmed") throw new Error(writer.reason);
-      if (writer.kind === "ready") {
-        process.once("SIGTERM", writer.close);
-        process.once("SIGINT", writer.close);
+    } else if (command === "identity" || command === "start") {
+      const parsed = parseInstalledCommand(command, args);
+      if (parsed.kind === "identity") {
+        const signal = AbortSignal.timeout(90_000);
+        const publication = await readInstancePublication(parsed.stateDir);
+        if (!publication) throw Error("Environment is unavailable");
+        process.stdout.write(
+          JSON.stringify(
+            await identityCommand(publication.environmentId, publication.endpoint, signal),
+          ) + "\n",
+        );
+      } else if (parsed.kind === "foreground")
+        await startForeground(parsed.stateDir, parsed.action);
+      else {
+        const recording =
+          parsed.recording === null
+            ? null
+            : parseReplayRecording(await Bun.file(resolve(parsed.recording)).text());
+        const writer = await startWriter(
+          parsed.stateDir,
+          recording
+            ? {
+                adapter: createReplayAdapter(recording),
+                modelId: recording.modelId,
+                expectedText: recording.expectedText,
+              }
+            : null,
+        );
+        if (writer.kind === "unconfirmed") throw new Error(writer.reason);
+        if (writer.kind === "ready") {
+          process.once("SIGTERM", writer.close);
+          process.once("SIGINT", writer.close);
+        }
+        console.log(JSON.stringify({ kind: writer.kind, publication: writer.instance }));
       }
-      console.log(JSON.stringify({ kind: writer.kind, instance: writer.instance }));
     } else if (command === "access") await accessCli(args);
     else if (command === "replay") await replay(args);
-    else throw new Error("Unknown command, expected replay, start, access or daemon");
+    else throw new Error("Unknown command, expected start, identity, access, daemon or replay");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
