@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { releaseExecutable } from "./release-archive";
 import { tmpdir } from "node:os";
 import { parseInstalledCommand } from "../packages/daemon/src";
 import {
@@ -27,11 +28,47 @@ test("a platform archive contains one executable", async () => {
     archiveBytes: artifact.archiveBytes,
     executableBytes: artifact.executableBytes,
   });
-  const bin = await installArtifact(artifact, join(dir, "content"));
+  const prefix = join(dir, "install without tar");
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, "package-release.ts"),
+      "--install",
+      artifact.archive,
+      "--prefix",
+      prefix,
+    ],
+    {
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH"),
+        ),
+        PATH: dir,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [exit, out, err] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (exit !== 0) throw Error("In-process installation failed: " + err);
+  const bin = out.trim();
   const st = await stat(bin);
   expect(st.size).toBe(artifact.executableBytes);
   if (process.platform !== "win32") expect(st.mode & 0o111).toBe(0o111);
 }, 30000);
+test("a release with another regular file is rejected", async () => {
+  const archive = await new Bun.Archive(
+    { kraka: "program", README: "notes" },
+    { compress: "gzip" },
+  ).bytes();
+  expect(() => releaseExecutable(Buffer.from(archive), "kraka", 7)).toThrow(
+    "Expected one regular executable",
+  );
+});
 test("an interrupted install leaves the previous complete version selected", async () => {
   const prefix = join(dir, "interrupt"),
     previous = await installArtifact(artifact, prefix);

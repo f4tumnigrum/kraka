@@ -1,4 +1,5 @@
 import { productionClosure, type DependencyObservation } from "./perf-dependencies";
+import { releaseExecutable } from "./release-archive";
 import { Database } from "bun:sqlite";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
@@ -67,19 +68,15 @@ async function sha256(path: string) {
   for await (const buf of createReadStream(path)) hash.update(buf);
   return hash.digest("hex");
 }
-async function tar(args: string[], cwd?: string) {
-  const child = Bun.spawn(["tar", ...args], {
-    ...(cwd && { cwd }),
-    stdout: "pipe",
+async function packExecutable(directory: string, archiveName: string, executableName: string) {
+  const child = Bun.spawn(["tar", "--format=ustar", "-czf", archiveName, executableName], {
+    cwd: directory,
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+    stdout: "ignore",
     stderr: "pipe",
   });
-  const [code, out, err] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  if (code !== 0) throw Error("Archive operation failed: " + err.trim());
-  return out;
+  const [code, err] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (code !== 0) throw Error("Archive creation failed: " + err.trim());
 }
 export async function buildArtifact({
   version,
@@ -108,7 +105,7 @@ export async function buildArtifact({
     const archive = join(out, name),
       temp = join(stage, name);
     await chmod(file, 0o755);
-    await tar(["-czf", temp, executableName], stage);
+    await packExecutable(stage, name, executableName);
     const result = v.parse(reportSchema, {
       target,
       version,
@@ -136,33 +133,28 @@ export async function readArtifact(archive: string) {
     throw Error("Release target or name mismatch");
   return { ...report, archive: resolve(archive) };
 }
-export async function inspectArchive(report: Artifact) {
-  const a = v.parse(reportSchema, report),
-    archive = resolve(a.archive);
-  if ((await stat(archive)).size !== a.archiveBytes || (await sha256(archive)) !== a.sha256)
+async function verifiedExecutable(artifact: Artifact) {
+  if (artifact.executableName !== (artifact.target.os === "win32" ? "kraka.exe" : "kraka"))
+    throw Error("Release target or name mismatch");
+  const compressed = await readFile(artifact.archive);
+  if (
+    compressed.length !== artifact.archiveBytes ||
+    Bun.SHA256.hash(compressed, "hex") !== artifact.sha256
+  )
     throw Error("Archive digest mismatch");
-  if (
-    (await tar(["-tzf", archive])).trim() !== a.executableName ||
-    !(await tar(["-tvzf", archive])).startsWith("-")
-  )
-    throw Error("Expected one regular executable");
-  const child = Bun.spawn(["tar", "-xOzf", archive, a.executableName], {
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  const hash = createHash("sha256");
-  let executableBytes = 0;
-  for await (const buf of child.stdout) {
-    hash.update(buf);
-    executableBytes += buf.byteLength;
-  }
-  if (
-    (await child.exited) !== 0 ||
-    executableBytes !== a.executableBytes ||
-    hash.digest("hex") !== a.executableSha256
-  )
+  const executable = releaseExecutable(
+    compressed,
+    artifact.executableName,
+    artifact.executableBytes,
+  );
+  if (Bun.SHA256.hash(executable, "hex") !== artifact.executableSha256)
     throw Error("Extracted executable digest mismatch");
-  return { archiveBytes: a.archiveBytes, executableBytes };
+  return executable;
+}
+export async function inspectArchive(report: Artifact) {
+  const artifact = v.parse(reportSchema, report);
+  const executable = await verifiedExecutable(artifact);
+  return { archiveBytes: artifact.archiveBytes, executableBytes: executable.length };
 }
 export async function installArtifact(
   report: Artifact,
@@ -172,19 +164,8 @@ export async function installArtifact(
   const artifact = v.parse(reportSchema, report);
   if (!Bun.deepEquals(artifact.target, hostTarget()))
     throw Error("Release target does not match host");
-  if (
-    (await stat(artifact.archive)).size !== artifact.archiveBytes ||
-    (await sha256(artifact.archive)) !== artifact.sha256
-  )
-    throw Error("Archive digest mismatch");
-  const entry = artifact.executableName,
-    archive = resolve(artifact.archive);
-  if (
-    entry !== (artifact.target.os === "win32" ? "kraka.exe" : "kraka") ||
-    (await tar(["-tzf", archive])).trim() !== entry ||
-    !(await tar(["-tvzf", archive])).startsWith("-")
-  )
-    throw Error("Expected one regular executable");
+  const executable = await verifiedExecutable(artifact);
+  const entry = artifact.executableName;
   const versionDir = join(
     prefix,
     releaseDirectory(v.parse(ActiveReleasePointerSchema, { version: artifact.version })),
@@ -196,7 +177,7 @@ export async function installArtifact(
   const pointer = active + "." + crypto.randomUUID();
   const selected = JSON.stringify({ version: artifact.version }) + "\n";
   try {
-    await tar(["-xzf", archive, "-C", stage, entry]);
+    await writeFile(join(stage, entry), executable, { flag: "wx", mode: 0o755 });
     const verify = async (file: string) => {
       const s = await lstat(file);
       if (
