@@ -19,11 +19,7 @@ export function watchGitDirectory(path: string, invalidate: () => void) {
   const observe = (root: string, recursive: boolean) => {
     try {
       const w = watch(root, { persistent: false, recursive }, (_, name) => {
-        if (
-          name?.split(/[\\/]/).some((p) => p === "objects" || p === "logs") ||
-          name?.endsWith(".lock")
-        )
-          return;
+        if (name && /^\.git[\\/](?:objects|logs|refs[\\/]kraka)(?:[\\/]|$)/.test(name)) return;
         invalidate();
       });
       w.on("error", () => {
@@ -39,7 +35,7 @@ export function watchGitDirectory(path: string, invalidate: () => void) {
   try {
     const admin = gitDirectory(path);
     if (admin) {
-      if (!admin.startsWith(path + "/.git/") && admin !== join(path, ".git")) observe(admin, false);
+      if (admin !== join(path, ".git")) observe(admin, false);
       const commonFile = join(admin, "commondir");
       if (existsSync(commonFile))
         observe(join(resolve(admin, readFileSync(commonFile, "utf8").trimEnd()), "refs"), true);

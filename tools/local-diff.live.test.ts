@@ -13,7 +13,6 @@ import {
   type DiffResult,
   type GitStatus,
   type CommandReceipt,
-  type ThreadId,
 } from "@kraka/protocol";
 import type { GitStatusUpdate } from "../packages/client-runtime/src";
 import { signP256 } from "@kraka/protocol/web-crypto";
@@ -21,6 +20,7 @@ import { connectGitClient } from "../packages/cli-client/src/git-client";
 import { openAccessHost } from "../packages/daemon/src/access";
 import { accepted, startFirstSendFixture, productRoot } from "./fixtures/first-send";
 import { cli, git, readClaim, seedGit } from "./fixtures/isolated-start";
+import { cliObserver } from "./fixtures/local-diff-cli";
 import { Journal } from "./fixtures/route-network";
 import { withState } from "./fixtures/replay-process";
 import type { FixtureCredentials } from "./fixtures/local-diff-browser";
@@ -64,7 +64,9 @@ async function withCheckout(
     const f = await prepare(dir);
     try {
       const driver = await chromium.launch(
-        process.env.CI ? { headless: true } : { channel: "chrome", headless: true },
+        process.env.PLAYWRIGHT_BROWSERS_PATH
+          ? { headless: true }
+          : { channel: "chrome", headless: true },
       );
       try {
         const context = await driver.newContext();
@@ -95,12 +97,22 @@ async function prepare(dir: string) {
   });
   if (!build.success) throw Error(build.logs.join("\n"));
   const completed = new Journal<Ended>();
+  const probes = new Journal<{ directory: string; granularity: string }>();
   const daemon = await startFirstSendFixture({
     stateDir: state,
     projectDirectory: repo.path,
     adapter: "replay",
     point: "local-diff",
     ipc(msg) {
+      const probe = v.safeParse(
+        v.object({
+          event: v.literal("gitProcess"),
+          directory: v.string(),
+          granularity: v.string(),
+        }),
+        msg,
+      );
+      if (probe.success) probes.push(probe.output);
       const row = v.safeParse(endedSchema, msg);
       if (row.success) completed.push(row.output);
     },
@@ -166,7 +178,7 @@ async function prepare(dir: string) {
         generation: project.root.generation,
       };
     };
-    return { dir, state, repo, root, credentials, daemon, thread, completed };
+    return { dir, state, repo, root, credentials, daemon, thread, completed, probes };
   } catch (e) {
     await daemon.close();
     throw e;
@@ -195,19 +207,7 @@ test(
       expect(f.root.realPath).toBe(realpathSync.native(f.repo.path));
       const at = { kind: "thread" as const, ...a },
         bt = { kind: "thread" as const, ...other };
-      const installations = new Journal<GitStatusUpdate>();
-      const key = await crypto.subtle.importKey(
-        "jwk",
-        f.credentials.privateKey,
-        { name: "ECDSA", namedCurve: "P-256" },
-        false,
-        ["sign"],
-      );
-      const cliClient = await connectGitClient(
-        f.credentials.url,
-        { ...f.credentials, sign: (s) => signP256(key, s) },
-        (u) => installations.push(u),
-      );
+      const cliClient = await cliObserver(f.credentials);
       try {
         const open = { granularity: "detailed", streamId: 1, subscriptionId: "git" };
         for (const receipt of [
@@ -218,9 +218,8 @@ test(
         async function installed(branch: string) {
           const [web, terminal] = await Promise.all([
             b.branch("git", branch),
-            installations.until(
-              ({ snapshot: s }) =>
-                s.kind === "detailed" && s.head.kind === "branch" && s.head.name === branch,
+            cliClient.installed(
+              (s) => s.kind === "detailed" && s.head.kind === "branch" && s.head.name === branch,
             ),
           ]);
           for (const [update, target] of [
@@ -238,12 +237,35 @@ test(
           return web.snapshot.sequence;
         }
         const initial = await installed("main");
+        expect(await f.probes.until((p) => p.granularity === "detailed")).toMatchObject({
+          directory: realpathSync.native(f.repo.path),
+        });
+        const stale = await b.request("git.readStatus", {
+          granularity: "detailed",
+          target: { ...at, generation: "0" },
+        });
+        expect(status(stale)).toMatchObject({ kind: "invalidated", target: { generation: "0" } });
+        accepted(
+          await cliClient.request("git.subscribeStatus", {
+            subscriptionId: "stale",
+            streamId: 2,
+            target: { ...bt, generation: "0" },
+            granularity: "branch",
+          }),
+          "subscriptionOpened",
+        );
+        expect((await cliClient.installed((_, id) => id === "stale")).snapshot).toMatchObject({
+          kind: "invalidated",
+          target: { generation: "0" },
+        });
         writeFileSync(join(f.repo.path, "shared.txt"), "shared\n");
         git(f.repo.path, "switch", "-c", "feature");
         expect(await installed("feature")).toBeGreaterThan(initial);
         for (const s of [
           status(await b.request("git.readStatus", { granularity: "detailed", target: at })),
-          await cliClient.status({ granularity: "detailed", target: bt }),
+          status(
+            await cliClient.request("git.readStatus", { granularity: "detailed", target: bt }),
+          ),
         ])
           expect(s).toMatchObject({
             kind: "detailed",
@@ -255,7 +277,7 @@ test(
           reason: "sharedWriter",
         });
       } finally {
-        cliClient.close();
+        await cliClient.close();
       }
     }),
   60000,
@@ -316,6 +338,31 @@ test(
       writeFileSync(join(a.cwd, "marker"), "only in A");
       expect(names(await b.diff({ kind: "workingTree", ...a.query }))).toEqual(["marker"]);
       expect((await b.diff({ kind: "workingTree", ...other.query })).kind).toBe("empty");
+      const oldKey = await crypto.subtle.importKey(
+        "jwk",
+        f.credentials.privateKey,
+        { name: "ECDSA", namedCurve: "P-256" },
+        false,
+        ["sign"],
+      );
+      const legacy = await connectGitClient(
+        f.credentials.url,
+        { ...f.credentials, sign: (s) => signP256(oldKey, s) },
+        () => {},
+        false,
+      );
+      try {
+        const shared = await f.thread();
+        expect(
+          await legacy.request("checkpoint.diff", {
+            query: { kind: "workingTree", ...shared },
+            cursor: null,
+          }),
+        ).toMatchObject({ kind: "rejected", failure: { kind: "unsupported" } });
+        expect(names(await legacy.diff({ kind: "workingTree", ...a.query }))).toEqual(["marker"]);
+      } finally {
+        legacy.close();
+      }
       const path = "version.txt";
       for (const [w, bytes] of [
         [a, "first parent"],
@@ -353,13 +400,13 @@ test(
       expect(git(a.cwd, "rev-list", "--parents", "-1", commit).split(" ")).toHaveLength(3);
       const query = { kind: "commit" as const, ...a.query, commit },
         diff = changed(await b.diff(query));
-      expect(diff.from).toMatchObject({ relation: "firstParent", oid: oid(a.cwd, commit + "^1") });
+      expect(diff.from).toMatchObject({ relation: "firstParent", oid: oid(a.cwd, `${commit}^1`) });
       expect(diff.to).toMatchObject({ relation: "commit", oid: commit });
-      const left = oid(a.cwd, commit + "^1:" + path),
-        right = oid(a.cwd, commit + ":" + path);
-      expect(diff.patch).toContain("index " + left + ".." + right);
-      expect(diff.patch).toContain("-" + git(a.cwd, "cat-file", "blob", left));
-      expect(diff.patch).toContain("+" + git(a.cwd, "cat-file", "blob", right));
+      const left = oid(a.cwd, `${commit}^1:${path}`),
+        right = oid(a.cwd, `${commit}:${path}`);
+      expect(diff.patch).toContain(`index ${left}..${right}`);
+      expect(diff.patch).toContain(`-${git(a.cwd, "cat-file", "blob", left)}`);
+      expect(diff.patch).toContain(`+${git(a.cwd, "cat-file", "blob", right)}`);
       writeFileSync(join(a.cwd, path), "after comparison");
       expect(await b.diff(query)).toEqual(diff);
     }),
@@ -417,7 +464,7 @@ test(
           [files.from.oid, old],
           [files.to.tree, next],
         ] as const) {
-          const probe = Bun.spawnSync(["git", "-C", cwd, "show", object + ":" + path]);
+          const probe = Bun.spawnSync(["git", "-C", cwd, "show", `${object}:${path}`]);
           if (content === null) expect(probe.exitCode).not.toBe(0);
           else {
             expect(probe.exitCode).toBe(0);
@@ -427,7 +474,7 @@ test(
       }
       git(cwd, "add", "-A");
       git(cwd, "commit", "-qm", "new baseline");
-      const text = "好😀".repeat(1450000) + "\n";
+      const text = `${"好😀".repeat(1450000)}\n`;
       writeFileSync(join(cwd, "large.txt"), text);
       const first = changed(await b.diff(query));
       expect(first.truncated).toBe(true);

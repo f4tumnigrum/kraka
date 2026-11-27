@@ -1,8 +1,8 @@
-import { WorkspaceTargetSchema, type GitStatus } from "@kraka/protocol";
-import * as v from "valibot";
+import type { WorkspaceTargetSchema, GitStatus } from "@kraka/protocol";
+import type * as v from "valibot";
 import { readProject, readThread, type FirstSendStore } from "./first-send-store";
 import type { GitGranularity } from "./git-status";
-import { GitStatusCache } from "./git-status";
+import type { GitStatusCache } from "./git-status";
 import type { ResolvedDiffDirectory } from "./local-diff";
 
 type WorkspaceTarget = v.InferOutput<typeof WorkspaceTargetSchema>;
@@ -52,9 +52,8 @@ export function resolveDiffDirectory(
   store: FirstSendStore,
   query: import("@kraka/protocol").DiffRequest,
 ): ResolvedDiffDirectory | null {
-  if (!("threadId" in query)) return null;
   const thread = readThread(store.db, query.threadId);
-  if (!thread || !thread.directory) return null;
+  if (!thread?.directory) return null;
   const directory = store.directory(thread);
   if (!directory) return null;
   if ("worktreeId" in query) {

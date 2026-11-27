@@ -120,7 +120,11 @@ function treeAtWorkingDirectory(directory: string, head: GitObjectId | null) {
     });
     if (add.exitCode !== 0) return null;
     const written = runGit(directory, ["write-tree"], { env: { GIT_INDEX_FILE: index } });
-    return written.exitCode === 0 ? parsedOid(written.stdout.toString().trim()) : null;
+    return written.exitCode === 0 && headCommit(directory) === head
+      ? parsedOid(written.stdout.toString().trim())
+      : null;
+  } catch {
+    return null;
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
@@ -265,7 +269,7 @@ function buildComparison(
 function changedPaths(directory: string, fromTree: GitObjectId, toTree: GitObjectId) {
   const prefixResult = runGit(directory, ["rev-parse", "--show-prefix"]);
   if (prefixResult.exitCode !== 0) return null;
-  const prefix = prefixResult.stdout.toString().trimEnd();
+  const prefix = prefixResult.stdout.toString().replace(/\r?\n$/, "");
   const result = runGit(directory, [
     "diff",
     "--name-status",
@@ -361,18 +365,16 @@ function preparePatch(state: CursorState, path: ChangedPath) {
   }
 }
 function pin(state: CursorState) {
-  const prefix = "refs/kraka/diffs/" + crypto.randomUUID();
+  const prefix = `refs/kraka/diffs/${crypto.randomUUID()}`;
   const from = state.pair.from,
     to = state.pair.to;
   if (from.kind !== "git" || to.kind === "round") return false;
   const right = to.kind === "workingTree" ? to.tree : to.oid;
   const result = runGit(
     state.directory.path,
-    ["-c", "core.hooksPath=" + state.scratch, "update-ref", "--stdin"],
+    ["-c", `core.hooksPath=${state.scratch}`, "update-ref", "--stdin"],
     {
-      input: Buffer.from(
-        "create " + prefix + "/from " + from.oid + "\ncreate " + prefix + "/to " + right + "\n",
-      ),
+      input: Buffer.from(`create ${prefix}/from ${from.oid}\ncreate ${prefix}/to ${right}\n`),
     },
   );
   if (result.exitCode !== 0) return false;
@@ -386,7 +388,7 @@ function release(state: CursorState) {
       const right = to.kind === "workingTree" ? to.tree : to.oid;
       runGit(
         state.directory.path,
-        ["-c", "core.hooksPath=" + state.scratch, "update-ref", "--stdin"],
+        ["-c", `core.hooksPath=${state.scratch}`, "update-ref", "--stdin"],
         {
           input: Buffer.from(
             "delete " +

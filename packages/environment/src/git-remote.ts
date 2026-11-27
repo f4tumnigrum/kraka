@@ -25,7 +25,7 @@ export const probeRemote: RemoteProbe = async (directory, head, started) => {
     const [code, out] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
     return code === 0 ? out.replace(/\r?\n$/, "") : null;
   }
-  const branch = "refs/heads/" + head.name;
+  const branch = `refs/heads/${head.name}`;
   const config = await read([
     "for-each-ref",
     "--format=%(refname)%00%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)",
@@ -42,7 +42,7 @@ export const probeRemote: RemoteProbe = async (directory, head, started) => {
   const tip = await read(["ls-remote", "--exit-code", "--refs", "--", remote, ref]);
   const [oid, found] = tip?.split("\t") ?? [];
   if (found !== ref || !v.is(GitObjectIdSchema, oid)) return null;
-  const counts = await read(["rev-list", "--left-right", "--count", head.tip + "..." + oid]);
+  const counts = await read(["rev-list", "--left-right", "--count", `${head.tip}...${oid}`]);
   if (!counts || !/^\d+\s+\d+$/.test(counts)) return null;
   const [ahead, behind] = counts.split(/\s+/).map(Number);
   return ahead !== undefined &&

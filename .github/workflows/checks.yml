@@ -103,6 +103,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/kraka-s15-chromium
           BASE_ROOT: ${{ steps.baseline.outputs.root }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -114,6 +115,7 @@ jobs:
       - name: Measure budget workloads
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/kraka-s15-chromium
           BASE_ROOT: ${{ steps.baseline.outputs.root }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         shell: bash

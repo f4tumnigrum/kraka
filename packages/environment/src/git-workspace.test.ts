@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitStatusCache, gitStatusProcessCount, readGitStatus } from "./git-status";
+import { RemoteStatusCache, type VerifiedRemote, probeRemote } from "./git-remote";
 import { LocalDiffService } from "./local-diff";
 import { GitObjectIdSchema, ThreadIdSchema, WorkspaceTargetSchema } from "@kraka/protocol";
 import * as v from "valibot";
@@ -20,7 +21,7 @@ function git(directory: string, ...args: string[]) {
     stderr: "pipe",
     env: {
       ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_GLOBAL: devNull,
       GIT_TERMINAL_PROMPT: "0",
       GIT_AUTHOR_NAME: "S15 fixture",
       GIT_AUTHOR_EMAIL: "s15@example.invalid",
@@ -95,9 +96,19 @@ test("reads detailed Git changes and shares a one-second physical probe", () => 
     now = 999;
     read();
     expect(starts).toBe(afterFirstRead);
+    const afterRepeat = starts;
     now = 1_000;
     read();
     expect(starts).toBe(afterFirstRead * 2);
+    console.log(
+      JSON.stringify({
+        granularity: "branch",
+        coldGitStarts: afterFirstRead,
+        additionalStartsAt999ms: afterRepeat - afterFirstRead,
+        additionalStartsAt1000ms: starts - afterRepeat,
+      }),
+    );
+    cache.close();
     expect(gitStatusProcessCount(realpathSync.native(repo.path), "branch")).toBeGreaterThanOrEqual(
       starts,
     );
@@ -248,7 +259,7 @@ test("uses first-parent bytes, reports a missing shallow parent, and follows fro
       resolvedDirectory: rootAddress(repo.path),
     });
     expect(first.kind).toBe("changed");
-    if (first.kind !== "changed" || !first.next) return;
+    if (first.kind !== "changed" || !first.next) throw Error("Expected a continuation");
     const firstBytes = Buffer.byteLength(first.patch);
     expect(firstBytes).toBeLessThanOrEqual(10_000_000);
     expect(Buffer.from(first.patch).toString("utf8")).toBe(first.patch);
@@ -265,6 +276,79 @@ test("uses first-parent bytes, reports a missing shallow parent, and follows fro
       expect(second.patch).toContain("😀");
       expect(second.patch).not.toContain("changed after open");
     }
+  } finally {
+    repo.close();
+  }
+});
+
+test("a new branch drops a late remote result and failed reads back off until verified", async () => {
+  const tip = v.parse(GitObjectIdSchema, "a".repeat(40));
+  type Remote = VerifiedRemote;
+  const probes: ReturnType<typeof Promise.withResolvers<Remote | null>>[] = [];
+  let time = 0;
+  const remote = new RemoteStatusCache(
+    () => time,
+    () => {
+      const p = Promise.withResolvers<Remote | null>();
+      probes.push(p);
+      return p.promise;
+    },
+  );
+  const read = (name: string) =>
+    remote.read("key", "checkout", { kind: "branch", name, tip }, () => {});
+  async function reply(index: number, value: Remote | null) {
+    const p = probes[index];
+    if (!p) throw Error("Missing probe");
+    p.resolve(value);
+    await p.promise;
+  }
+  expect(read("main").kind).toBe("unverified");
+  expect(read("task").kind).toBe("unverified");
+  await reply(0, { kind: "verified", upstream: "origin/main", ahead: 1, behind: 0 });
+  expect(read("task").kind).toBe("unverified");
+  await reply(1, null);
+  let next = 30000;
+  for (const delay of [30000, 60000, 120000, 240000, 480000, 900000, 900000]) {
+    const count = probes.length;
+    time = next - 1;
+    read("task");
+    expect(probes.length).toBe(count);
+    time = next;
+    read("task");
+    expect(probes.length).toBe(count + 1);
+    await reply(count, null);
+    next += Math.min(900000, delay * 2);
+  }
+  time = next;
+  read("task");
+  await reply(probes.length - 1, {
+    kind: "verified",
+    upstream: "origin/task",
+    ahead: 0,
+    behind: 1,
+  });
+  expect(read("task")).toMatchObject({ kind: "verified", upstream: "origin/task", behind: 1 });
+});
+
+test("verifies divergence against a real local upstream without moving HEAD", async () => {
+  const repo = repository();
+  try {
+    git(repo.path, "commit", "--allow-empty", "-qm", "base");
+    git(repo.path, "branch", "upstream", "HEAD");
+    git(repo.path, "branch", "--set-upstream-to=upstream", "main");
+    git(repo.path, "commit", "--allow-empty", "-qm", "ahead");
+    const head = {
+      kind: "branch" as const,
+      name: "main",
+      tip: v.parse(GitObjectIdSchema, git(repo.path, "rev-parse", "HEAD")),
+    };
+    expect(await probeRemote(repo.path, head, () => {})).toEqual({
+      kind: "verified",
+      upstream: "upstream",
+      ahead: 1,
+      behind: 0,
+    });
+    expect(git(repo.path, "rev-parse", "HEAD")).toBe(head.tip);
   } finally {
     repo.close();
   }

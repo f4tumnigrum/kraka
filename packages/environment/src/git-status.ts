@@ -1,8 +1,8 @@
 import { realpathSync, statSync } from "node:fs";
 import {
-  GitGranularitySchema,
+  type GitGranularitySchema,
   GitObjectIdSchema,
-  WorkspaceTargetSchema,
+  type WorkspaceTargetSchema,
   WorkspaceRelativePathSchema,
   type GitStatus,
 } from "@kraka/protocol";
@@ -18,7 +18,7 @@ type StatusInput = {
   target: WorkspaceTarget;
   granularity: GitGranularity;
   authorizedDirectory: string | null;
-  sequence: number;
+  sequence?: number;
   onGitProcess?: ProcessObserver;
 };
 type StatusEntry = {
@@ -189,7 +189,7 @@ export function readGitStatus({
   target,
   granularity,
   authorizedDirectory,
-  sequence,
+  sequence = 1,
   onGitProcess,
 }: StatusInput): GitStatus {
   const invalidated = (): GitStatus => ({ kind: "invalidated", target, sequence, granularity });

@@ -20,12 +20,12 @@ import {
   type CommandReceipt,
   type CommandId,
   DiffResultSchema,
-  WorkspaceTargetSchema,
+  type WorkspaceTargetSchema,
   workspaceAuthorizationTarget,
 } from "@kraka/protocol";
 import {
   acceptTodoReply,
-  GitStatusCache,
+  type GitStatusCache,
   LocalDiffService,
   type LocalActor,
   readProject,
@@ -54,7 +54,7 @@ export async function threadConnection(
     actor: LocalActor,
     command: Extract<SignedRequest, { method: "input.send" }>,
   ) => Promise<CommandReceipt>,
-  gitStatusCache = new GitStatusCache(),
+  gitStatusCache: GitStatusCache,
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   beforeTodo?: (id: CommandId, proceed: () => void) => void,
@@ -155,6 +155,8 @@ export async function threadConnection(
           });
         if (!allows(query.threadId, "thread.view"))
           return { kind: "rejected", commandId, failure: { kind: "notFound" } };
+        if (query.kind === "round" || query.kind === "roundRange")
+          return { kind: "rejected", commandId, failure: { kind: "unsupported" } };
         const directoryDiff = session?.features.includes("directoryDiff") ?? false;
         if ("directoryId" in query && !directoryDiff)
           return {
@@ -166,7 +168,13 @@ export async function threadConnection(
         const diff = directory
           ? diffService.readLocalDiff({
               actor: {
-                scope: `${session?.principal.id ?? ""}\0${query.threadId}`,
+                scope: canonicalJson([
+                  session?.principal.id,
+                  query.threadId,
+                  host.store.db
+                    .query<{ v: number }, []>("SELECT COALESCE(MAX(rowid),0) v FROM changes")
+                    .get()?.v,
+                ]),
                 directoryDiff,
               },
               query,

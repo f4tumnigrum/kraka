@@ -29,6 +29,7 @@ export class GitStatusStream {
     private readonly peer: FlowPeer,
     readonly subscriptionId: SubscriptionId,
     private readonly wake: () => void,
+    private readonly released: () => void,
   ) {
     this.id = peer.send.open(
       subscriptionId,
@@ -116,6 +117,7 @@ export class GitStatusStream {
   }
 
   private dispose() {
+    this.released();
     this.active = null;
     this.pending = null;
   }

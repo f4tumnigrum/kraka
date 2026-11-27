@@ -201,7 +201,14 @@ export class SubscriptionSession {
           this.installSealed(sub);
         }
       }
-      if (r.method === "git.subscribeStatus") this.git.bind(r.payload, m);
+      if (r.method === "git.subscribeStatus") {
+        try {
+          this.git.bind(r.payload, m);
+        } catch (error) {
+          entry.reject(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+      }
       entry.resolve(m);
       return;
     }

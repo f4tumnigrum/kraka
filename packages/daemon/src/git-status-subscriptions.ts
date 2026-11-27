@@ -5,15 +5,15 @@ import {
   type FlowPeer,
   type SignedRequest,
   type SubscriptionId,
-  WorkspaceTargetSchema,
+  type WorkspaceTargetSchema,
 } from "@kraka/protocol";
 import {
-  GitStatusCache,
+  type GitStatusCache,
   resolveWorkspaceTarget,
   readAuthorizedGitStatus,
   type FirstSendStore,
 } from "@kraka/environment";
-import * as v from "valibot";
+import type * as v from "valibot";
 import { GitStatusStream } from "./git-status-stream";
 
 type WorkspaceTarget = v.InferOutput<typeof WorkspaceTargetSchema>;
@@ -37,7 +37,6 @@ export class GitStatusSubscriptions {
     private readonly canRead: (target: WorkspaceTarget) => boolean,
     private readonly cache: GitStatusCache,
     private readonly threadSubscriptionExists: (id: SubscriptionId) => boolean,
-    private readonly onGitProcess?: (directory: string, granularity: "branch" | "detailed") => void,
   ) {
     this.timer = setInterval(() => this.refresh(), 250);
     this.timer.unref();
@@ -57,7 +56,6 @@ export class GitStatusSubscriptions {
         environmentId: this.environmentId,
         target: req.payload.target,
         granularity: req.payload.granularity,
-        ...(this.onGitProcess ? { onGitProcess: this.onGitProcess } : {}),
       });
       return {
         kind: "accepted",
@@ -71,7 +69,10 @@ export class GitStatusSubscriptions {
       if (!this.canRead(target)) return this.denied(commandId, target);
       if (this.subscriptions.has(subscriptionId) || this.threadSubscriptionExists(subscriptionId))
         return this.rejected(commandId, "invalidState");
-      const stream = new GitStatusStream(this.peer, subscriptionId, this.wake);
+      const stream = new GitStatusStream(this.peer, subscriptionId, this.wake, () => {
+        this.subscriptions.get(subscriptionId)?.releaseCache();
+        this.subscriptions.delete(subscriptionId);
+      });
       if (stream.id !== streamId) {
         stream.end("clientClosed");
         return this.rejected(commandId, "invalidState");
@@ -142,7 +143,6 @@ export class GitStatusSubscriptions {
       environmentId: this.environmentId,
       target: subscription.target,
       granularity: subscription.granularity,
-      ...(this.onGitProcess ? { onGitProcess: this.onGitProcess } : {}),
     });
     if (snapshot.sequence === subscription.lastSequence) return;
     subscription.lastSequence = snapshot.sequence;
@@ -150,8 +150,7 @@ export class GitStatusSubscriptions {
   }
 
   private end(subscription: StatusSubscription, reason: "authorizationRevoked" | "clientClosed") {
-    this.subscriptions.delete(subscription.stream.subscriptionId);
-    subscription.releaseCache();
+    this.peer.send.withdraw(subscription.stream.id);
     subscription.stream.end(reason);
   }
 
