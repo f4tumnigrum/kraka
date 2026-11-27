@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { turnAction } from "./input-peer-control";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { createReplayAdapter } from "@kraka/adapter-replay";
 import type { AdapterEventEnvelope } from "@kraka/environment";
@@ -16,7 +17,7 @@ export function attachPeer(adapter: Adapter, state: string) {
     invoke = adapter.invoke,
     events = adapter.events;
   const tickets = new Map<AttemptId, { deliveryId: DeliveryId; messageId: MessageId }>();
-  const reads = new Map<AttemptId, MessageId[]>();
+
   const proofs = new Map<AttemptId, ReturnType<typeof v.parse<typeof NativeItemIdSchema>>>();
   const url = readFileSync(join(state, "peer.url"), "utf8");
   async function observe(
@@ -59,9 +60,6 @@ export function attachPeer(adapter: Adapter, state: string) {
         session.nativeSessionId,
         command,
       );
-      const pending = reads.get(command.attemptId) ?? [];
-      pending.push(command.input.id);
-      reads.set(command.attemptId, pending);
       return { kind: "ok", value: { kind: "written", deliveryId: command.deliveryId } };
     }
     if (command.kind === "service" && command.request.kind === "handoff") {
@@ -97,6 +95,18 @@ export function attachPeer(adapter: Adapter, state: string) {
       const p = event.payload;
       if (p.kind !== "roundStarted") {
         yield event;
+        if (p.kind === "roundEnded") {
+          const ticket = tickets.get(p.attemptId);
+          if (!ticket) throw Error("Missing ending delivery");
+          await observe(
+            "ended",
+            p.attemptId,
+            ticket.deliveryId,
+            ticket.messageId,
+            event.sessionId,
+            null,
+          );
+        }
         continue;
       }
       const t = tickets.get(p.attemptId);
@@ -114,11 +124,22 @@ export function attachPeer(adapter: Adapter, state: string) {
       };
       yield event;
       await observe("start", p.attemptId, t.deliveryId, t.messageId, event.sessionId, p);
-      while (existsSync(join(state, "hold-turn"))) {
-        const late = join(state, "inject-late");
-        if (existsSync(late)) {
-          const source = JSON.parse(readFileSync(late, "utf8"));
-          rmSync(late);
+      for (;;) {
+        const res = await fetch(url + "/turn", {
+          method: "POST",
+          body: JSON.stringify({
+            step: "turn",
+            ...t,
+            attemptId: p.attemptId,
+            sessionId: event.sessionId,
+            data: null,
+          }),
+        });
+        if (!res.ok) throw Error("Missing input peer turn");
+        const action = v.parse(turnAction, await res.json());
+        if (action.kind === "resume") break;
+        if (action.kind === "late") {
+          const { source } = action;
           yield {
             ...event,
             eventId: "late-" + source.deliveryId,
@@ -133,16 +154,34 @@ export function attachPeer(adapter: Adapter, state: string) {
               },
             },
           };
-        }
-        for (const messageId of reads.get(p.attemptId)?.splice(0) ?? []) {
+          await observe(
+            "lateApplied",
+            source.attemptId,
+            source.deliveryId,
+            source.messageId,
+            source.sessionId,
+            null,
+          );
+        } else {
           yield {
             ...event,
-            eventId: "read-" + messageId,
-            payload: { kind: "steerRead", attemptId: p.attemptId, messageId },
+            eventId: "read-" + action.messageId,
+            payload: { kind: "steerRead", attemptId: p.attemptId, messageId: action.messageId },
           } satisfies AdapterEventEnvelope<"replay">;
+          await observe(
+            "steerApplied",
+            p.attemptId,
+            action.deliveryId,
+            action.messageId,
+            event.sessionId,
+            null,
+          );
         }
-        await Bun.sleep(3);
       }
     }
+  };
+  return async function waitForClaim() {
+    const res = await fetch(url + "/claim");
+    if (!res.ok) throw Error("Input peer claim gate failed");
   };
 }
