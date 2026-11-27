@@ -18,7 +18,8 @@
     "build": "bun -e \"require('node:fs').mkdirSync('.build/packages', { recursive: true })\" && bun run --filter '*' build",
     "protocol:reference": "bun tools/protocol-reference.ts",
     "protocol:reference:check": "bun tools/protocol-reference.ts --check",
-    "check:boundaries": "bun tools/check-boundaries.ts"
+    "check:boundaries": "bun tools/check-boundaries.ts",
+    "perf": "bun tools/perf.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.9",
