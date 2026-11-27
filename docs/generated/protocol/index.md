@@ -3804,9 +3804,6 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "result": {
           "oneOf": [
             {
-              "$ref": "#/$defs/ToolActivityReadResult"
-            },
-            {
               "type": "object",
               "properties": {
                 "kind": {
@@ -3906,6 +3903,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "disposition"
               ],
               "additionalProperties": false
+            },
+            {
+              "$ref": "#/$defs/ToolActivityReadResult"
             },
             {
               "type": "object",
@@ -5368,6 +5368,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
               "properties": {
                 "kind": {
                   "const": "subscriptionOpened"
+                },
+                "permissions": {
+                  "$ref": "#/$defs/PermissionSet"
                 },
                 "subscriptionId": {
                   "$ref": "#/$defs/SubscriptionId"

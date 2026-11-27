@@ -13,10 +13,9 @@ import type { FlowPeer } from "./flow-peer";
 /** A signed request or its receipt can exceed a single control frame. */
 export function sendLogicalControl(
   peer: FlowPeer,
-  request: Extract<
-    ControlMessage,
-    { kind: "signedRequest" | "accepted" | "rejected" | "programError" }
-  > | PrivateSecretRequest,
+  request:
+    | Extract<ControlMessage, { kind: "signedRequest" | "accepted" | "rejected" | "programError" }>
+    | PrivateSecretRequest,
 ) {
   const utf8 = peer.port.utf8;
   const data = utf8.encode(JSON.stringify(request));

@@ -118,6 +118,11 @@ export async function startWriter<H extends object>(
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
     threadCommand?: FixtureThreadCommand;
+    beforeInputReceipt?: (
+      request: SignedRequest,
+      receipt: CommandReceipt,
+      deliver: () => void,
+    ) => void;
     beforeTodo?: (id: CommandId, proceed: () => void) => void;
     settingReply?: FixtureSettingReply;
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
@@ -481,6 +486,23 @@ export async function startWriter<H extends object>(
         },
       );
     }
+    const openThread = (nonce: string, reportPermissions = false) =>
+      threadConnection(
+        transaction,
+        authHost,
+        nonce,
+        schedule,
+        sendInput,
+        gitStatusCache,
+        lifecycle?.threadCommand,
+        lifecycle?.inspectPage,
+        lifecycle?.beforeTodo,
+        (actor, cmd) => stops.command({ actor, transaction, commandId: cmd.commandId }, cmd),
+        (actor, cmd) => steerInput(actor, cmd),
+        lifecycle?.settingReply,
+        reportPermissions,
+        lifecycle?.beforeInputReceipt,
+      );
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -497,20 +519,7 @@ export async function startWriter<H extends object>(
             URL,
           );
           if (admission.kind === "reject") return new Response(null, { status: admission.status });
-          const app = await threadConnection(
-            transaction,
-            authHost,
-            admission.nonce,
-            schedule,
-            sendInput,
-            gitStatusCache,
-            lifecycle?.threadCommand,
-            lifecycle?.inspectPage,
-            lifecycle?.beforeTodo,
-            (actor, cmd) => stops.command({ actor, transaction, commandId: cmd.commandId }, cmd),
-            (actor, cmd) => steerInput(actor, cmd),
-            lifecycle?.settingReply,
-          );
+          const app = await openThread(admission.nonce);
           if (!app) return new Response(null, { status: 403 });
           const observe = lifecycle?.observeFrame;
           if (observe)
@@ -522,7 +531,12 @@ export async function startWriter<H extends object>(
           if (server.upgrade(req, { data: { app, flow: null } })) return;
           return new Response(null, { status: 400 });
         }
-        if (fixture && req.method === "GET" && !url.search && (origin === null || origin === server.url.origin)) {
+        if (
+          fixture &&
+          req.method === "GET" &&
+          !url.search &&
+          (origin === null || origin === server.url.origin)
+        ) {
           const page = fixture(url.pathname);
           if (page) return page;
         }
@@ -823,6 +837,7 @@ export async function startWriter<H extends object>(
     return {
       kind: "ready" as const,
       instance,
+      openThread,
       async close() {
         if (!accepting) return;
         accepting = false;

@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Page } from "playwright";
+import type { Page } from "playwright";
+import { launchBrowser } from "./fixtures/browser-selection";
 import * as v from "valibot";
 import {
   DeviceIdSchema,
@@ -63,11 +64,7 @@ async function withCheckout(
   await withState(async (dir) => {
     const f = await prepare(dir);
     try {
-      const driver = await chromium.launch(
-        process.env.PLAYWRIGHT_BROWSERS_PATH
-          ? { headless: true }
-          : { channel: "chrome", headless: true },
-      );
+      const driver = await launchBrowser();
       try {
         const context = await driver.newContext();
         try {

@@ -2,6 +2,7 @@ import { createPublicKey, randomBytes, verify } from "node:crypto";
 import * as v from "valibot";
 import {
   canonicalJson,
+  DEFAULT_DEVICE_PERMISSIONS,
   sendLogicalRequest,
   type PermissionItem,
   type PrivateSecretRequest,
@@ -32,6 +33,7 @@ import {
   acceptTodoReply,
   type GitStatusCache,
   LocalDiffService,
+  applyInputCommand,
   type LocalActor,
   readProject,
   readThread,
@@ -82,6 +84,12 @@ export async function threadConnection(
     command: Extract<SignedRequest, { method: "input.steer" }>,
   ) => CommandReceipt,
   settingReply?: FixtureSettingReply,
+  reportPermissions = false,
+  beforeInputReceipt?: (
+    request: SignedRequest,
+    receipt: CommandReceipt,
+    deliver: () => void,
+  ) => void,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -91,7 +99,10 @@ export async function threadConnection(
     challengeId: crypto.randomUUID(),
     challenge: randomBytes(32).toString("base64url"),
     clientNonce: nonce,
-    protocolVersion: { major: 1, minor: Math.max(TOOL_ACTIVITY_DETAIL_MINOR, SETTING_GENERATION_MINOR) },
+    protocolVersion: {
+      major: 1,
+      minor: Math.max(TOOL_ACTIVITY_DETAIL_MINOR, SETTING_GENERATION_MINOR),
+    },
     features: [
       "strictSchemas",
       "signedRequests",
@@ -101,6 +112,7 @@ export async function threadConnection(
       "timelineItems",
       "directoryDiff",
       "privateSecretSubmission",
+      "queueEditing",
     ],
     identity: host.identity,
   };
@@ -206,7 +218,9 @@ export async function threadConnection(
           : unavailable("invalidated");
         return { kind: "accepted", commandId, result: { kind: "checkpointDiff", diff } };
       }
-      function accept(m: SignedRequest | InboundSettingWrite | PrivateSecretRequest | ClientAuthentication) {
+      function accept(
+        m: SignedRequest | InboundSettingWrite | PrivateSecretRequest | ClientAuthentication,
+      ) {
         const actor = usable(m.signer);
         if (
           !actor ||
@@ -318,6 +332,12 @@ export async function threadConnection(
                   todo.body.kind === "question" ? "thread.reply" : "owner.decide",
                 );
               },
+              ...(reportPermissions
+                ? {
+                    permissions: (id: ThreadId) =>
+                      DEFAULT_DEVICE_PERMISSIONS.filter((right) => allows(id, right)),
+                  }
+                : {}),
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
               protocolMinor: m.protocolVersion.minor,
@@ -432,7 +452,9 @@ export async function threadConnection(
           let result = gitStatus?.handle(m) ?? null;
           if (
             !result &&
-            (m.method === "subscription.openThread" || m.method === "subscription.openList" || m.method === "tool.readActivity") &&
+            (m.method === "subscription.openThread" ||
+              m.method === "subscription.openList" ||
+              m.method === "tool.readActivity") &&
             gitStatus?.has(m.payload.subscriptionId)
           )
             result = {
@@ -496,6 +518,22 @@ export async function threadConnection(
               transaction: store,
               ...m.payload,
             });
+          if (
+            !result &&
+            session.features.includes("queueEditing") &&
+            (m.method === "input.editQueued" ||
+              m.method === "input.cancelQueued" ||
+              m.method === "input.reorderQueue")
+          )
+            result = applyInputCommand({
+              actor: {
+                id: actor.principal.id,
+                environmentId: host.identity.id,
+                allows: (right) => allows(m.payload.threadId, right),
+              },
+              transaction: store,
+              command: m,
+            });
           if (!result && m.method === "input.send") {
             const permitted = allows(m.payload.threadId, "thread.send");
             const injected = permitted ? fixtureCommand?.(m, store) : null;
@@ -511,10 +549,14 @@ export async function threadConnection(
               ).then(
                 (receipt) => {
                   if (receipt.kind === "accepted") schedule(m.payload.threadId, m.commandId);
-                  if (session) {
-                    peer.control(receipt);
-                    wake();
-                  }
+                  const deliver = () => {
+                    if (session) {
+                      peer.control(receipt);
+                      wake();
+                    }
+                  };
+                  if (beforeInputReceipt) beforeInputReceipt(m, receipt, deliver);
+                  else deliver();
                 },
                 () => {
                   if (session) {

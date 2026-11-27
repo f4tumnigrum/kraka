@@ -97,3 +97,5 @@ export * from "./setting-storage";
 export * from "./setting-batch";
 export * from "./thread-list";
 export * from "./list-connection";
+
+export * from "./outbox";

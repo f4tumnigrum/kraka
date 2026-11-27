@@ -12,7 +12,7 @@ import { within, withState, terminate } from "./fixtures/replay-process";
 import { connectDevice, commandId } from "./fixtures/paired-project";
 import { startFirstSendFixture, accepted } from "./fixtures/first-send";
 
-function tlsDial(ca: string, starts: Map<string, number>): RouteDial {
+export function tlsDial(ca: string, starts: Map<string, number>): RouteDial {
   return (url, receive) => {
     const ws = new WebSocket(url, { tls: { ca } });
     ws.onmessage = (e) => receive({ kind: "frame", value: JSON.parse(String(e.data)) });

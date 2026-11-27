@@ -14,6 +14,7 @@ import {
   type PrincipalId,
   type TodoRequest,
   type ProjectId,
+  type PermissionItem,
   type SignedRequest,
   type SubscriptionId,
   type SubscriptionPage,
@@ -59,6 +60,7 @@ type Access = {
   canList: (id: ProjectId | null) => boolean;
   canAnswer: (todo: TodoRequest) => boolean;
   visibility: () => string;
+  permissions?: (thread: ThreadId) => PermissionItem[];
   canRead: (thread: ThreadId) => boolean;
   timelineItems: boolean;
   protocolMinor: number;
@@ -474,6 +476,9 @@ export class ThreadSubscriptions {
         });
         return accepted({
           kind: "subscriptionOpened",
+          ...("threadId" in open && this.access.permissions
+            ? { permissions: this.access.permissions(open.threadId) }
+            : {}),
           subscriptionId: open.subscriptionId,
           streamId: writer.id,
         });

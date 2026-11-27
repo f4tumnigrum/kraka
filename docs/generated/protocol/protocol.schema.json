@@ -3471,9 +3471,6 @@
             "result": {
               "oneOf": [
                 {
-                  "$ref": "#/$defs/ToolActivityReadResult"
-                },
-                {
                   "type": "object",
                   "properties": {
                     "kind": {
@@ -3573,6 +3570,9 @@
                     "disposition"
                   ],
                   "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/ToolActivityReadResult"
                 },
                 {
                   "type": "object",
@@ -5035,6 +5035,9 @@
                   "properties": {
                     "kind": {
                       "const": "subscriptionOpened"
+                    },
+                    "permissions": {
+                      "$ref": "#/$defs/PermissionSet"
                     },
                     "subscriptionId": {
                       "$ref": "#/$defs/SubscriptionId"

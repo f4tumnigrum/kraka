@@ -1242,6 +1242,7 @@ export const RequestResultSchema = v.variant("kind", [
   }),
   v.strictObject({
     kind: v.literal("subscriptionOpened"),
+    permissions: v.optional(PermissionSetSchema),
     subscriptionId: SubscriptionIdSchema,
     streamId: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)),
   }),

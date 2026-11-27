@@ -9,7 +9,6 @@ import {
   ToolActivityReferenceSchema,
   type ControlMessage,
   type TransportFrame,
-  type SignedRequest,
   type ToolActivityBody,
   type ToolActivityHistoryItem,
 } from "@kraka/protocol";
@@ -24,7 +23,7 @@ test("only complete authorized bodies install across split UTF-8, stale blocks a
     encode: (s: string) => new TextEncoder().encode(s),
     decode: (b: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(b),
   };
-  const requests = new Journal<SignedRequest>();
+  const requests = new Journal<Extract<ControlMessage, { kind: "signedRequest" }>>();
   let cache = emptyThreadCache(),
     controlOffset = 0,
     offset = 0;

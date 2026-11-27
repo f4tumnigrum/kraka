@@ -49,7 +49,12 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions" | "tool.readActivity" | "worktree.recovery" | "browserTLS" | "codex.recovery";
+  variant?:
+    | "access.listSessions"
+    | "tool.readActivity"
+    | "worktree.recovery"
+    | "browserTLS"
+    | "codex.recovery";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -332,9 +337,9 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
                 { metric, variant: "worktree.recovery" },
                 { metric, variant: "codex.recovery" },
               ]
-        : metric === "P11"
-          ? [{ metric }, { metric, variant: "tool.readActivity" }]
-            : [{ metric }],
+            : metric === "P11"
+              ? [{ metric }, { metric, variant: "tool.readActivity" }]
+              : [{ metric }],
     );
 }
 
@@ -502,7 +507,15 @@ export async function prepareBudget(root: string, role: Role) {
       ) {
         const { measureThreadList } = await import("./measure-thread-list");
         report = measured(base, await measureThreadList(base, root, nextBlock));
+      } else if (
+        metric === "P4" &&
+        role === "baseline" &&
+        !(await Bun.file(join(root, "packages/client-runtime/hosts/sqlite.ts")).exists())
+      ) {
+        report = unavailable(base, "Parent lacks the persistent outbox profile reopen workload");
       } else if ((metric === "P3" || metric === "P4") && subscriptions) {
+        if (metric === "P4")
+          base.workload += " after reopening a profile with an unaccepted local input";
         const { measureThreadResume } = await import("./measure-thread-resume");
         const series = await measureThreadResume(base, root, metric, nextBlock);
         report = measured(base, series as Record<string, number>);

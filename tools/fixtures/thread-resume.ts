@@ -277,7 +277,12 @@ export async function threadFixture<T>(
     }
   });
 }
-async function setup(dir: string, root: string, recordSentBytes: boolean, onStage?: (name: string) => void) {
+async function setup(
+  dir: string,
+  root: string,
+  recordSentBytes: boolean,
+  onStage?: (name: string) => void,
+) {
   onStage?.("pairing devices");
   const pairing = await startPairedProject({
     stateDir: dir,
@@ -342,6 +347,15 @@ async function setup(dir: string, root: string, recordSentBytes: boolean, onStag
     dir,
     stateDir,
     threadId,
+    ownerScope: {
+      principalId: pairing.owner.principal.id,
+      environmentId: pairing.identity.id,
+      threadId,
+    },
+    closeCache(name: string) {
+      caches.get(name)?.close();
+      caches.delete(name);
+    },
     control,
     async seed(rows: unknown[]) {
       await control({ rows });

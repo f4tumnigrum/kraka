@@ -43,11 +43,19 @@ jobs:
           set -euo pipefail
           bun test tools/browser-https.live.test.ts 2>&1 | tee "$RUNNER_TEMP/browser-native.log"
           for group in 1 2 3 4; do grep -F "(pass) native $group. " "$RUNNER_TEMP/browser-native.log"; done
+      - name: Verify four browser outbox cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          NO_COLOR=1 bun test tools/browser-outbox.live.test.ts 2>&1 | tee "$RUNNER_TEMP/browser-outbox.log"
+          for group in 1 2 3 4; do grep -E "\(pass\).*outbox $group\. " "$RUNNER_TEMP/browser-outbox.log"; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: browser-native-${{ matrix.os }}
-          path: ${{ runner.temp }}/browser-native.log
+          path: |
+            ${{ runner.temp }}/browser-native.log
+            ${{ runner.temp }}/browser-outbox.log
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck
@@ -118,6 +126,7 @@ jobs:
             --path-ignore-patterns "**/tool-activity.live.test.ts" \
             --path-ignore-patterns "**/codex-turn.live.test.ts" \
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
+            --path-ignore-patterns "**/browser-outbox.live.test.ts" \
             --path-ignore-patterns "**/browser-https.live.test.ts" \
             --path-ignore-patterns "**/local-diff.live.test.ts" \
             --path-ignore-patterns "**/first-answer.live.test.ts" \
