@@ -50,6 +50,12 @@ export * from "./access-store";
 export * from "./writer";
 export * from "./first-send-store";
 export * from "./first-send";
+export { recordCommand, type FirstSendContext, type LocalActor } from "./command-receipts";
+export { managedView } from "./worktree-git";
+export * from "./isolated-start";
+export * from "./worktree-storage";
+export * from "./worktree-prepare";
+export { worktreeWorkerCommand, runWorktreeWorker } from "./worktree-worker";
 
 export * from "./input-command";
 export * from "./input-store";

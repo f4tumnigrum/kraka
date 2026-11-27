@@ -49,7 +49,7 @@ function hostInfo() {
 }
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
-  variant?: "access.listSessions" | "tool.readActivity";
+  variant?: "access.listSessions" | "tool.readActivity" | "worktree.recovery";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -322,7 +322,9 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
         ? [{ metric, variant: "access.listSessions" }, { metric }]
         : metric === "P11"
           ? [{ metric }, { metric, variant: "tool.readActivity" }]
-          : [{ metric }],
+          : metric === "P7"
+            ? [{ metric }, { metric, variant: "worktree.recovery" }]
+            : [{ metric }],
     );
 }
 
@@ -384,6 +386,19 @@ export async function prepareBudget(root: string, role: Role) {
         } else {
           const { measureToolActivity } = await import("./measure-tool-activity");
           report = measured(base, await measureToolActivity(base, root, nextBlock));
+        }
+      } else if (variant === "worktree.recovery") {
+        base.workload = "Five restarts of a daemon with an unfinished managed checkout";
+        base.endpoint = "original worktree claim's evidenced disposition";
+        base.thresholds = [{ series: "claimRecovery", unit: "ms", statistic: "each", limit: 2000 }];
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, "packages/environment/src/worktree-prepare.ts")).exists())
+        ) {
+          report = unavailable(base, "Parent lacks managed worktree recovery");
+        } else {
+          const { measureClaimRecovery } = await import("./measure-first-send");
+          report = measured(base, await measureClaimRecovery(base, root, nextBlock));
         }
       } else if (variant === "access.listSessions") {
         base.workload =

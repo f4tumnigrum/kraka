@@ -78,6 +78,7 @@ import {
 } from "./terminal";
 import {
   WorktreePrepareSchema,
+  WorktreeSelectionSchema,
   WorktreeRetrySchema,
   WorktreeCleanSchema,
   WorktreeViewSchema,
@@ -146,6 +147,7 @@ import {
   ThreadIdSchema,
   TodoRequestIdSchema,
   WorktreeIdSchema,
+  WorktreeGenerationSchema,
 } from "./ids";
 import {
   AttachmentReferenceSchema,
@@ -1119,6 +1121,7 @@ export const RequestResultSchema = v.variant("kind", [
   v.strictObject({ kind: v.literal("terminalControl"), control: TerminalControlSchema }),
   v.strictObject({ kind: v.literal("terminalSession"), session: TerminalSessionSchema }),
   v.strictObject({ kind: v.literal("terminalInput"), receipt: TerminalInputReceiptSchema }),
+  WorktreeSelectionSchema,
   v.strictObject({ kind: v.literal("worktreeStatus"), view: WorktreeViewSchema }),
   v.strictObject({
     kind: v.literal("worktreeRetained"),
@@ -1197,6 +1200,14 @@ export const CommandReceiptSchema = v.variant("kind", [
     failure: v.union([
       AuthorizationFailureSchema,
       QueueConflictSchema,
+      v.strictObject({
+        kind: v.literal("worktreeRestoreFailed"),
+        threadId: ThreadIdSchema,
+        worktreeId: WorktreeIdSchema,
+        generation: WorktreeGenerationSchema,
+        reason: v.picklist(["sourceUnavailable", "ownershipUnconfirmed", "setupFailed"]),
+        view: WorktreeViewSchema,
+      }),
       v.strictObject({
         kind: v.literal("threadVersionConflict"),
         threadId: ThreadIdSchema,

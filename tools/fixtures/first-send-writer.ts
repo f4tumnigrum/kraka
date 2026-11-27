@@ -13,20 +13,29 @@ import * as v from "valibot";
 import { startWriter } from "../../packages/daemon/src/first-send";
 import { attachPeer } from "./input-adapter";
 import { fixture } from "./replay-process";
+import { runWorktreeWorker, worktreeWorkerCommand } from "@kraka/environment";
+if (process.argv[2] === worktreeWorkerCommand) {
+  await runWorktreeWorker(process.argv[3]);
+  process.exit(0);
+}
 
 const [stateDir, root, point] = process.argv.slice(2);
 if (!stateDir || !root) throw new Error("Expected state and product roots");
 const state = stateDir;
-function barrier(name: string) {
+function barrier(name: string, data = "entered") {
   if (point !== name) return;
   const marker = join(state, `entered-${name}`);
   if (existsSync(marker)) return;
-  writeFileSync(marker, "entered", { flag: "wx" });
+  writeFileSync(marker, data, { flag: "wx" });
   while (!existsSync(join(state, `release-${name}`))) Bun.sleepSync(5);
 }
 const recording = parseReplayRecording(readFileSync(join(root, fixture), "utf8"));
 const adapter = createReplayAdapter(recording);
-if (point === "peer" || point === "externalWrite") {
+if (
+  point === "peer" ||
+  point === "externalWrite" ||
+  ["claimed", "registered", "beforeSetup", "setupExited"].includes(point ?? "")
+) {
   const open = adapter.open,
     invoke = adapter.invoke;
   const sessions = new WeakMap<object, { cwd: string; frames: unknown[] }>();
@@ -113,6 +122,9 @@ const writer = await startWriter(
           },
         }
       : {}),
+    preparation(point, managed) {
+      barrier(point, JSON.stringify(managed));
+    },
     async beforeDispatch() {
       if (point === "recovery") while (existsSync(join(state, "hold-claim"))) await Bun.sleep(3);
       if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {

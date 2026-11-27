@@ -4,7 +4,12 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
-import { runReplayTurn, type ProviderAdapter } from "@kraka/environment";
+import {
+  runWorktreeWorker,
+  worktreeWorkerCommand,
+  runReplayTurn,
+  type ProviderAdapter,
+} from "@kraka/environment";
 import { ReplayRunRequestSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import { listenFlow } from "./flow-socket";
@@ -149,7 +154,8 @@ export async function listenReplay<H extends object>({
 if (import.meta.main && process.argv.length > 2) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === "daemon") {
+    if (command === worktreeWorkerCommand) await runWorktreeWorker(args[0]);
+    else if (command === "daemon") {
       const { values } = parseArgs({
         args,
         options: {
