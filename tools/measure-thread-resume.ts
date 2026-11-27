@@ -5,11 +5,16 @@ import { threadFixture, turnRows } from "./fixtures/thread-resume";
 import { within } from "./fixtures/replay-process";
 import type { ReportBase } from "./perf";
 
-export async function measureThreadResume(base: ReportBase, root: string, id: "P3" | "P4") {
+export async function measureThreadResume(
+  base: ReportBase,
+  root: string,
+  id: "P3" | "P4",
+  nextBlock: () => Promise<void>,
+) {
   if (id === "P3") {
     base.expected = { updates: 1250, warmups: 250 };
     base.actual = { updates: 0, warmups: 0 };
-    for (let run = 0; run < 5; run++)
+    for (let run = 0; run < 5; run++) {
       await threadFixture(async (f) => {
         await f.start();
         let applied = 0,
@@ -113,11 +118,13 @@ export async function measureThreadResume(base: ReportBase, root: string, id: "P
           });
         }
       }, root);
+      await nextBlock();
+    }
     return { sendToReceive: 1250, receiptToReceive: 1250 };
   }
   base.expected = { cold: 10, short: 10, long: 10 };
   base.actual = { cold: 0, short: 0, long: 0 };
-  for (let trial = 0; trial < 10; trial++)
+  for (let trial = 0; trial < 10; trial++) {
     await threadFixture(async (f) => {
       await f.start();
       const range = (from: number, to: number) =>
@@ -205,5 +212,7 @@ export async function measureThreadResume(base: ReportBase, root: string, id: "P
         await c.close();
       }
     }, root);
+    await nextBlock();
+  }
   return { cold: 10, short: 10, long: 10 };
 }

@@ -253,3 +253,33 @@ test("4. effective ask policy, early root, original tool and assistant frames, a
     ).toHaveLength(0);
   });
 }, 60000);
+
+test("existing-thread input uses its original Codex registration and records one native delivery on replay", async () => {
+  await scenario({}, async (f) => {
+    await configure(f);
+    await refresh(f);
+    const first = accepted((await f.send()).receipt, "threadStarted");
+    await f.waitTerminal();
+    f.updates.length = 0;
+    const payload = { threadId: first.threadId, content: f.payload.content };
+    const receipt = (await f.client.send("input.send", payload, "second-input")).receipt;
+    const second = accepted(receipt, "inputScheduled");
+    await f.waitTerminal();
+    expect(f.updates.at(-1)).toMatchObject({
+      kind: "round.ended",
+      roundId: second.roundId,
+      attemptId: second.attemptId,
+    });
+    expect((await f.client.send("input.send", payload, "second-input")).receipt).toEqual(receipt);
+    const history = await f.client.readInputHistory(first.threadId, second.roundId);
+    expect(history.rounds[0]?.attempts).toMatchObject([
+      { attemptId: second.attemptId, deliveryId: second.deliveryId, phase: { kind: "closing" } },
+    ]);
+    expect(
+      f.ledger
+        .rows()
+        .filter((row) => row.event === "turn/start" && row.hasInput)
+        .map((row) => row.clientId),
+    ).toEqual([first.deliveryId, second.deliveryId]);
+  });
+}, 60000);

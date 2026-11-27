@@ -42,6 +42,7 @@ export interface AuthorizedScope {
   environmentId: SyncCursor["environmentId"];
   canRead: (source: ThreadId) => boolean;
   timelineItems: boolean;
+  protocolMinor: number;
 }
 function readSources(scope: AuthorizedScope, view: ThreadReadView) {
   const sources = new Map<ThreadId, SyncPosition>();

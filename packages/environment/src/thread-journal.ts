@@ -11,6 +11,7 @@ import {
   TextReturnedEventSchema,
   keyString,
   rowKey,
+  roundForProtocol,
   type HistoryPage,
   type HistoryRow,
   type ObjectKey,
@@ -171,7 +172,7 @@ export class ThreadJournal {
         databaseGeneration: meta.generation,
         visibilityGeneration: visibility,
         scope: { kind: "thread", threadId: scope.threadId },
-        shapeVersion: scope.timelineItems ? 2 : 1,
+        shapeVersion: (scope.protocolMinor >= 1 ? 3 : 1) + Number(scope.timelineItems),
         through: meta.head,
       });
       const result: ThreadReadView = {
@@ -211,6 +212,8 @@ export class ThreadJournal {
             });
           } else {
             const row = v.parse(rowSchema, JSON.parse(data.payload));
+            if (row.objectType === "round")
+              row.value = roundForProtocol(row.value, scope.protocolMinor);
             rows.push({ row, source, created, changed, round: data.round });
             if (row.objectType === "thread" && row.value.lineage.kind === "fork")
               parent = row.value.lineage.parentThreadId;

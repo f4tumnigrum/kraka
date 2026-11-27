@@ -105,6 +105,21 @@ test("a shared dependency counts once, selected native and optional packages are
     await put(dir, "node_modules/native/build/addon.node", "sample artifact");
     const { exit, reports } = await run(dir, "A1");
     expect(exit).toBe(1);
+    const collect = () =>
+      Bun.spawnSync(
+        [process.execPath, join(import.meta.dir, "perf.ts"), "A1", "--root", dir, "--report-only"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+    const breach = collect();
+    expect(breach.exitCode).toBe(0);
+    expect(JSON.parse(breach.stdout.toString())).toMatchObject({
+      status: "measured",
+      result: "breach",
+    });
+    await put(dir, "bun.lock", "invalid lock");
+    const failed = collect();
+    expect(failed.exitCode).toBe(1);
+    expect(JSON.parse(failed.stdout.toString())).toMatchObject({ status: "failed" });
     expect(reports[0]).toMatchObject({
       status: "measured",
       result: "breach",

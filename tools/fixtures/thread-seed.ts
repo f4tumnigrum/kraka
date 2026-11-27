@@ -40,7 +40,8 @@ export function scenarioInput(
   request: SignedRequest,
   store: FirstSendStore,
 ): CommandReceipt | null {
-  if (request.method !== "input.send") return null;
+  if (request.method !== "input.send" || request.payload.threadId.toString() !== "thread-notes")
+    return null;
   const { threadId, content } = request.payload;
   const message = v.parse(MessageSchema, {
     ...content,

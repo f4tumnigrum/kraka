@@ -14,8 +14,14 @@ import {
   type ClientAuthentication,
   type ThreadId,
   type CommandReceipt,
+  type CommandId,
 } from "@kraka/protocol";
-import { readThread, renameThread, type FirstSendStore } from "@kraka/environment";
+import {
+  applyInputCommand,
+  readThread,
+  renameThread,
+  type FirstSendStore,
+} from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
 import type { openAccessHost } from "./access";
 import type { SocketApplication } from "./flow-socket";
@@ -29,6 +35,7 @@ export async function threadConnection(
   store: FirstSendStore,
   host: Access,
   nonce: string,
+  schedule: (threadId: ThreadId, commandId: CommandId) => void,
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
 ): Promise<SocketApplication | null> {
@@ -40,7 +47,7 @@ export async function threadConnection(
     challengeId: crypto.randomUUID(),
     challenge: randomBytes(32).toString("base64url"),
     clientNonce: nonce,
-    protocolVersion: { major: 1, minor: 0 },
+    protocolVersion: { major: 1, minor: 1 },
     features: [
       "strictSchemas",
       "signedRequests",
@@ -101,7 +108,8 @@ export async function threadConnection(
           m.challenge !== hello.challenge ||
           m.challengeId !== hello.challengeId ||
           m.protocolVersion.major !== 1 ||
-          m.protocolVersion.minor !== 0 ||
+          m.protocolVersion.minor > hello.protocolVersion.minor ||
+          (session && m.protocolVersion.minor !== session.protocolVersion.minor) ||
           m.sequence !== seq + 1 ||
           (session && canonicalJson(m.signer) !== canonicalJson(session.signer))
         )
@@ -178,6 +186,7 @@ export async function threadConnection(
               },
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
+              protocolMinor: m.protocolVersion.minor,
             },
             inspectPage,
           );
@@ -195,8 +204,22 @@ export async function threadConnection(
               transaction: store,
               ...m.payload,
             });
-          if (!result && m.method === "input.send" && allows(m.payload.threadId, "thread.send"))
-            result = fixtureCommand?.(m, store) ?? null;
+          if (!result && m.method === "input.send") {
+            const permitted = allows(m.payload.threadId, "thread.send");
+            const injected = permitted ? fixtureCommand?.(m, store) : null;
+            result =
+              injected ??
+              applyInputCommand({
+                actor: {
+                  id: actor.principal.id,
+                  environmentId: host.identity.id,
+                  allows: () => permitted,
+                },
+                transaction: store,
+                command: m,
+              });
+            if (!injected && result.kind === "accepted") schedule(m.payload.threadId, m.commandId);
+          }
           peer.control(
             result ?? {
               kind: "rejected",

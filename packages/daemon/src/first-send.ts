@@ -1,36 +1,55 @@
 import { openAccessHost } from "./access";
 import { threadConnection, type FixtureThreadCommand } from "./thread-connection";
 import { attachFlow, type SocketApplication } from "./flow-socket";
-import { checkBusinessUpgrade } from "@kraka/protocol";
-import { CodexInstances, type CodexSelection } from "./codex-instances";
+import { inputReads, inputReadMethods } from "./input-reads";
+import { createPublicKey, randomBytes, verify } from "node:crypto";
+import { CodexInstances } from "./codex-instances";
 import { dispatchCodex } from "./durable-codex";
-import { createPublicKey, verify, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import * as v from "valibot";
 import {
-  readReceipt,
-  openWriter,
-  openStore,
-  registerProject,
   acceptFirstInput,
-  renameThread,
+  applyInputCommand,
+  advanceQueue,
   type FirstSendStore,
+  firstPending,
+  frozenInput,
+  inputMethods,
+  loadQueue,
+  openStore,
+  openWriter,
   type ProviderAdapter,
+  type RecoveryScope,
+  readMessage,
+  readReceipt,
+  readRound,
+  readThread,
+  recordInputEvidence,
+  registerProject,
+  renameThread,
 } from "@kraka/environment";
 import {
+  checkBusinessUpgrade,
+  CheckpointCaptureSchema,
+  type CommandId,
+  CommandIdSchema,
+  type CommandReceipt,
   canonicalJson,
   HostInstanceIdSchema,
+  type PermissionItem,
+  PermissionItemSchema,
   PrincipalIdSchema,
   REQUEST_METHODS,
-  RequestSignerSchema,
   type ReplayTurnUpdate,
-  PermissionItemSchema,
-  type PermissionItem,
+  type RoundId,
+  type ExecutorTurnUpdate,
+  RequestSignerSchema,
+  RoundSchema,
   type SignedRequest,
-  type CommandReceipt,
+  type ThreadId,
 } from "@kraka/protocol";
-import { dispatchReplay } from "./durable-replay";
+import * as v from "valibot";
+import { type ActiveSteers, dispatchReplay, inspectOriginalInput } from "./durable-replay";
 
 const methods = v.variant("method", [
   REQUEST_METHODS.configureExecutor.schema,
@@ -38,6 +57,8 @@ const methods = v.variant("method", [
   REQUEST_METHODS.registerProject.schema,
   REQUEST_METHODS.startThread.schema,
   REQUEST_METHODS.renameThread.schema,
+  ...inputReadMethods.map((m) => m.schema),
+  ...inputMethods.map((m) => m.schema),
 ]);
 export const localOwnerSchema = v.strictObject({
   principalId: PrincipalIdSchema,
@@ -49,15 +70,22 @@ type Commands = { connectionId: string; challengeId: string; challenge: string; 
 type Session = Commands | { app: SocketApplication; flow: ReturnType<typeof attachFlow> | null };
 export async function startWriter<H extends object>(
   stateDir: string,
-  replay: { adapter: ProviderAdapter<"replay", H>; expectedText: string; modelId: string } | null,
+  replay: {
+    adapter: ProviderAdapter<"replay", H>;
+    expectedText: string;
+    modelId: string;
+    recovery?: RecoveryScope;
+    confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
+  } | null,
   lifecycle?: {
     inspectPage?: (
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
     threadCommand?: FixtureThreadCommand;
+    beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
-    committed?: (request: SignedRequest, receipt: CommandReceipt) => void;
+    committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
     update?: (event: ReplayTurnUpdate) => void;
   },
 ) {
@@ -71,7 +99,7 @@ export async function startWriter<H extends object>(
   let auth: Awaited<ReturnType<typeof openAccessHost>> | undefined;
   try {
     lifecycle?.locked?.();
-    const transaction = openStore(lock.lease);
+    const transaction = openStore(lock.lease, replay?.recovery);
     store = transaction;
     lifecycle?.opened?.(transaction);
     const codex = new CodexInstances(transaction);
@@ -90,10 +118,128 @@ export async function startWriter<H extends object>(
     };
     const authHost = await openAccessHost(stateDir);
     auth = authHost;
+    const reads = inputReads(transaction, actor);
+    transaction.onQueueChanged = (threadId) => queueMicrotask(() => reads.changed(threadId));
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
     const controller = new AbortController();
     let accepting = true;
+    const steers: ActiveSteers = new Map();
+    const recipients = new Map<RoundId, Bun.ServerWebSocket<Session>>();
+    function schedule(threadId: ThreadId, commandId: CommandId) {
+      if (turns.has(threadId) || !accepting) return;
+      const pump = async () => {
+        await lifecycle?.beforeDispatch?.(threadId);
+        while (accepting) {
+          const queue = loadQueue(transaction, threadId);
+          const head = firstPending(queue.rows);
+          if (!head) return;
+          const phase = head.attempt.phase;
+          if (
+            phase.kind === "closing" &&
+            queue.rows.some((r) => r.attempt.phase.kind === "filed")
+          ) {
+            const thread = readThread(transaction.db, threadId);
+            const frozen = frozenInput(transaction, head.attempt.deliveryId);
+            if (!thread || thread.worktreeId !== null || !frozen) return;
+            const capture = v.parse(CheckpointCaptureSchema, {
+              id: phase.captureId,
+              roundId: head.id,
+              attemptId: head.attempt.attemptId,
+              version: "1",
+              result: { kind: "missing", reason: "noWorktree" },
+            });
+            const settled = transaction.db.transaction(() => {
+              const evidence = recordInputEvidence(transaction, frozen.target, {
+                ...head.attempt,
+                kind: "captureSettled",
+                capture,
+              });
+              if (evidence.kind === "ok")
+                transaction.db.run("INSERT OR REPLACE INTO turn_work VALUES(?,?,?)", [
+                  head.id,
+                  "capture",
+                  JSON.stringify(capture),
+                ]);
+              return evidence;
+            })();
+            if (settled.kind === "rejected") return;
+            continue;
+          }
+          if (
+            (phase.kind !== "filed" && phase.kind !== "recovering") ||
+            phase.gate === "held" ||
+            (phase.kind === "recovering" && phase.action !== "retrySameDelivery")
+          )
+            return;
+          const round = readRound(transaction.db, head.id);
+          if (!round) return;
+          const saved = codex.forThread(threadId);
+          if (saved) {
+            const thread = readThread(transaction.db, threadId);
+            if (!thread) return;
+            const selection = await codex.resolve(saved, actor.id, thread.projectId);
+            if (!accepting) return;
+            if (!selection) {
+              const current = readRound(transaction.db, round.id);
+              if (current?.version !== round.version) continue;
+              const reason = "Saved executor configuration unavailable";
+              transaction.db.transaction(() => {
+                transaction.setPhase(current, { kind: "notDelivered", reason, lateReceipt: null });
+                advanceQueue(transaction, threadId);
+              })();
+              const recipient = recipients.get(round.id);
+              if (recipient?.readyState === 1)
+                recipient.send(
+                  JSON.stringify({
+                    kind: "executor.failed",
+                    roundId: round.id,
+                    attemptId: round.attempt.attemptId,
+                    reason: "invalidState",
+                    message: reason,
+                  } satisfies ExecutorTurnUpdate),
+                );
+              recipients.delete(round.id);
+              continue;
+            }
+            await dispatchCodex(
+              transaction,
+              round,
+              selection,
+              () =>
+                codex.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+                selection.snapshot,
+              (event: ExecutorTurnUpdate) => {
+                const recipient = recipients.get(round.id);
+                if (recipient?.readyState === 1) recipient.send(JSON.stringify(event));
+              },
+              controller.signal,
+            );
+          } else if (replay) {
+            await dispatchReplay(
+              transaction,
+              round,
+              commandId,
+              replay,
+              (event) => lifecycle?.update?.(event),
+              controller.signal,
+              steers,
+            );
+          } else return;
+          recipients.delete(round.id);
+          if (readRound(transaction.db, head.id)?.version === round.version) return;
+        }
+      };
+      const run = Bun.sleep(0).then(pump);
+      turns.set(threadId, run);
+      void run.then(
+        () => turns.delete(threadId),
+        (error) => {
+          turns.delete(threadId);
+          console.error(error);
+        },
+      );
+    }
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -108,6 +254,7 @@ export async function startWriter<H extends object>(
             transaction,
             authHost,
             admission.nonce,
+            schedule,
             lifecycle?.threadCommand,
             lifecycle?.inspectPage,
           );
@@ -170,7 +317,7 @@ export async function startWriter<H extends object>(
             if (
               req.environmentId !== actor.environmentId ||
               req.protocolVersion.major !== 1 ||
-              req.protocolVersion.minor !== 0 ||
+              req.protocolVersion.minor > 1 ||
               req.connectionId !== session.connectionId ||
               req.challengeId !== session.challengeId ||
               req.challenge !== session.challenge ||
@@ -188,7 +335,20 @@ export async function startWriter<H extends object>(
             }
             session.sequence = req.sequence;
             const context = { actor, commandId: req.commandId, transaction };
-            let selection: CodexSelection | null = null;
+            if (
+              req.method === "thread.readHistory" ||
+              req.method === "subscription.openThread" ||
+              req.method === "subscription.pageSaved" ||
+              req.method === "subscription.installed" ||
+              req.method === "subscription.close"
+            ) {
+              reads.request(ws, req);
+              return;
+            }
+            const priorSteer =
+              req.method === "input.steer" && actor.allows("thread.send")
+                ? readReceipt(transaction.db, actor.id, req.commandId)
+                : null;
             let receipt: CommandReceipt;
             switch (req.method) {
               case "executor.configure":
@@ -227,8 +387,7 @@ export async function startWriter<H extends object>(
                 )
                   entry = await codex.lookup(id, actor.id, projectId);
                 if (!accepting) return;
-                selection = codex.select(entry, model);
-                const chosen = selection;
+                const chosen = codex.select(entry, model);
                 receipt = acceptFirstInput({
                   verifiedActor: actor,
                   commandId: req.commandId,
@@ -256,53 +415,55 @@ export async function startWriter<H extends object>(
                 });
                 break;
               }
+              default:
+                receipt = applyInputCommand({
+                  actor,
+                  transaction,
+                  command: req,
+                  supportsSteer: (id) => steers.has(id),
+                });
             }
-            lifecycle?.committed?.(req, receipt);
-            ws.send(JSON.stringify(receipt));
-            if (
-              receipt.kind === "accepted" &&
-              receipt.result.kind === "threadStarted" &&
-              !turns.has(receipt.result.roundId)
-            ) {
+            if (lifecycle?.committed?.(req, receipt) === "disconnect") ws.close(1011);
+            else ws.send(JSON.stringify(receipt));
+            if (receipt.kind === "accepted") {
               const result = receipt.result;
-              const chosen = selection;
-              const saved = transaction.db
-                .query<{ instance: string; version: string; model: string }, [string]>(
-                  "SELECT instance,version,model FROM round_executors WHERE round=?",
+              if (
+                (result.kind === "threadStarted" || result.kind === "inputScheduled") &&
+                !(req.method === "input.steer" && req.payload.mode === "insertCurrent")
+              ) {
+                const threadId =
+                  result.kind === "threadStarted"
+                    ? result.threadId
+                    : "threadId" in req.payload
+                      ? req.payload.threadId
+                      : null;
+                if (
+                  threadId &&
+                  codex.forThread(threadId) &&
+                  readRound(transaction.db, result.roundId)?.attempt.phase.kind === "filed"
                 )
-                .get(result.roundId);
-              const run = Bun.sleep(0).then(async () => {
-                if (saved) {
-                  if (
-                    chosen &&
-                    chosen.reg.instanceId === saved.instance &&
-                    chosen.reg.version === saved.version &&
-                    Bun.deepEquals(JSON.parse(saved.model), chosen.model)
-                  )
-                    await dispatchCodex(
-                      transaction,
-                      result,
-                      chosen,
-                      () =>
-                        codex.current(chosen.reg.instanceId, actor.id, chosen.cwd)?.snapshot ===
-                        chosen.snapshot,
-                      (event) => {
-                        if (ws.readyState === 1) ws.send(JSON.stringify(event));
-                      },
-                      controller.signal,
-                    );
-                } else if (replay)
-                  await dispatchReplay(
-                    transaction,
-                    result,
-                    req.commandId,
-                    replay,
-                    (event) => lifecycle?.update?.(event),
-                    controller.signal,
-                  );
-              });
-              turns.set(result.roundId, run);
-              void run.finally(() => turns.delete(result.roundId));
+                  recipients.set(result.roundId, ws);
+              }
+              if (
+                req.method === "input.steer" &&
+                req.payload.mode === "insertCurrent" &&
+                result.kind === "inputScheduled"
+              ) {
+                const send = steers.get(result.attemptId);
+                const message = readMessage(transaction.db, result.messageId);
+                if (!priorSteer && send && message)
+                  void send(
+                    {
+                      id: message.id,
+                      text: message.text,
+                      references: message.references,
+                      attachments: message.attachments,
+                    },
+                    result.deliveryId,
+                  ).catch(() => {});
+              } else if (result.kind === "threadStarted") schedule(result.threadId, req.commandId);
+              else if (req.method.startsWith("input.") && "threadId" in req.payload)
+                schedule(req.payload.threadId, req.commandId);
             }
           } catch {
             ws.close(1007);
@@ -316,12 +477,34 @@ export async function startWriter<H extends object>(
         },
         close(ws) {
           if ("app" in ws.data) ws.data.flow?.dispose();
+          for (const [roundId, socket] of recipients) if (socket === ws) recipients.delete(roundId);
+          reads.close(ws);
           sockets.delete(ws);
         },
       },
     });
     let instance: ReturnType<typeof lock.publish>;
     try {
+      const pending = transaction.db
+        .query<{ data: string }, []>(
+          "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE d.pending=1",
+        )
+        .all();
+      for (const row of pending) {
+        const round = v.parse(RoundSchema, JSON.parse(row.data));
+        if (
+          replay &&
+          round.attempt.phase.kind === "recovering" &&
+          round.attempt.phase.action === "inspectInput"
+        ) {
+          try {
+            await inspectOriginalInput(transaction, round, replay);
+          } catch {
+            /* A failed lookup leaves the old delivery pending. */
+          }
+        }
+        schedule(round.threadId, v.parse(CommandIdSchema, round.attempt.deliveryId));
+      }
       instance = lock.publish(`ws://127.0.0.1:${server.port}/commands`);
     } catch (e) {
       await server.stop(true);

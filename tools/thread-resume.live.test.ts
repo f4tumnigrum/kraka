@@ -386,3 +386,57 @@ test(
     }),
   10000,
 );
+
+test(
+  "a resumed subscription installs an ordinary queued input and its negotiated attempt history",
+  () =>
+    threadFixture(async (f) => {
+      const started = (await f.f.send()).receipt;
+      if (started.kind !== "accepted" || started.result.kind !== "threadStarted")
+        throw Error("Thread start failed");
+      const { threadId } = started.result;
+      const initial = await f.connect("reader", { minor: 1 });
+      await op(initial, threadId);
+      await until(() => initial.heads.length > 0, "initial installation");
+      await initial.close();
+      const base = initial.heads.at(-1);
+      if (!base) throw Error("Missing initial cursor");
+      const sender = await f.connect("sender", { minor: 1 });
+      const receipt = await sender.client.rpc("input.send", {
+        threadId,
+        content: f.f.payload.content,
+      });
+      if (receipt.kind !== "accepted" || receipt.result.kind !== "inputScheduled")
+        throw Error("Ordinary send was not accepted");
+      const { roundId, messageId } = receipt.result;
+      const reader = await f.connect("reader", { minor: 1 });
+      await op(reader, threadId, base);
+      const readRound = (client: Connection) =>
+        visible(client).find((r) => r.objectType === "round" && r.value.id === roundId);
+      await until(() => {
+        const record = readRound(reader);
+        return record?.objectType === "round" && record.value.attempt.phase.kind === "closing";
+      }, "queue dispatch and installation");
+      const rows = await f.f.client.subscribedRounds(threadId);
+      const expected = rows.find((r) => r.id === roundId);
+      expect(expected?.attempts?.at(-1)?.phase).toEqual(expected?.attempt.phase);
+      expect(expected?.attempts?.at(-1)?.attemptId).toEqual(receipt.result.attemptId);
+      expect(readRound(reader)?.value).toEqual(expected);
+      expect(
+        visible(reader).some(
+          (row) =>
+            row.objectType === "message" &&
+            row.value.id === messageId &&
+            row.value.text === f.f.payload.content.text,
+        ),
+      ).toBe(true);
+      const legacy = await f.connect("legacy");
+      await op(legacy, threadId);
+      await until(() => legacy.heads.length > 0, "legacy installation");
+      const old = readRound(legacy);
+      expect(old?.objectType).toBe("round");
+      expect(old?.value).not.toHaveProperty("attempts");
+      expect(old?.value).not.toHaveProperty("steering");
+    }),
+  15000,
+);

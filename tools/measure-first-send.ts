@@ -1,18 +1,21 @@
+import { Database } from "bun:sqlite";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CommandIdSchema, PrincipalIdSchema, type CommandReceipt } from "@kraka/protocol";
 import {
   confirmWriter,
   openReceiptReader,
+  readMessage,
   readReceipt,
   readRound,
   readThread,
 } from "@kraka/environment";
+import { CommandIdSchema, type CommandReceipt, PrincipalIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
-import type { ReportBase } from "./perf";
-import { currentFootprint, noChildren } from "./measure-replay";
-import { startFirstSendFixture, accepted, waitFile } from "./fixtures/first-send";
+import { accepted, startFirstSendFixture, waitFile } from "./fixtures/first-send";
 import { connectFirstSend, fixtureActor } from "./fixtures/first-send-client";
-import { withState } from "./fixtures/replay-process";
+import { fixture, withState } from "./fixtures/replay-process";
+import { currentFootprint, noChildren } from "./measure-replay";
+import type { ReportBase } from "./perf";
 import { buildPeer, codexFixture } from "./fixtures/codex-turn";
 import type { Unit } from "./perf-catalog";
 
@@ -41,6 +44,7 @@ async function startup(
   base: ReportBase,
   root: string,
   idle: boolean,
+  nextBlock: () => Promise<void>,
 ): Promise<Record<string, number>> {
   const count = idle ? 10 : 20;
   base.workload = idle
@@ -52,7 +56,7 @@ async function startup(
   base.actual = counts;
   await withState(async (installation) => {
     const binary = await buildPeer(installation, root);
-    for (let i = 0; i < 10; i++)
+    for (let i = 0; i < 10; i++) {
       await withState(async (dir) => {
         for (const series of idle ? ["idle"] : ["fresh", "reused"]) {
           const opts = options(dir, root);
@@ -156,10 +160,12 @@ async function startup(
           }
         }
       });
+      await nextBlock();
+    }
   });
   return idle ? { idle: 10 } : { fresh: 10, reused: 10 };
 }
-async function restart(base: ReportBase, root: string) {
+async function restart(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
   base.expected = { seeded: 1020, restarts: 20, recoveries: 5 };
   const counts = { seeded: 0, restarts: 0, recoveries: 0 };
   base.actual = counts;
@@ -205,12 +211,13 @@ async function restart(base: ReportBase, root: string) {
         } finally {
           await f.close();
         }
+        await nextBlock();
       }
       times.sort((a, b) => a - b);
       medians.push(((times[4] ?? NaN) + (times[5] ?? NaN)) / 2);
     });
   sample(base, "medianDifference", (medians[1] ?? NaN) - (medians[0] ?? NaN));
-  for (let i = 0; i < 5; i++)
+  for (let i = 0; i < 5; i++) {
     await withState(async (dir) => {
       const opts = options(dir, root),
         f = await startFirstSendFixture({ ...opts, point: "externalWrite" });
@@ -226,7 +233,12 @@ async function restart(base: ReportBase, root: string) {
       try {
         const db = openReceiptReader(opts.stateDir);
         try {
-          const round = readRound(db, ids.roundId),
+          const supportsPublicHistory = await Bun.file(
+            join(root, "packages/environment/src/input-command.ts"),
+          ).exists();
+          const round = supportsPublicHistory
+              ? (await next.client.readInputHistory(ids.threadId, ids.roundId)).rounds[0]
+              : readRound(db, ids.roundId),
             elapsed = performance.now() - next.started;
           verifyObservation(
             round?.attempt.attemptId === ids.attemptId &&
@@ -248,9 +260,11 @@ async function restart(base: ReportBase, root: string) {
         await next.close();
       }
     });
+    await nextBlock();
+  }
   return { large: 10, medianDifference: 1, recovery: 5 };
 }
-async function rename(base: ReportBase, root: string) {
+async function rename(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
   base.expected = { single: 1250, eight: 4000, warmups: 250, reopened: 5500 };
   const counts = { single: 0, eight: 0, warmups: 0, reopened: 0 };
   base.actual = counts;
@@ -288,9 +302,14 @@ async function rename(base: ReportBase, root: string) {
           }
         }
       }
-      for (let r = 0; r < 5; r++) await series(f.client, "single", 300, 50);
-      for (let r = 0; r < 5; r++)
+      for (let r = 0; r < 5; r++) {
+        await series(f.client, "single", 300, 50);
+        await nextBlock();
+      }
+      for (let r = 0; r < 5; r++) {
         await Promise.all(clients.map((client) => series(client, "eight", 100, 0)));
+        await nextBlock();
+      }
       const final = String(1 + number);
       verifyObservation(seen.size === number && seen.has(final), "Missing committed versions");
       for (const client of clients) client.close();
@@ -331,18 +350,151 @@ async function rename(base: ReportBase, root: string) {
   });
   return { single: 1250, eight: 4000 };
 }
+async function growth(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
+  const input = "I".repeat(28),
+    answer = "A".repeat(34),
+    tool = "x".repeat(140),
+    output = "o".repeat(96);
+  const counts = { databases: 0, turns: 0, workRecords: 0, checkpoints: 0 };
+  base.actual = counts;
+  base.expected = { databases: 3, turns: 60, workRecords: 180, checkpoints: 6 };
+  for (let trial = 0; trial < 3; trial++)
+    await withState(async (dir) => {
+      const opts = options(dir, root),
+        recording = join(dir, "budget-turn.jsonl");
+      const template = readFileSync(join(root, fixture), "utf8");
+      const strings = new Map([
+        ["Print the word amber and report what appeared.", input],
+        ["The marker was amber.", answer],
+        ["The marker was ", answer.slice(0, 17)],
+        ["amber.", answer.slice(17)],
+        ["amber\n", output],
+        ["printf 'amber\\n'", tool],
+      ]);
+      const content =
+        template
+          .trim()
+          .split("\n")
+          .map((row) =>
+            JSON.stringify(
+              JSON.parse(row, (_key, value) =>
+                typeof value === "string" ? (strings.get(value) ?? value) : value,
+              ),
+            ),
+          )
+          .join("\n") + "\n";
+      writeFileSync(recording, content);
+      const f = await startFirstSendFixture({ ...opts, recording });
+      const dbFile = join(opts.stateDir, "environment.sqlite"),
+        db = new Database(dbFile, { strict: true });
+      let threadId = "",
+        first = 0,
+        last = 0;
+      try {
+        const seen = new Set<string>();
+        for (let turn = 1; turn <= 20; turn++) {
+          const content = { text: input, references: [], attachments: [] };
+          const response =
+            turn === 1
+              ? await f.client.send("thread.start", { ...f.payload, content })
+              : await f.client.send("input.send", { threadId, content });
+          const ids =
+            turn === 1
+              ? accepted(response.receipt, "threadStarted")
+              : accepted(response.receipt, "inputScheduled");
+          if ("threadId" in ids) threadId = ids.threadId;
+          const saved = f.receipt(response.receipt.commandId);
+          verifyObservation(
+            saved && Bun.deepEquals(saved.receipt, response.receipt),
+            "Missing durable P10 receipt",
+          );
+          await waitIdle(f);
+          const round = readRound(db, ids.roundId),
+            message = readMessage(db, ids.messageId);
+          verifyObservation(
+            round?.attempt.phase.kind === "closing" &&
+              round.threadId === threadId &&
+              round.attempt.attemptId === ids.attemptId &&
+              round.messageId === ids.messageId &&
+              message?.text === input &&
+              message.roundId === ids.roundId &&
+              !seen.has(ids.roundId),
+            "Missing P10 turn",
+          );
+          seen.add(ids.roundId);
+          const updates = db
+            .query<{ data: string }, [string]>(
+              "SELECT data FROM turn_work WHERE round=? AND kind!='capture'",
+            )
+            .all(ids.roundId)
+            .map((r) => JSON.parse(r.data));
+          const start = updates.find((r) => r.kind === "tool.started"),
+            end = updates.find((r) => r.kind === "tool.ended"),
+            final = updates.find((r) => r.kind === "assistant.final");
+          verifyObservation(
+            updates.length === 3 &&
+              updates.every((r) => r.roundId === ids.roundId && r.attemptId === ids.attemptId) &&
+              start?.command === tool &&
+              end?.callId === start.callId &&
+              end?.output === output &&
+              end.exitCode === 0 &&
+              final?.text === answer,
+            "P10 input/tool/output mismatch",
+          );
+          counts.workRecords += updates.length;
+          counts.turns++;
+          if (turn === 1 || turn === 20) {
+            const checkpoint = db
+              .query<{ busy: number; log: number; checkpointed: number }, []>(
+                "PRAGMA wal_checkpoint(TRUNCATE)",
+              )
+              .get();
+            verifyObservation(
+              checkpoint?.busy === 0 && checkpoint.log === 0 && checkpoint.checkpointed === 0,
+              "P10 WAL did not settle",
+            );
+            const wal = existsSync(dbFile + "-wal") ? statSync(dbFile + "-wal").size : 0;
+            const bytes = statSync(dbFile).size + wal;
+            if (turn === 1) first = bytes;
+            else last = bytes;
+            counts.checkpoints++;
+          }
+        }
+        const bytesPerTurn = (last - first) / 19;
+        base.observations.push({
+          trial,
+          threadId,
+          first,
+          last,
+          bytesPerTurn,
+          turns: seen.size,
+          checkpointObjectBytes: 0,
+        });
+        sample(base, "growth", bytesPerTurn, "B/turn");
+        counts.databases++;
+      } finally {
+        db.close();
+        await f.close();
+      }
+    }),
+      await nextBlock();
+  return { growth: 3 };
+}
 export async function measureFirstSend(
   base: ReportBase,
   root: string,
-  id: "P1" | "P2" | "P7" | "P9",
+  id: "P1" | "P2" | "P7" | "P9" | "P10",
+  nextBlock: () => Promise<void>,
 ): Promise<Record<string, number>> {
   switch (id) {
     case "P1":
     case "P2":
-      return startup(base, root, id === "P2");
+      return startup(base, root, id === "P2", nextBlock);
     case "P7":
-      return restart(base, root);
+      return restart(base, root, nextBlock);
+    case "P10":
+      return growth(base, root, nextBlock);
     case "P9":
-      return rename(base, root);
+      return rename(base, root, nextBlock);
   }
 }

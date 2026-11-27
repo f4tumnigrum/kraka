@@ -24,6 +24,7 @@ import { within, withState } from "./replay-process";
 
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
+  minor?: 0 | 1;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
@@ -89,7 +90,7 @@ export async function connectReplica(
         (f) => opts.timeline !== false || f !== "timelineItems",
       );
       const envelope = {
-        protocolVersion: body.protocolVersion,
+        protocolVersion: { major: body.protocolVersion.major, minor: opts.minor ?? 0 },
         environmentId: identity.id,
         connectionId: body.connectionId,
         challengeId: body.challengeId,
@@ -106,7 +107,12 @@ export async function connectReplica(
       };
       const r = new ThreadReplica(
         frame.message,
-        { principal: device.principal, signer, features, protocolVersion: body.protocolVersion },
+        {
+          principal: device.principal,
+          signer,
+          features,
+          protocolVersion: envelope.protocolVersion,
+        },
         {
           utf8,
           now: () => performance.now(),
@@ -287,7 +293,12 @@ async function setup(dir: string, root: string) {
       if (!cache) {
         cache = new SqliteThreadCache(
           join(dir, name + ".sqlite"),
-          canonicalJson([pairing.identity.id, device.principal.id, opts.timeline !== false]),
+          canonicalJson([
+            pairing.identity.id,
+            device.principal.id,
+            opts.timeline !== false,
+            opts.minor ?? 0,
+          ]),
         );
         caches.set(name, cache);
       }

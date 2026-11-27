@@ -36,6 +36,7 @@ type Access = {
   visibility: () => string;
   canRead: (thread: ThreadId) => boolean;
   timelineItems: boolean;
+  protocolMinor: number;
 };
 export class ThreadSubscriptions {
   private subs = new Map<SubscriptionId, Sub>();
@@ -60,6 +61,7 @@ export class ThreadSubscriptions {
         return granted;
       },
       timelineItems: this.access.timelineItems,
+      protocolMinor: this.access.protocolMinor,
     };
   }
   recheckAccess() {
