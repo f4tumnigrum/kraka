@@ -18,6 +18,7 @@ import {
 import { ThreadJournal } from "./thread-journal";
 import {
   recordAdapterActivity,
+  evolveToolActivity,
   readActivity,
   type ToolActivityActor,
   type ToolActivityEvent,
@@ -245,11 +246,10 @@ test("opens exact old versions, returns a replacement for an expired version, an
     kind: "ready",
     version: { item: { version: "1", phase: "started" } },
   });
-  f.db.run("DELETE FROM tool_activity_versions WHERE thread_id=? AND item_id=? AND version=?", [
-    threadId,
-    activity.row.value.id,
-    "1",
-  ]);
+  f.db.run(
+    "DELETE FROM tool_activity_versions WHERE source=(SELECT id FROM tool_activity_sources WHERE thread_id=? AND item_id=?) AND version=?",
+    [threadId, activity.row.value.id, "1"],
+  );
   expect(read(f.journal, threadId, activity.row.value.id, "1")).toMatchObject({
     kind: "expired",
     replacement: { version: "2" },
@@ -285,7 +285,7 @@ test("a failed body commit rolls back its blocks, event and summary and permits 
       .get();
     const id = v.parse(TimelineItemIdSchema, prior?.item_id);
     const count = () =>
-      f.db.query<{ n: number }, []>("SELECT COUNT(*) n FROM tool_activity_blocks").get()?.n;
+      f.db.query<{ n: number }, []>("SELECT COUNT(*) n FROM tool_activity_parts").get()?.n;
     const blocks = count();
     f.db.exec(
       "CREATE TEMP TRIGGER reject_version BEFORE INSERT ON tool_activity_versions BEGIN SELECT RAISE(ABORT,'interrupted'); END",
@@ -419,5 +419,93 @@ test("session evidence promotes in place and a parent end cannot invent the tool
     });
   } finally {
     f.db.close();
+  }
+});
+
+test("reopens the previous storage format with identical wire bytes, versions and event receipts", () => {
+  const f = store();
+  try {
+    const threadId = f.recordThread("thread");
+    const input = event();
+    const text = "古い記録\n".repeat(900);
+    const end = event({
+      phase: "ended",
+      eventId: "end",
+      inputJson: null,
+      outputText: text,
+      exitCode: 7,
+    });
+    const id = v.parse(TimelineItemIdSchema, "retained-call");
+    const first = evolveToolActivity(null, input, { id, createdPosition: "2" });
+    const last = evolveToolActivity(first, end, { id, createdPosition: "2" });
+    f.db.exec(`DROP TABLE tool_activity_parts; DROP TABLE tool_activity_versions; DROP TABLE tool_activity_events; DROP TABLE tool_activity_sources;
+      CREATE TABLE tool_activity_sources(thread_id TEXT,instance_id TEXT,session_id TEXT,epoch INTEGER,call_id TEXT,attempt_id TEXT,item_id TEXT);
+      CREATE TABLE tool_activity_versions(thread_id TEXT,item_id TEXT,version TEXT,summary TEXT,byte_length INTEGER,sha256 TEXT,PRIMARY KEY(thread_id,item_id,version));
+      CREATE TABLE tool_activity_blocks(digest TEXT,part INTEGER,data BLOB,PRIMARY KEY(digest,part));
+      CREATE TABLE tool_activity_events(thread_id TEXT,instance_id TEXT,session_id TEXT,epoch INTEGER,attempt_id TEXT,event_id TEXT,payload TEXT);`);
+    const versions = [first, last].map(({ item, body }) => {
+      const bytes = Buffer.from(JSON.stringify({ item, body }));
+      const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+      for (let i = 0; i < bytes.length; i += 4096)
+        f.db.run("INSERT INTO tool_activity_blocks VALUES(?,?,?)", [
+          hash,
+          i / 4096,
+          bytes.subarray(i, i + 4096),
+        ]);
+      f.db.run("INSERT INTO tool_activity_versions VALUES(?,?,?,?,?,?)", [
+        threadId,
+        id,
+        item.version,
+        JSON.stringify(item),
+        bytes.length,
+        hash,
+      ]);
+      return { item, bytes, hash };
+    });
+    for (const e of [input, end]) {
+      const { at: _at, ...fact } = e;
+      f.db.run("INSERT INTO tool_activity_events VALUES(?,?,?,?,?,?,?)", [
+        threadId,
+        e.instanceId,
+        e.nativeSessionId,
+        e.epoch,
+        e.attemptId,
+        e.eventId,
+        new Bun.CryptoHasher("sha256").update(JSON.stringify(fact)).digest("hex"),
+      ]);
+    }
+    f.db.run("INSERT INTO tool_activity_sources VALUES(?,?,?,?,?,?,?)", [
+      threadId,
+      input.instanceId,
+      input.nativeSessionId,
+      input.epoch,
+      input.callId,
+      input.attemptId,
+      id,
+    ]);
+    f.db.transaction(() => f.journal.record([{ objectType: "timelineItem", value: last.item }]))();
+    f.db.run("UPDATE tool_activity_versions SET byte_length=byte_length-1 WHERE version='2'");
+    expect(() => new ThreadJournal(f.db, environmentId)).toThrow("Incomplete legacy activity body");
+    expect(f.db.query("SELECT 1 FROM tool_activity_blocks LIMIT 1").get()).toBeTruthy();
+    f.db.run("UPDATE tool_activity_versions SET byte_length=byte_length+1 WHERE version='2'");
+    const reopened = new ThreadJournal(f.db, environmentId);
+    for (const { item, bytes, hash } of versions) {
+      const opened = read(reopened, threadId, id, item.version);
+      if (opened.kind !== "ready") throw Error("Missing migrated version");
+      expect(opened.version.reference).toMatchObject({ sha256: hash, byteLength: bytes.length });
+      expect(opened.version.item).toEqual(item);
+      // Read backwards across storage and UTF-8 boundaries using independent byte ranges.
+      const restored = Buffer.alloc(bytes.length);
+      for (let end = bytes.length; end > 0; ) {
+        const start = Math.max(0, end - 389);
+        restored.set(opened.version.read(start, end - start), start);
+        end = start;
+      }
+      expect(restored.equals(bytes)).toBe(true);
+    }
+    expect(reopened.recordToolActivity(end)).toBe("unchanged");
+    expect(reopened.recordToolActivity({ ...end, outputText: "other" })).toBe("conflict");
+  } finally {
+    f.db.close(true);
   }
 });
