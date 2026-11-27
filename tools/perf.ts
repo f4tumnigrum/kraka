@@ -5,7 +5,15 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { entry, withState } from "./fixtures/replay-process";
 import { command, identity, replayCounts, sampleReplay } from "./measure-replay";
-import { catalog, type Metric, metricIds, type ProbeSpec, type Unit } from "./perf-catalog";
+import {
+  budgetValue,
+  exceedsBudget,
+  catalog,
+  type Metric,
+  metricIds,
+  type ProbeSpec,
+  type Unit,
+} from "./perf-catalog";
 import { type DependencyObservation, productionClosure } from "./perf-dependencies";
 
 type Role = "baseline" | "candidate";
@@ -88,8 +96,7 @@ function measured(base: ReportBase, seriesCounts: Counts, observationOnly = fals
   const breach = base.thresholds.some((t, i) => {
     const s = summary[i];
     if (!s) throw new Error(`Missing summary for ${t.series}`);
-    const value = t.statistic === "each" ? (t.direction === "min" ? s.min : s.max) : s[t.statistic];
-    return t.direction === "min" ? value < t.limit : value > t.limit;
+    return exceedsBudget(t, budgetValue(t, s));
   });
   return {
     ...base,
@@ -102,7 +109,12 @@ function unavailable(base: ReportBase, reason: string): ProbeReport {
   if (base.samples.length) throw new Error("Cannot mark a sampled workload unavailable");
   return { ...base, status: "unavailable", reason, comparison: "not comparable" };
 }
-async function measureReplay(base: ReportBase, root: string, allowStub: boolean) {
+async function measureReplay(
+  base: ReportBase,
+  root: string,
+  allowStub: boolean,
+  nextBlock: () => Promise<void>,
+) {
   const idle = base.metric === "P2";
   const count = idle ? 10 : 20;
   const counts = replayCounts();
@@ -132,6 +144,7 @@ async function measureReplay(base: ReportBase, root: string, allowStub: boolean)
     });
     if (!available)
       return unavailable(base, "Known baseline stub exited 0 before ready; replay.run is absent");
+    await nextBlock();
   }
   return measured(
     base,
@@ -273,6 +286,7 @@ export function parseSelection(args: string[]) {
   const { values, positionals } = parseArgs({
     args,
     options: {
+      "report-only": { type: "boolean" },
       root: { type: "string", multiple: true },
       "baseline-root": { type: "string", multiple: true },
     },
@@ -285,24 +299,25 @@ export function parseSelection(args: string[]) {
   for (const id of positionals)
     if (!Object.hasOwn(catalog, id)) throw new Error(`Unknown metric ${id}`);
   return {
+    ...(values["report-only"] ? { reportOnly: true } : {}),
     metrics: metricIds.filter((id) => !positionals.length || positionals.includes(id)),
     root: resolve(roots[0] ?? "."),
     role: values["baseline-root"] ? ("baseline" as const) : ("candidate" as const),
   };
 }
-export async function runBudget({
-  metrics,
-  root,
-  role,
-  writeReport,
-}: {
-  metrics: readonly Metric[];
-  root: string;
-  role: Role;
-  writeReport: (r: ProbeReport) => void;
-}): Promise<number> {
+export type Workload = Pick<ReportBase, "metric" | "variant">;
+
+export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
   for (const id of metrics)
     if (!Object.hasOwn(catalog, id)) throw new Error(`Unknown metric ${id}`);
+  return metricIds
+    .filter((m) => !metrics.length || metrics.includes(m))
+    .flatMap((metric): Workload[] =>
+      metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
+    );
+}
+
+export async function prepareBudget(root: string, role: Role) {
   root = resolve(root);
   const platform = hostInfo();
   const probe = resolve(import.meta.dir, "..");
@@ -315,8 +330,7 @@ export async function runBudget({
   } catch (error) {
     setupError = error;
   }
-  let exit = 0,
-    stub = false,
+  let stub = false,
     replayAttempted = false;
   const inputEndpoint = await Bun.file(
     join(root, "packages/environment/src/input-command.ts"),
@@ -324,11 +338,10 @@ export async function runBudget({
   let capability: Promise<string> | undefined;
   const commandSurface = () => (capability ??= checkCommandSurface(root));
   const durable = await Bun.file(join(root, "packages/daemon/src/first-send.ts")).exists();
-  const selected = metricIds.filter((m) => !metrics.length || metrics.includes(m));
-  const workloads = selected.flatMap((metric): Pick<ReportBase, "metric" | "variant">[] =>
-    metric === "P1" ? [{ metric, variant: "access.listSessions" }, { metric }] : [{ metric }],
-  );
-  for (const workload of workloads) {
+  return async (
+    workload: Workload,
+    nextBlock: () => Promise<void> = async () => {},
+  ): Promise<ProbeReport> => {
     const { metric, variant } = workload;
     const base: ReportBase = {
       ...workload,
@@ -364,7 +377,7 @@ export async function runBudget({
             "Parent has no protected owner enrollment and signed access.listSessions launch",
           );
         else {
-          for (let i = 0; i < 10; i++)
+          for (let i = 0; i < 10; i++) {
             await withState((dir) =>
               sampleOwnerPair(root, dir, base.actual, (series, value, commandId) => {
                 base.samples.push({ series, value, unit: "ms" });
@@ -377,6 +390,8 @@ export async function runBudget({
                 });
               }),
             );
+            await nextBlock();
+          }
           report = measured(base, { fresh: 10, reused: 10 });
         }
       } else if (
@@ -401,7 +416,7 @@ export async function runBudget({
           (metric === "P10" && inputEndpoint))
       ) {
         const { measureFirstSend } = await import("./measure-first-send");
-        const series = await measureFirstSend(base, root, metric);
+        const series = await measureFirstSend(base, root, metric, nextBlock);
         report = measured(base, series, metric === "P2" && process.platform !== "darwin");
       } else if (metric === "P1" || metric === "P2") {
         if (stub) {
@@ -411,7 +426,7 @@ export async function runBudget({
         } else {
           const allowStub = role === "baseline" && !replayAttempted;
           replayAttempted = true;
-          report = await measureReplay(base, root, allowStub);
+          report = await measureReplay(base, root, allowStub, nextBlock);
         }
         if (report.status === "unavailable" && report.reason.startsWith("Known baseline stub"))
           stub = true;
@@ -436,6 +451,7 @@ export async function runBudget({
           series[direction] += receiptsMs.length;
           for (const value of receiptsMs)
             base.samples.push({ series: direction, unit: "ms", value });
+          await nextBlock();
         }
         report = measured(base, series);
       } else {
@@ -460,8 +476,32 @@ export async function runBudget({
     } catch (error) {
       report = { ...base, status: "failed", error: String(error) };
     }
+    return report;
+  };
+}
+export async function runBudget({
+  metrics,
+  root,
+  role,
+  reportOnly = false,
+  writeReport,
+}: {
+  metrics: readonly Metric[];
+  root: string;
+  role: Role;
+  reportOnly?: boolean;
+  writeReport: (r: ProbeReport) => void;
+}): Promise<number> {
+  const workloads = budgetWorkloads(metrics);
+  const measure = await prepareBudget(root, role);
+  let exit = 0;
+  for (const workload of workloads) {
+    const report = await measure(workload);
     writeReport(report);
-    if (report.status === "failed" || (report.status === "measured" && report.result === "breach"))
+    if (
+      report.status === "failed" ||
+      (!reportOnly && report.status === "measured" && report.result === "breach")
+    )
       exit = 1;
   }
   return exit;
