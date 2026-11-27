@@ -192,7 +192,10 @@ function exchangePending(
 }
 
 let nextGeneration = 0;
-export function openSession(input: BrowserSessionInput): SessionHandle {
+export function openSession(
+  input: BrowserSessionInput,
+  features?: ServerHello["features"],
+): SessionHandle {
   const platform = createBrowserPlatform(input.credentials, input.socketFactory);
   const page = platform.page();
   let generation = ++nextGeneration;
@@ -356,7 +359,7 @@ export function openSession(input: BrowserSessionInput): SessionHandle {
               : "notRegistered",
           });
           if (!live()) return;
-          if (registered) void attempt.authenticate();
+          if (registered) void attempt.authenticate(features);
           else if (registration?.kind === "pendingExchange")
             exchangePending(
               platform,

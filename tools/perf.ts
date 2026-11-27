@@ -461,7 +461,15 @@ export async function prepareBudget(root: string, role: Role) {
           }
           report = measured(base, { fresh: 10, reused: 10 });
         }
+      } else if (
+        metric === "P4" &&
+        role === "baseline" &&
+        !(await Bun.file(join(root, "packages/client-runtime/hosts/sqlite.ts")).exists())
+      ) {
+        report = unavailable(base, "Parent lacks the persistent outbox profile reopen workload");
       } else if ((metric === "P3" || metric === "P4") && subscriptions) {
+        if (metric === "P4")
+          base.workload += " after reopening a profile with an unaccepted local input";
         const { measureThreadResume } = await import("./measure-thread-resume");
         const series = await measureThreadResume(base, root, metric, nextBlock);
         report = measured(base, series as Record<string, number>);

@@ -4923,6 +4923,9 @@
                     "kind": {
                       "const": "subscriptionOpened"
                     },
+                    "permissions": {
+                      "$ref": "#/$defs/PermissionSet"
+                    },
                     "subscriptionId": {
                       "$ref": "#/$defs/SubscriptionId"
                     },

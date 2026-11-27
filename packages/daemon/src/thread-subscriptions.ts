@@ -10,6 +10,7 @@ import {
   type CommandReceipt,
   type FlowPeer,
   type HistoryPage,
+  type PermissionItem,
   type SignedRequest,
   type SubscriptionId,
   type SubscriptionPage,
@@ -34,6 +35,7 @@ type Sub = {
 type Access = {
   principal: string;
   visibility: () => string;
+  permissions?: (thread: ThreadId) => PermissionItem[];
   canRead: (thread: ThreadId) => boolean;
   timelineItems: boolean;
   protocolMinor: number;
@@ -210,6 +212,9 @@ export class ThreadSubscriptions {
         });
         return accepted({
           kind: "subscriptionOpened",
+          ...(this.access.permissions
+            ? { permissions: this.access.permissions(open.threadId) }
+            : {}),
           subscriptionId: open.subscriptionId,
           streamId: writer.id,
         });

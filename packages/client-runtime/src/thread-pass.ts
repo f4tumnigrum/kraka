@@ -12,6 +12,7 @@ import {
   sameScope,
   type CommandReceipt,
   type MessageId,
+  type PermissionItem,
   type ControlMessage,
   type HistoryCoverage,
   type HistoryPage,
@@ -45,6 +46,7 @@ export interface ThreadFrameState {
   request: Open;
   installed: SyncCursor | null;
   bound: boolean;
+  permissions: PermissionItem[];
   status: "empty" | "cached" | "syncing" | "current" | "gap";
   pending: Pending | null;
   abandoned: Set<SyncPassId>;
@@ -58,6 +60,7 @@ export function openThreadFrames(
     request,
     installed,
     bound: false,
+    permissions: [],
     status: installed ? "cached" : "empty",
     pending: null,
     abandoned: new Set(),
@@ -145,6 +148,7 @@ export function stageThreadFrame(
       m.result.streamId !== req.payload.streamId
     )
       return gap(s);
+    s.permissions = m.result.permissions ?? [];
     s.bound = true;
     s.status = "syncing";
     return s.pending?.seal ? ready(s) : { kind: "bound" };
@@ -238,21 +242,28 @@ export interface ThreadCacheStore {
   // The host holds one transaction or exclusive namespace lease from reading the value through commit.
   transact<T>(edit: (current: ThreadCache) => { next: ThreadCache; result: T }): Promise<T>;
 }
-export function reflectInputReceipt(
-  store: ThreadCacheStore,
-  command: Extract<SignedRequest, { method: "input.send" }>,
+export function acceptedInput(
+  command: Extract<SignedRequest, { method: "input.send" | "thread.start" }>,
   receipt: CommandReceipt,
 ) {
-  if (
-    receipt.commandId !== command.commandId ||
-    receipt.kind !== "accepted" ||
-    receipt.result.kind !== "inputScheduled"
-  )
-    return;
-  const messageId = receipt.result.messageId;
+  if (receipt.kind !== "accepted" || receipt.commandId !== command.commandId) return null;
+  const result = receipt.result;
+  if (command.method === "input.send" && result.kind === "inputScheduled")
+    return { threadId: command.payload.threadId, messageId: result.messageId };
+  if (command.method === "thread.start" && result.kind === "threadStarted")
+    return { threadId: result.threadId, messageId: result.messageId };
+  return null;
+}
+export function reflectInputReceipt(
+  store: ThreadCacheStore,
+  command: Extract<SignedRequest, { method: "input.send" | "thread.start" }>,
+  receipt: CommandReceipt,
+) {
+  const accepted = acceptedInput(command, receipt);
+  if (!accepted) return;
+  const { messageId } = accepted;
   const local = {
-    messageId,
-    threadId: command.payload.threadId,
+    ...accepted,
     text: command.payload.content.text,
   };
   return store.transact((old) => {

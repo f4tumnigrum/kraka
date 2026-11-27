@@ -1,3 +1,6 @@
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { openLocalInputs } from "../packages/client-runtime/hosts/sqlite";
 import { readReceipt, openReceiptReader } from "@kraka/environment";
 import { scopeKey } from "../packages/client-runtime/src";
 import type { SyncCursor, SubscriptionPage } from "@kraka/protocol";
@@ -122,6 +125,9 @@ export async function measureThreadResume(
     }
     return { sendToReceive: 1250, receiptToReceive: 1250 };
   }
+  const openInputs: typeof openLocalInputs = (
+    await import(pathToFileURL(join(root, "packages/client-runtime/hosts/sqlite.ts")).href)
+  ).openLocalInputs;
   base.expected = { cold: 10, short: 10, long: 10 };
   base.actual = { cold: 0, short: 0, long: 0 };
   for (let trial = 0; trial < 10; trial++) {
@@ -156,6 +162,29 @@ export async function measureThreadResume(
         ["short", at29],
         ["long", at25],
       ] as const) {
+        const path = join(f.dir, name + ".sqlite");
+        const written = openInputs(path);
+        const pending = await (async () => {
+          try {
+            const draft = await written.outbox.saveDraft(f.ownerScope, "still local");
+            return await written.outbox.queueInput(f.ownerScope, draft.revision);
+          } finally {
+            written.close();
+          }
+        })();
+        const enqueuedAt = performance.now();
+        f.closeCache(name);
+        const reopened = openInputs(path);
+        try {
+          const local = await reopened.outbox.inspect(f.ownerScope);
+          if (
+            !Bun.deepEquals(local.queue.items, [pending]) ||
+            Object.keys(local.receipts.bindings).length
+          )
+            throw Error("Expected the original unaccepted input after profile reopen");
+        } finally {
+          reopened.close();
+        }
         const done = Promise.withResolvers<{ head: SyncCursor; at: number; bytes: number }>();
         let applyMs = 0,
           persistMs = 0;
@@ -202,6 +231,9 @@ export async function measureThreadResume(
         base.observations.push({
           trial,
           name,
+          localCommandId: pending.commandId,
+          localEnqueuedAt: enqueuedAt,
+          remoteReceiptAt: null,
           head: end.head.through,
           members: keys.length,
           wireBytes: wire,

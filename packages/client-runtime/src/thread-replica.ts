@@ -10,6 +10,7 @@ import {
   type AuthorizationExpectation,
   type ClientAuthentication,
   type CommandReceipt,
+  type CommandId,
   type ControlMessage,
   type FlowPort,
   type SignedRequest,
@@ -45,8 +46,14 @@ type Host = {
   sign: (
     method: SignedRequest["method"],
     payload: unknown,
+    commandId?: CommandId,
   ) => SignedRequest | Promise<SignedRequest>;
   id: () => SubscriptionId;
+  handshake?: (
+    message: Extract<ControlMessage, { kind: "session.authorized" | "session.configuration" }>,
+  ) => void;
+  opened?: (sub: ThreadInstallation) => void;
+  staleBase?: () => void;
   receipt?: () => void;
   pageStaged?: (page: SubscriptionPage) => void | Promise<void>;
   acknowledged?: (head: SyncCursor) => void;
@@ -78,6 +85,7 @@ export class ThreadReplica {
     {
       request: SignedRequest | PrivateSecretRequest;
       done: ReturnType<typeof deferred<CommandReceipt>>;
+      reflectInCache: boolean;
     }
   >();
   private lastId = 0;
@@ -104,10 +112,10 @@ export class ThreadReplica {
     this.peer.control(auth);
     this.peer.pump();
   }
-  private request(r: SignedRequest | PrivateSecretRequest) {
+  private request(r: SignedRequest | PrivateSecretRequest, reflectInCache = true) {
     if (this.closed || !this.configured) throw Error("Session unavailable");
     const done = deferred<CommandReceipt>();
-    this.commands.set(r.commandId, { request: r, done });
+    this.commands.set(r.commandId, { request: r, done, reflectInCache });
     try {
       sendLogicalRequest(this.peer, r);
       this.peer.pump();
@@ -118,8 +126,8 @@ export class ThreadReplica {
     return done.promise;
   }
   private signing = Promise.resolve();
-  private sign(method: SignedRequest["method"], payload: unknown) {
-    const signed = this.signing.then(() => this.host.sign(method, payload));
+  private sign(method: SignedRequest["method"], payload: unknown, commandId?: CommandId) {
+    const signed = this.signing.then(() => this.host.sign(method, payload, commandId));
     this.signing = signed.then(
       () => {},
       () => {},
@@ -138,6 +146,39 @@ export class ThreadReplica {
   async rpc(method: SignedRequest["method"], payload: unknown) {
     const send = async () => this.request(await this.sign(method, payload));
     return method.startsWith("todo.") ? this.orderStream(send) : send();
+  }
+  async submitInput(
+    intent: Pick<
+      Extract<SignedRequest, { method: "input.send" }>,
+      "method" | "payload" | "commandId"
+    >,
+    active: () => boolean,
+    expire?: (run: () => void) => () => void,
+  ) {
+    const request = await this.sign(intent.method, intent.payload, intent.commandId);
+    if (!active() || request.method !== intent.method || request.commandId !== intent.commandId)
+      throw Error("Input scope changed");
+    const pending = this.request(request, false);
+    const cancel = expire?.(() => {
+      const slot = this.commands.get(request.commandId);
+      if (slot?.request !== request) return;
+      this.commands.delete(request.commandId);
+      slot.done.reject(Error("Input receipt timed out"));
+    });
+    try {
+      return { request, receipt: await pending };
+    } finally {
+      cancel?.();
+    }
+  }
+  async submitQueueEdit(
+    intent: Extract<SignedRequest, { method: "input.editQueued" }>["payload"],
+    commandId: CommandId,
+  ) {
+    const request = await this.sign("input.editQueued", intent, commandId);
+    if (request.method !== "input.editQueued" || request.commandId !== commandId)
+      throw Error("Unexpected edit");
+    return { request, receipt: await this.request(request) };
   }
   async submitSecret(sign: () => Promise<PrivateSecretRequest>) {
     if (!this.authorized?.features.includes("privateSecretSubmission"))
@@ -213,6 +254,7 @@ export class ThreadReplica {
             })
             .catch(() => this.close());
         },
+        ...(this.host.staleBase ? { staleBase: this.host.staleBase } : {}),
         ...(this.host.receipt ? { receipt: this.host.receipt } : {}),
         ...(this.host.pageStaged ? { pageStaged: this.host.pageStaged } : {}),
         ...(this.host.installed ? { installed: this.host.installed } : {}),
@@ -227,7 +269,7 @@ export class ThreadReplica {
             reason === "databaseGenerationChanged" ||
             reason === "shapeChanged";
           const restart = async () => {
-            if (incompatible) await this.invalidate(cached);
+            if (incompatible) await this.invalidate(sub.state.installed ?? cached);
             if (mayReset && !this.closed)
               await (await this.open(threadId, incompatible ? null : cached, true, false)).receipt;
           };
@@ -237,6 +279,7 @@ export class ThreadReplica {
       cached,
     );
     this.streams.set(streamId, sub);
+    this.host.opened?.(sub);
     this.peer.receive.open(streamId);
     return { sub, receipt: this.request(req), streamId };
   }
@@ -306,6 +349,7 @@ export class ThreadReplica {
   private control(m: ControlMessage) {
     if (m.kind === "session.authorized") {
       this.authorized = m;
+      this.host.handshake?.(m);
       return;
     }
     if (
@@ -314,6 +358,7 @@ export class ThreadReplica {
       matchesAuthorizedConfiguration(this.hello, this.authorized, m, this.expected)
     ) {
       this.configured = true;
+      this.host.handshake?.(m);
       this.readySignal.resolve();
       return;
     }
@@ -351,7 +396,10 @@ export class ThreadReplica {
           .get(pending.request.payload.streamId)
           ?.frame({ epoch: this.peer.epoch, streamId: 0, message: m });
       this.commands.delete(m.commandId);
-      if (pending.request.method === "input.send") {
+      if (
+        pending.reflectInCache &&
+        (pending.request.method === "input.send" || pending.request.method === "thread.start")
+      ) {
         void Promise.resolve(reflectInputReceipt(this.host.store, pending.request, m)).then(
           () => pending.done.resolve(m),
           pending.done.reject,

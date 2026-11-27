@@ -2,6 +2,7 @@ import { createPublicKey, randomBytes, verify } from "node:crypto";
 import * as v from "valibot";
 import {
   canonicalJson,
+  DEFAULT_DEVICE_PERMISSIONS,
   sendLogicalRequest,
   type PermissionItem,
   type PrivateSecretRequest,
@@ -21,6 +22,7 @@ import {
 } from "@kraka/protocol";
 import {
   acceptTodoReply,
+  applyInputCommand,
   type LocalActor,
   readThread,
   renameThread,
@@ -47,6 +49,12 @@ export async function threadConnection(
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   beforeTodo?: (id: CommandId, proceed: () => void) => void,
+  reportPermissions = false,
+  beforeInputReceipt?: (
+    request: SignedRequest,
+    receipt: CommandReceipt,
+    deliver: () => void,
+  ) => void,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -65,6 +73,7 @@ export async function threadConnection(
       "binaryContentChunks",
       "timelineItems",
       "privateSecretSubmission",
+      "queueEditing",
     ],
     identity: host.identity,
   };
@@ -189,6 +198,12 @@ export async function threadConnection(
                   .get()?.n;
                 return JSON.stringify([actor.principal.id, n]);
               },
+              ...(reportPermissions
+                ? {
+                    permissions: (id: ThreadId) =>
+                      DEFAULT_DEVICE_PERMISSIONS.filter((right) => allows(id, right)),
+                  }
+                : {}),
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
               protocolMinor: m.protocolVersion.minor,
@@ -266,6 +281,22 @@ export async function threadConnection(
               transaction: store,
               ...m.payload,
             });
+          if (
+            !result &&
+            session.features.includes("queueEditing") &&
+            (m.method === "input.editQueued" ||
+              m.method === "input.cancelQueued" ||
+              m.method === "input.reorderQueue")
+          )
+            result = applyInputCommand({
+              actor: {
+                id: actor.principal.id,
+                environmentId: host.identity.id,
+                allows: (right) => allows(m.payload.threadId, right),
+              },
+              transaction: store,
+              command: m,
+            });
           if (!result && m.method === "input.send") {
             const permitted = allows(m.payload.threadId, "thread.send");
             const injected = permitted ? fixtureCommand?.(m, store) : null;
@@ -281,10 +312,14 @@ export async function threadConnection(
               ).then(
                 (receipt) => {
                   if (receipt.kind === "accepted") schedule(m.payload.threadId, m.commandId);
-                  if (session) {
-                    peer.control(receipt);
-                    wake();
-                  }
+                  const deliver = () => {
+                    if (session) {
+                      peer.control(receipt);
+                      wake();
+                    }
+                  };
+                  if (beforeInputReceipt) beforeInputReceipt(m, receipt, deliver);
+                  else deliver();
                 },
                 () => {
                   if (session) {

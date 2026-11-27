@@ -4,3 +4,5 @@ export * from "./pairing";
 export { ownedDirectory } from "./private-directory";
 
 export * from "./thread-cache";
+
+export { openLocalInputs } from "@kraka/client-runtime/sqlite";

@@ -13,7 +13,7 @@
   },
   "exports": "./src/index.ts",
   "scripts": {
-    "build": "bun build src/index.ts --outfile ../../.build/desktop-main.js"
+    "build": "bun build --target=node src/index.ts --outfile ../../.build/desktop-main.js"
   },
   "dependencies": {
     "@kraka/client-runtime": "workspace:*",

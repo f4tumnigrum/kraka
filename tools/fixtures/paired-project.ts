@@ -99,6 +99,7 @@ export async function connectDevice(
 }
 export type Client = Awaited<ReturnType<typeof connectDevice>>;
 export interface BrowserPeerOptions {
+  outbox?: "send" | "reject" | "approval";
   host: string;
   port: number;
   publicOrigin?: string;

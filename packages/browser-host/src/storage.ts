@@ -20,7 +20,7 @@ import {
   planIdentityPin,
   type CredentialDiscovery,
   type IdentityPinStore,
-  type LocalStateStore,
+  type TransactionalState,
   type CreatedDeviceKey,
 } from "@kraka/client-runtime";
 import {
@@ -159,7 +159,19 @@ export async function addBrowserRoute(
     return { result: next.catalog, replace: next.catalog };
   });
 }
-const state: LocalStateStore = {
+export const state: TransactionalState = {
+  transact: (keys, change) =>
+    transaction("state", "readwrite", async (tx) => {
+      const store = tx.objectStore(records);
+      const { result, writes } = change(
+        await Promise.all(keys.map(async (key) => bytes(await read(store.get(key))))),
+      );
+      for (const { key, value } of writes) {
+        if (value === null) store.delete(key);
+        else store.put(value, key);
+      }
+      return result;
+    }),
   read: (key) =>
     transaction("state", "readonly", async (tx) =>
       bytes(await read(tx.objectStore(records).get(key))),

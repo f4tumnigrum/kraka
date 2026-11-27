@@ -306,6 +306,15 @@ async function setup(dir: string, root: string, onStage?: (name: string) => void
     dir,
     stateDir,
     threadId,
+    ownerScope: {
+      principalId: pairing.owner.principal.id,
+      environmentId: pairing.identity.id,
+      threadId,
+    },
+    closeCache(name: string) {
+      caches.get(name)?.close();
+      caches.delete(name);
+    },
     control,
     async seed(rows: unknown[]) {
       await control({ rows });

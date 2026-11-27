@@ -8,8 +8,13 @@ if (selected === "chromium" && process.env.CI !== "true")
 
 const options = selected === "chrome" ? { channel: "chrome", headless: true } : { headless: true };
 
-export function launchBrowserProfile(profileDir: string) {
-  return chromium.launchPersistentContext(profileDir, options);
+export function launchBrowserProfile(profileDir: string, certificatePin?: string) {
+  return chromium.launchPersistentContext(profileDir, {
+    ...options,
+    ...(certificatePin
+      ? { args: ["--ignore-certificate-errors-spki-list=" + certificatePin] }
+      : {}),
+  });
 }
 
 export async function nativeBrowserSkipReason(): Promise<string | undefined> {

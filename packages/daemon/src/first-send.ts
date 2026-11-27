@@ -94,6 +94,11 @@ export async function startWriter<H extends object>(
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
     threadCommand?: FixtureThreadCommand;
+    beforeInputReceipt?: (
+      request: SignedRequest,
+      receipt: CommandReceipt,
+      deliver: () => void,
+    ) => void;
     beforeTodo?: (id: CommandId, proceed: () => void) => void;
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
@@ -283,6 +288,19 @@ export async function startWriter<H extends object>(
         },
       );
     }
+    const openThread = (nonce: string, reportPermissions = false) =>
+      threadConnection(
+        transaction,
+        authHost,
+        nonce,
+        schedule,
+        sendInput,
+        lifecycle?.threadCommand,
+        lifecycle?.inspectPage,
+        lifecycle?.beforeTodo,
+        reportPermissions,
+        lifecycle?.beforeInputReceipt,
+      );
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -293,16 +311,7 @@ export async function startWriter<H extends object>(
         if (url.pathname === "/ws") {
           const admission = checkBusinessUpgrade(url.pathname + url.search, [], [], URL);
           if (admission.kind === "reject") return new Response(null, { status: admission.status });
-          const app = await threadConnection(
-            transaction,
-            authHost,
-            admission.nonce,
-            schedule,
-            sendInput,
-            lifecycle?.threadCommand,
-            lifecycle?.inspectPage,
-            lifecycle?.beforeTodo,
-          );
+          const app = await openThread(admission.nonce);
           if (!app) return new Response(null, { status: 403 });
           if (server.upgrade(req, { data: { app, flow: null } })) return;
           return new Response(null, { status: 400 });
@@ -598,6 +607,7 @@ export async function startWriter<H extends object>(
     return {
       kind: "ready" as const,
       instance,
+      openThread,
       async close() {
         if (!accepting) return;
         accepting = false;

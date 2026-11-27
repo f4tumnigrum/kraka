@@ -5253,6 +5253,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "kind": {
                   "const": "subscriptionOpened"
                 },
+                "permissions": {
+                  "$ref": "#/$defs/PermissionSet"
+                },
                 "subscriptionId": {
                   "$ref": "#/$defs/SubscriptionId"
                 },
