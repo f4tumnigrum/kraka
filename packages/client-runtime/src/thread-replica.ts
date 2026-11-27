@@ -11,6 +11,9 @@ import {
   type AuthorizationExpectation,
   type ClientAuthentication,
   type CommandReceipt,
+  type CommandId,
+  type TextReturnResult,
+  CommandReceiptSchema,
   type ControlMessage,
   type FlowPort,
   type SignedRequest,
@@ -67,9 +70,11 @@ type Host = {
   sign: (
     method: SignedRequest["method"],
     payload: unknown,
+    commandId?: CommandId,
   ) => SignedRequest | Promise<SignedRequest>;
   id: () => SubscriptionId;
   receipt?: () => void;
+  textReturned?: (commandId: CommandId, result: TextReturnResult) => void;
   pageStaged?: (page: SubscriptionPage) => void | Promise<void>;
   acknowledged?: (head: SyncCursor) => void;
   installed?: (head: SyncCursor) => void;
@@ -93,7 +98,6 @@ export class ThreadReplica {
       result: ReturnType<typeof deferred<HistoryPage>>;
     }
   >();
-  private receiptStreams = new Map<number, string>();
   private activityReads = new Map<number, ActivityReadState>();
   private parts = new Map<
     number,
@@ -119,6 +123,13 @@ export class ThreadReplica {
       control: (m) => this.control(m),
       data: (f, n) => this.data(f, n),
       discarded: (id) => {
+        const command = this.receiptStreams.get(id);
+        if (command) {
+          this.commands.get(command)?.done.reject(Error("Command receipt interrupted"));
+          this.commands.delete(command);
+          this.receiptStreams.delete(id);
+          this.parts.delete(id);
+        }
         this.streams.get(id)?.discarded();
         const viewer = this.activityReads.get(id);
         if (viewer) {
@@ -139,6 +150,7 @@ export class ThreadReplica {
   }
   private request(r: SignedRequest | PrivateSecretRequest) {
     if (this.closed || !this.configured) throw Error("Session unavailable");
+    if (this.commands.has(r.commandId)) throw Error("Command already outstanding");
     const done = deferred<CommandReceipt>();
     this.commands.set(r.commandId, { request: r, done });
     try {
@@ -150,9 +162,17 @@ export class ThreadReplica {
     }
     return done.promise;
   }
+  private settingListeners = new Set<(r: CommandReceipt) => Promise<void>>();
+  onSettingReceipt(receive: (r: CommandReceipt) => Promise<void>) {
+    this.settingListeners.add(receive);
+    return () => {
+      this.settingListeners.delete(receive);
+    };
+  }
+  private receiptStreams = new Map<number, CommandId>();
   private signing = Promise.resolve();
-  private sign(method: SignedRequest["method"], payload: unknown) {
-    const signed = this.signing.then(() => this.host.sign(method, payload));
+  private sign(method: SignedRequest["method"], payload: unknown, commandId?: CommandId) {
+    const signed = this.signing.then(() => this.host.sign(method, payload, commandId));
     this.signing = signed.then(
       () => {},
       () => {},
@@ -168,9 +188,15 @@ export class ThreadReplica {
     );
     return result;
   }
-  async rpc(method: SignedRequest["method"], payload: unknown) {
-    const send = async () => this.request(await this.sign(method, payload));
-    return method.startsWith("todo.") ? this.orderStream(send) : send();
+  async rpc(method: SignedRequest["method"], payload: unknown, commandId?: CommandId) {
+    const send = async () => {
+      const signed = await this.sign(method, payload, commandId);
+      if (commandId && signed.commandId !== commandId) throw Error("Signed command ID changed");
+      return this.request(signed);
+    };
+    return method.startsWith("todo.") || method === "settings.read" || method === "settings.write"
+      ? this.orderStream(send)
+      : send();
   }
   async submitSecret(sign: () => Promise<PrivateSecretRequest>) {
     if (!this.authorized?.features.includes("privateSecretSubmission"))
@@ -321,6 +347,9 @@ export class ThreadReplica {
     onVersion: (view: ToolActivityView) => void;
     onError?: (error: Error) => void;
   }): Promise<ToolActivityReadOutcome> {
+    return this.orderStream(() => this.openActivity(options));
+  }
+  private async openActivity(options: Parameters<ThreadReplica["readActivity"]>[0]): Promise<ToolActivityReadOutcome> {
     if (!this.configured || this.closed) throw Error("Session unavailable");
     if (
       this.expected.protocolVersion.minor < TOOL_ACTIVITY_DETAIL_MINOR ||
@@ -489,19 +518,23 @@ export class ThreadReplica {
       return;
     }
     if (m.kind === "transport.content") {
-      if (
-        !this.streams.has(m.streamId) &&
-        !this.reads.has(m.streamId) &&
-        [...this.commands.keys()].includes(m.transferId)
-      ) {
+      const request = this.commands.get(m.transferId)?.request;
+      if (request && !this.streams.has(m.streamId) && !this.reads.has(m.streamId) && !this.activityReads.has(m.streamId)) {
+        if (
+          m.streamId !== this.lastId + 1 ||
+          m.byteLength < 1 ||
+          [...this.parts.values()].reduce((n, p) => n + p.length, m.byteLength) >
+            TRANSPORT_LIMITS.maxPendingDataBytes
+        )
+          throw Error("Invalid command receipt stream");
         this.peer.receive.open(m.streamId);
-        this.lastId = Math.max(this.lastId, m.streamId);
-        this.receiptStreams.set(m.streamId, m.transferId);
+        this.lastId = m.streamId;
+        this.receiptStreams.set(m.streamId, request.commandId);
       }
       if (
-        (!this.receiptStreams.has(m.streamId) &&
-          !this.streams.has(m.streamId) &&
-          !this.reads.has(m.streamId)) ||
+        (!this.streams.has(m.streamId) &&
+          !this.reads.has(m.streamId) &&
+          !this.receiptStreams.has(m.streamId)) ||
         m.byteLength > TRANSPORT_LIMITS.maxPendingDataBytes
       )
         throw Error("Unexpected logical page");
@@ -516,8 +549,16 @@ export class ThreadReplica {
     }
     this.host.received?.(m.kind, m);
     if (m.kind === "accepted" || m.kind === "programError" || m.kind === "rejected") {
+      if (m.kind === "accepted" && m.result.kind === "textReturned") {
+        if (m.result.target.environmentId === this.hello.identity.id)
+          this.host.textReturned?.(m.commandId, m.result);
+        return;
+      }
       const pending = this.commands.get(m.commandId);
-      if (!pending) return;
+      if (!pending) {
+        for (const listener of this.settingListeners) void listener(m).catch(() => this.close());
+        return;
+      }
       if (pending.request.method === "subscription.openThread")
         this.streams
           .get(pending.request.payload.streamId)
@@ -640,6 +681,7 @@ export class ThreadReplica {
       state.onError?.(error);
       this.closeActivityLocal(streamId, state);
     }
+    this.settingListeners.clear();
     this.commands.clear();
     this.streams.clear();
     this.reads.clear();

@@ -1,8 +1,12 @@
 import { createPrivateKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { matchesSettingRead } from "@kraka/client-runtime";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import {
+  SettingReadSchema,
+  type TextReturnResult,
+  SettingCheckoutSchema,
   SubscriptionPageSchema,
   type SubscriptionPage,
   HistoryPageSchema,
@@ -42,6 +46,7 @@ export async function connectCommands(
   signer: v.InferOutput<typeof RequestSignerSchema>,
   privateKeyPath: string,
   onUpdate?: (event: ExecutorTurnUpdate) => void,
+  onTextReturned?: (commandId: CommandReceipt["commandId"], result: TextReturnResult) => void,
 ) {
   const key = createPrivateKey(readFileSync(privateKeyPath));
   const socket = new WebSocket(instance.endpoint);
@@ -96,6 +101,11 @@ export async function connectCommands(
         return;
       }
       const receipt = v.parse(CommandReceiptSchema, raw);
+      if (receipt.kind === "accepted" && receipt.result.kind === "textReturned") {
+        if (receipt.result.target.environmentId === instance.environmentId)
+          onTextReturned?.(receipt.commandId, receipt.result);
+        return;
+      }
       const waiter = pending.get(receipt.commandId);
       if (!waiter) throw new Error("Unmatched receipt");
       pending.delete(receipt.commandId);
@@ -207,18 +217,22 @@ const payload = REQUEST_METHODS.startThread.schema.entries.payload;
 const draft = v.strictObject({
   projectId: payload.entries.projectId,
   content: payload.entries.content,
-  checkout: v.variant("kind", [
-    v.strictObject({ kind: v.literal("shared") }),
-    v.strictObject({
-      kind: v.literal("isolated"),
-      selection: v.nullable(v.strictObject({ baseRef: v.string(), branch: v.string() })),
-    }),
-  ]),
+  checkout: v.optional(
+    v.variant("kind", [
+      v.strictObject({ kind: v.literal("inherit"), context: v.nullable(SettingCheckoutSchema) }),
+      v.strictObject({ kind: v.literal("shared") }),
+      v.strictObject({
+        kind: v.literal("isolated"),
+        selection: v.nullable(v.strictObject({ baseRef: v.string(), branch: v.string() })),
+      }),
+    ]),
+  ),
 });
 const ids = v.strictObject({
   start: CommandIdSchema,
   prepare: CommandIdSchema,
   worktreeId: payload.entries.worktreeId,
+  model: v.optional(payload.entries.model),
 });
 export async function sendFirstTask(
   client: Awaited<ReturnType<typeof connectCommands>>,
@@ -235,6 +249,33 @@ export async function sendFirstTask(
     db.run(
       "CREATE TABLE IF NOT EXISTS first_tasks(key TEXT PRIMARY KEY,intent TEXT NOT NULL,ids TEXT NOT NULL)",
     );
+    let isolated = input.checkout?.kind === "isolated";
+    let model: v.InferOutput<typeof payload.entries.model>;
+    if (!db.query("SELECT 1 FROM first_tasks WHERE key=?").get(key)) {
+      const inherit = !input.checkout || input.checkout.kind === "inherit";
+      const checkout = input.checkout?.kind === "inherit" ? input.checkout.context : null;
+      const target = { kind: "project", environmentId: environment, projectId: input.projectId };
+      const readDefault = async (field: "directoryMode" | "defaultModel") => {
+        const request = v.parse(SettingReadSchema, { field, target, checkout });
+        const { receipt } = await client.send("settings.read", request);
+        if (!inherit && receipt.kind === "rejected" && receipt.failure.kind === "missingPermission")
+          return null;
+        if (
+          receipt.kind !== "accepted" ||
+          receipt.result.kind !== "settingRead" ||
+          !matchesSettingRead(request, receipt.result.readback)
+        )
+          throw Error("Cannot read new-task " + field);
+        return receipt.result.readback;
+      };
+      const mode = inherit ? await readDefault("directoryMode") : null;
+      const selected = await readDefault("defaultModel");
+      if (mode && selected && mode.readVersion !== selected.readVersion)
+        throw Error("Settings changed while reading new-task defaults");
+      if (mode) isolated = mode.effective.value === "worktree";
+      if (selected && typeof selected.effective.value === "string")
+        model = { id: selected.effective.value, options: {} };
+    }
     frozen = db
       .transaction(() => {
         const old = db
@@ -249,7 +290,8 @@ export async function sendFirstTask(
         const fresh = v.parse(ids, {
           start: crypto.randomUUID(),
           prepare: crypto.randomUUID(),
-          worktreeId: input.checkout.kind === "isolated" ? crypto.randomUUID() : null,
+          worktreeId: isolated ? crypto.randomUUID() : null,
+          ...(model && { model }),
         });
         db.run("INSERT INTO first_tasks VALUES(?,?,?)", [key, intent, JSON.stringify(fresh)]);
         return fresh;
@@ -260,7 +302,7 @@ export async function sendFirstTask(
   }
   const { projectId, content } = input,
     { worktreeId } = frozen;
-  if (input.checkout.kind === "isolated" && input.checkout.selection) {
+  if (input.checkout?.kind === "isolated" && input.checkout.selection) {
     const selected = await client.send(
       "worktree.prepare",
       { projectId, worktreeId, ...input.checkout.selection },
@@ -272,7 +314,11 @@ export async function sendFirstTask(
     )
       return selected;
   }
-  return client.send("thread.start", { projectId, worktreeId, content }, frozen.start);
+  return client.send(
+    "thread.start",
+    { projectId, worktreeId, content, ...(frozen.model && { model: frozen.model }) },
+    frozen.start,
+  );
 }
 if (import.meta.main) {
   const options = v.parse(

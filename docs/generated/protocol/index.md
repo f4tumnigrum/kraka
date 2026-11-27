@@ -6269,6 +6269,103 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/SignedRequest"
     },
     {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "settings.write"
+        },
+        "payload": {},
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    {
       "$ref": "#/$defs/CommandReceipt"
     },
     {
@@ -17106,6 +17203,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "generation": {
+                  "$ref": "#/$defs/WorktreeGeneration"
                 }
               },
               "required": [
@@ -17308,6 +17408,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "generation": {
+                  "$ref": "#/$defs/WorktreeGeneration"
                 }
               },
               "required": [
@@ -18146,6 +18249,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                         "path": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "generation": {
+                          "$ref": "#/$defs/WorktreeGeneration"
                         }
                       },
                       "required": [
@@ -19234,6 +19340,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                         "path": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "generation": {
+                          "$ref": "#/$defs/WorktreeGeneration"
                         }
                       },
                       "required": [
@@ -19938,6 +20047,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "path": {
           "type": "string",
           "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
         }
       },
       "required": [

@@ -96,3 +96,4 @@ export {
 } from "./storage";
 export type { BrowserHostOptions };
 export { startBrowserPage, pageSession, pagePairing } from "./page";
+export * from "./settings";

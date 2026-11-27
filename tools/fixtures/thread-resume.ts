@@ -170,13 +170,13 @@ export async function connectReplica(
               : cache),
           read: () => cache.read(),
           id: () => v.parse(SubscriptionIdSchema, crypto.randomUUID()),
-          async sign(method, payload) {
+          async sign(method, payload, commandId) {
             const request = {
               ...envelope,
               method,
               payload,
               kind: "signedRequest",
-              commandId: opts.commandId?.(method) ?? crypto.randomUUID(),
+              commandId: commandId ?? opts.commandId?.(method) ?? crypto.randomUUID(),
               sequence: ++seq,
             };
             return v.parse(SignedRequestSchema, {

@@ -33,7 +33,8 @@ export type Fault =
   | "setupExited"
   | "activity-ledger"
   | "resume"
-  | "recovery";
+  | "recovery"
+  | "settings";
 export async function configureLocalOwner(
   stateDir: string,
   permissions = ["workspace.change", "thread.send", "thread.view"],
@@ -131,7 +132,7 @@ export function launchWriter(
     started,
     ready,
     async stop() {
-      await terminate(child);
+      await terminate(child, point === "settings" && ipc ? () => child.disconnect() : undefined);
       await Promise.all([drained, stderr]);
     },
     async kill() {

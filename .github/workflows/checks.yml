@@ -80,6 +80,14 @@ jobs:
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/first-answer.log"; done
       - run: bun test ./tools/thread-resume.live.test.ts
       - run: bun test ./tools/first-send.live.test.ts
+      - name: Verify all four settings readback groups
+        shell: bash
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          bun test ./tools/settings-readback.live.test.ts 2>&1 | tee "$RUNNER_TEMP/settings-tests.log"
+          for group in 1 2 3 4; do grep -F "(pass) S18.$group " "$RUNNER_TEMP/settings-tests.log"; done
       - run: bun test ./tools/isolated-start.live.test.ts
       - name: Verify all four local comparison cases
         env:
@@ -108,6 +116,7 @@ jobs:
             --path-ignore-patterns "**/local-diff.live.test.ts" \
             --path-ignore-patterns "**/first-answer.live.test.ts" \
             --path-ignore-patterns "**/thread-resume.live.test.ts" \
+            --path-ignore-patterns "**/settings-readback.live.test.ts" \
             --path-ignore-patterns "**/isolated-start.live.test.ts" \
             --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done

@@ -59,6 +59,7 @@ import {
   SessionConfigurationSchema,
   SessionRejectedSchema,
   SignedRequestSchema,
+  InboundSettingWriteSchema,
 } from "./requests";
 import { P256SignatureSchema } from "./access";
 import { EnvironmentIdentitySchema } from "./routes";
@@ -167,6 +168,7 @@ export const ControlMessageSchema = v.union([
   PairingExchangeSchema,
   DevicePairingResultSchema,
   SignedRequestSchema,
+  InboundSettingWriteSchema,
   CommandReceiptSchema,
   v.strictObject({
     kind: v.literal("transport.content"),

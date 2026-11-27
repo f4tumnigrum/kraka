@@ -37,13 +37,13 @@ export async function within<T>(promise: Promise<T>, ms: number, description: st
     clearTimeout(timeout);
   }
 }
-export async function terminate(child: Bun.Subprocess) {
+export async function terminate(child: Bun.Subprocess, requestStop = () => child.kill("SIGTERM")) {
   if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
     try {
+      requestStop();
       await within(child.exited, 2000, "Graceful exit");
     } catch {
-      child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
   }
   await child.exited;

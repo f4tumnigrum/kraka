@@ -1,3 +1,4 @@
+import { settingPeer } from "./setting-peer";
 import { scenarioInput, serveSeed, recordFixtureFrame } from "./thread-seed";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -123,10 +124,21 @@ const writer = await startWriter(
           },
         }
       : {}),
+    ...(point === "settings"
+      ? {
+          settingReply: settingPeer(state, () => {
+            if (!openedStore) throw Error("Writer not open");
+            return openedStore;
+          }),
+        }
+      : {}),
     preparation(point, managed) {
       barrier(point, JSON.stringify(managed));
     },
-    async beforeDispatch() {
+    async beforeDispatch(threadId) {
+      if (point === "settings" && openedStore) {
+        process.send?.({ event: "dispatch", threadId });
+      }
       if (waitForClaim) await waitForClaim();
       if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {
         const input = JSON.parse(readFileSync(join(state, "seed-handoff"), "utf8"));
@@ -209,6 +221,8 @@ const writer = await startWriter(
           roundId: event.roundId,
           threadId: openedStore && readRound(openedStore.db, event.roundId)?.threadId,
         });
+      if (point === "settings" && event.kind === "round.ended")
+        process.send?.({ event: "ended", roundId: event.roundId });
       if (point === "peer" && event.kind === "round.started")
         writeFileSync(join(state, `started-${event.roundId}`), JSON.stringify(event));
     },
@@ -232,6 +246,7 @@ const writer = await startWriter(
 );
 if (writer.kind === "unconfirmed") throw new Error(writer.reason);
 if (writer.kind === "ready") {
+  if (point === "settings" && process.connected) process.once("disconnect", writer.close);
   process.once("SIGTERM", writer.close);
   process.once("SIGINT", writer.close);
 }
