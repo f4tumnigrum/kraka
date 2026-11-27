@@ -1,5 +1,6 @@
 import { mobile, routedBrowser } from "./browser-routed";
-import { chromium, type Page } from "playwright";
+import type { Page } from "playwright";
+import { launchBrowserProfile, requireRoutedBrowser } from "./browser-selection";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import * as v from "valibot";
@@ -58,6 +59,7 @@ export async function openBrowserFixture({
   profileDir: string;
   network: "loopback" | "routed";
 }) {
+  if (network === "routed") requireRoutedBrowser();
   await mkdir(stateDir, { recursive: true });
   const browser =
     network === "loopback"
@@ -80,7 +82,7 @@ export async function openBrowserFixture({
       : null;
   const launch = async () => {
     if (remote) return remote.launch();
-    const context = await chromium.launchPersistentContext(profileDir, { headless: true });
+    const context = await launchBrowserProfile(profileDir);
     return { context, close: () => context.close() };
   };
   let client = await launch().catch(async (error) => {

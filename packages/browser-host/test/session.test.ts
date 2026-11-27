@@ -2,8 +2,11 @@ import { test, expect } from "bun:test";
 import { join } from "node:path";
 import { withState } from "../../../tools/fixtures/replay-process";
 import { openBrowserFixture } from "../../../tools/fixtures/browser";
+import { nativeBrowserSkipReason } from "../../../tools/fixtures/browser-selection";
 
-test(
+const skipReason = await nativeBrowserSkipReason();
+if (skipReason) console.info(skipReason);
+test.skipIf(Boolean(skipReason))(
   "actual browser origin, atomic pins, route selection and per-connection configuration",
   () =>
     withState(async (dir) => {

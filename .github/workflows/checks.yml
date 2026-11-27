@@ -33,6 +33,7 @@ jobs:
           export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/kraka-chromium"
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           bun run playwright install --with-deps chromium
+          echo "KRAKA_BROWSER=chromium" >> "$GITHUB_ENV"
       - name: Verify four native browser cases
         shell: bash
         env:
@@ -116,6 +117,9 @@ jobs:
           if-no-files-found: error
 
   routed:
+    env:
+      KRAKA_BROWSER: chromium
+      KRAKA_BROWSER_ROUTED: "1"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

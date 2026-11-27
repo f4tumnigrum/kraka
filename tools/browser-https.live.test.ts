@@ -1,4 +1,10 @@
 import { expect, test } from "bun:test";
+import {
+  launchBrowserProfile,
+  nativeBrowserSkipReason,
+  routedEnabled,
+  routedSkipReason,
+} from "./fixtures/browser-selection";
 import { certificate } from "./fixtures/browser-cert";
 import { join } from "node:path";
 import { within, withState, terminate } from "./fixtures/replay-process";
@@ -8,12 +14,16 @@ import { ProjectIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
 
 export { startBrowserFixture } from "./fixtures/browser";
-const native = (process.env.KRAKA_BROWSER_CASES ?? "native") === "native";
+const group = process.env.KRAKA_BROWSER_CASES ?? (routedEnabled ? "routed" : "native");
+if (group !== "native" && group !== "routed")
+  throw Error("Expected KRAKA_BROWSER_CASES=native or routed");
+const skipReason = group === "native" ? await nativeBrowserSkipReason() : undefined;
+if (skipReason) console.info(skipReason);
 const run = (
   name: string,
   fn: (f: Awaited<ReturnType<typeof openBrowserFixture>>, dir: string) => Promise<void>,
 ) =>
-  test(
+  test.skipIf(Boolean(skipReason))(
     name,
     () =>
       withState(async (dir) => {
@@ -30,7 +40,7 @@ const run = (
       }),
     45000,
   );
-if (native) {
+if (group === "native") {
   run("native 1. listener preflight and both module pages", async (f, dir) => {
     const good = await certificate(dir),
       other = await certificate(dir, "other", "DNS:other.invalid");
@@ -298,7 +308,6 @@ if (native) {
     });
     // Copy only after Chromium exits so each storage fault starts from an identical committed profile.
     const { cp } = await import("node:fs/promises");
-    const { chromium } = await import("playwright");
     const alternate = f.origin.replace("127.0.0.1", "localhost");
     const otherPage = await f.context.newPage();
     await otherPage.goto(alternate);
@@ -333,7 +342,7 @@ if (native) {
     ] as const) {
       const profile = join(dir, change);
       if (change !== "cleared") await cp(save, profile, { recursive: true });
-      const c = await chromium.launchPersistentContext(profile);
+      const c = await launchBrowserProfile(profile);
       try {
         const page = c.pages()[0] ?? (await c.newPage());
         await page.addInitScript({
@@ -366,7 +375,10 @@ if (native) {
     }
   });
 }
-if (process.env.KRAKA_BROWSER_CASES === "routed") {
+if (!routedEnabled) {
+  if (group === "routed") test.skip(routedSkipReason);
+  else console.info(routedSkipReason);
+} else if (group === "routed") {
   const networkCase = (
     name: string,
     fn: (f: Awaited<ReturnType<typeof openBrowserFixture>>) => Promise<void>,

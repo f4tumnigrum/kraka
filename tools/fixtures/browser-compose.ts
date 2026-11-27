@@ -13,9 +13,11 @@ import {
   PairingInviteIdSchema,
 } from "@kraka/protocol";
 import { within } from "./replay-process";
+import { requireRoutedBrowser } from "./browser-selection";
 
 type Options = { stateDir: string; profileDir: string };
 export async function provisionBrowserNetwork({ stateDir, profileDir }: Options) {
+  requireRoutedBrowser();
   await Promise.all([mkdir(stateDir, { recursive: true }), mkdir(profileDir, { recursive: true })]);
   const run = await mkdtemp(join(resolve(stateDir), "network-")),
     name = `kraka-${crypto.randomUUID()}`;
