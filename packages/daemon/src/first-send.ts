@@ -94,7 +94,7 @@ async function openDurableWriter<H extends object>(
     lifecycle?.opened?.(transaction);
     markStartupDetail("owner.openedHook");
     const services = openWriterServices(transaction);
-    const { codex, stops } = services;
+    const { executors, stops } = services;
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
@@ -123,7 +123,7 @@ async function openDurableWriter<H extends object>(
       transaction,
       authHost,
       actor,
-      codex,
+      executors,
       replay,
       {
         ...lifecycle,
@@ -292,15 +292,15 @@ async function openDurableWriter<H extends object>(
                 receipt = await sendInput(actor, req);
                 break;
               case "executor.configure":
-                receipt = codex.registry.configure(context, req.payload);
+                receipt = executors.configure(context, req.payload);
                 break;
               case "executor.refresh": {
-                const work = codex.refresh(context, req.payload);
-                codex.active.add(work);
+                const work = executors.refresh(context, req.payload);
+                executors.active.add(work);
                 try {
                   receipt = await work;
                 } finally {
-                  codex.active.delete(work);
+                  executors.active.delete(work);
                 }
                 break;
               }
@@ -342,7 +342,7 @@ async function openDurableWriter<H extends object>(
                       : null;
                 if (
                   threadId &&
-                  codex.forThread(threadId) &&
+                  executors.forThread(threadId) &&
                   readRound(transaction.db, result.roundId)?.attempt.phase.kind === "filed"
                 )
                   recipients.set(result.roundId, ws);

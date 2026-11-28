@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import {
   canonicalJson,
+  AdapterFamilySchema,
   DeliveryIdSchema,
   NativeSessionIdSchema,
   AttemptIdSchema,
@@ -12,7 +13,7 @@ import {
 import type { FirstSendStore } from "./first-send-store";
 import { frozenInput } from "./input-store";
 const schema = v.object({
-  family: v.literal("codex"),
+  family: AdapterFamilySchema,
   instanceId: ExecutorInstanceIdSchema,
   nativeSessionId: NativeSessionIdSchema,
   attemptId: AttemptIdSchema,
@@ -20,7 +21,7 @@ const schema = v.object({
   epoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
   context: v.string(),
 });
-export type CodexBinding = v.InferOutput<typeof schema>;
+export type ExecutorBinding = v.InferOutput<typeof schema>;
 export function savedBinding(store: FirstSendStore, thread: ThreadId) {
   const row = store.db
     .query<{ data: string }, [string]>(
@@ -31,8 +32,8 @@ export function savedBinding(store: FirstSendStore, thread: ThreadId) {
 }
 export function replaceBinding(
   store: FirstSendStore,
-  expected: CodexBinding | null,
-  next: CodexBinding,
+  expected: ExecutorBinding | null,
+  next: ExecutorBinding,
   legacyEpoch = 0,
 ) {
   if (
