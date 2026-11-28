@@ -27,6 +27,7 @@ import { within, withState } from "./replay-process";
 
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
+  subprotocol?: "kraka.thread.v1";
   minor?: 0 | 1 | 2;
   wire?: (data: import("@kraka/protocol").WireMessage) => void;
   write?: (
@@ -37,7 +38,6 @@ type Options = {
   captureReply?: (wire: import("@kraka/protocol").WireMessage) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
-  installedProtocol?: boolean;
   directoryDiff?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
   pageStaged?: (p: SubscriptionPage) => Promise<void> | void;
@@ -57,7 +57,7 @@ export async function connectReplica(
   const nonce = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const socket = new WebSocket(
     url.replace("/commands", "/ws") + "?nonce=" + nonce,
-    opts.installedProtocol ? "kraka.thread.v1" : [],
+    opts.subprotocol,
   );
   socket.binaryType = "arraybuffer";
   const ready = Promise.withResolvers<ThreadReplica>(),

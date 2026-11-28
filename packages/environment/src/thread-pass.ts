@@ -36,6 +36,10 @@ export interface ThreadReadView {
   floor: SyncPosition;
   rows: readonly ReadRow[];
   deletions: readonly ReadDeletion[];
+  operations?: readonly {
+    changed: SyncPosition;
+    operation: import("@kraka/protocol").ContextOperation;
+  }[];
   returns: readonly { source: ThreadId; event: TextReturnedEvent; changed: SyncPosition }[];
 }
 export interface AuthorizedScope {
@@ -147,7 +151,17 @@ function threadWindow(threadId: ThreadId, rows: readonly ReadRow[], requested: r
         for (const id of state.route.questions) related("message", id);
     }
   }
-  for (const item of boundedEntries(historyEntries(rows))) add(item);
+  const inactive = new Set(
+    rows.flatMap((item) =>
+      item.row.objectType === "round" && item.row.value.rolledBackBy
+        ? [item.row.value.id as string]
+        : [],
+    ),
+  );
+  for (const item of boundedEntries(
+    historyEntries(rows.filter((r) => r.round === null || !inactive.has(r.round))),
+  ))
+    add(item);
   for (const item of rows) {
     const row = item.row;
     if (item.source !== threadId) continue;
@@ -253,6 +267,9 @@ export function planThreadPass({
     )
       changes.push({ kind: "object.remove", key: item.key, version: item.version });
   for (const [k, key] of old) if (!members.has(k)) changes.push({ kind: "window.leave", key });
+  for (const item of view.operations ?? [])
+    if (item.operation.threadId === scope.threadId && changed(item.changed))
+      changes.push({ kind: "context.operation", operation: item.operation });
   for (const item of view.returns)
     if (item.source === scope.threadId && changed(item.changed)) changes.push(item.event);
   for (const id of new Set(recheckTodos)) {

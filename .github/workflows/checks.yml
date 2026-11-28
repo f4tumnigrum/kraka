@@ -66,6 +66,25 @@ jobs:
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck
+      - name: Verify installed ACP with JUnit
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun test tools/live/acp-stdio-turn.live.test.ts --reporter=junit --reporter-outfile=live.xml
+          python - <<'PY'
+          from collections import Counter
+          from xml.etree import ElementTree
+          cases = ElementTree.parse("live.xml").findall(".//testcase")
+          expected = ["1. Policy, permission and late completion (J-1.5)", "2. Unavailable rollback (S-EXEC-003)", "3. Manual compact absent", "4. Authentication failure (S-EXEC-027)"]
+          assert Counter(case.get("name") for case in cases) == Counter(expected)
+          assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error"))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acp-stdio-${{ matrix.os }}
+          path: live.xml
+          if-no-files-found: error
       - name: Run ordinary live suites and verify their groups
         uses: ./.github/actions/live-suites
       - name: Verify signed instance login and Pi RPC evidence

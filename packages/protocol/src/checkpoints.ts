@@ -176,13 +176,16 @@ export const DiffResultSchema = v.variant("kind", [
 export type DiffRequest = v.InferOutput<typeof DiffRequestSchema>;
 export type DiffResult = v.InferOutput<typeof DiffResultSchema>;
 
-export const RollbackTargetSchema = v.strictObject({
-  ...local,
+const rollbackBoundary = {
   roundId: RoundIdSchema,
   attemptId: AttemptIdSchema,
   captureId: CaptureIdSchema,
   boundary,
-});
+};
+export const RollbackTargetSchema = v.union([
+  v.strictObject({ ...local, ...rollbackBoundary }),
+  v.strictObject({ ...projectRoot, ...rollbackBoundary }),
+]);
 export const DialogueRollbackTargetSchema = v.union([
   RollbackTargetSchema,
   v.strictObject({

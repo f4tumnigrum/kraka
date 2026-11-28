@@ -20,6 +20,7 @@ Supply a fresh public nonce in the upgrade query and verify its signed echo with
 | `input.editQueued` | `thread.send` | thread |
 | `input.cancelQueued` | `thread.send` | thread |
 | `input.reorderQueue` | `thread.send` | thread |
+| `checkpoint.previewRollback` | `thread.view` | thread |
 | `checkpoint.readRollbackPart` | `thread.view` | thread |
 | `checkpoint.retryDialogue` | `thread.send` | thread |
 | `checkpoint.retryFiles` | `workspace.change` | thread |
@@ -2181,6 +2182,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                             "unknown"
                           ],
                           "type": "string"
+                        },
+                        "failure": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "message"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -4258,6 +4275,30 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                     }
                   ]
                 },
+                "sessionPolicy": {
+                  "type": "object",
+                  "properties": {
+                    "supportedModes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/PermissionMode"
+                      }
+                    },
+                    "enforcement": {
+                      "enum": [
+                        "native",
+                        "adapter",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "supportedModes",
+                    "enforcement"
+                  ],
+                  "additionalProperties": false
+                },
                 "variables": {
                   "type": "array",
                   "items": {
@@ -5011,10 +5052,65 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
               "type": "object",
               "properties": {
                 "kind": {
+                  "const": "rollbackPreview"
+                },
+                "rewind": {
+                  "enum": [
+                    "verified",
+                    "unsupported",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                "restoreFiles": {
+                  "type": "boolean"
+                },
+                "maySubmit": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "rewind",
+                "restoreFiles",
+                "maySubmit"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
                   "const": "checkpointRollback"
                 },
                 "progress": {
                   "$ref": "#/$defs/RollbackProgress"
+                },
+                "draft": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "references": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MessageReference"
+                      }
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/AttachmentReference"
+                      }
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "references",
+                    "attachments"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -15789,40 +15885,85 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 
 ```json
 {
-  "type": "object",
-  "properties": {
-    "threadId": {
-      "$ref": "#/$defs/ThreadId"
-    },
-    "worktreeId": {
-      "$ref": "#/$defs/WorktreeId"
-    },
-    "roundId": {
-      "$ref": "#/$defs/RoundId"
-    },
-    "attemptId": {
-      "$ref": "#/$defs/AttemptId"
-    },
-    "captureId": {
-      "$ref": "#/$defs/CaptureId"
-    },
-    "boundary": {
-      "enum": [
-        "before",
-        "after"
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "worktreeId": {
+          "$ref": "#/$defs/WorktreeId"
+        },
+        "roundId": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "captureId": {
+          "$ref": "#/$defs/CaptureId"
+        },
+        "boundary": {
+          "enum": [
+            "before",
+            "after"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "worktreeId",
+        "roundId",
+        "attemptId",
+        "captureId",
+        "boundary"
       ],
-      "type": "string"
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "roundId": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/AttemptId"
+        },
+        "captureId": {
+          "$ref": "#/$defs/CaptureId"
+        },
+        "boundary": {
+          "enum": [
+            "before",
+            "after"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "roundId",
+        "attemptId",
+        "captureId",
+        "boundary"
+      ],
+      "additionalProperties": false
     }
-  },
-  "required": [
-    "threadId",
-    "worktreeId",
-    "roundId",
-    "attemptId",
-    "captureId",
-    "boundary"
-  ],
-  "additionalProperties": false
+  ]
 }
 ```
 
@@ -15832,6 +15973,38 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 {
   "type": "object",
   "properties": {
+    "executor": {
+      "type": "object",
+      "properties": {
+        "nativeSessionId": {
+          "$ref": "#/$defs/NativeSessionId"
+        },
+        "selectedMode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "supportedModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionMode"
+          }
+        },
+        "enforcement": {
+          "enum": [
+            "adapter",
+            "native",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "nativeSessionId",
+        "selectedMode",
+        "supportedModes",
+        "enforcement"
+      ],
+      "additionalProperties": false
+    },
     "id": {
       "$ref": "#/$defs/RoundId"
     },
@@ -15843,6 +16016,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     },
     "place": {
       "$ref": "#/$defs/QueuePosition"
+    },
+    "rolledBackBy": {
+      "$ref": "#/$defs/CommandId"
     },
     "attempt": {
       "$ref": "#/$defs/RoundAttempt"
@@ -16482,6 +16658,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
             "unknown"
           ],
           "type": "string"
+        },
+        "failure": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -21424,6 +21616,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/input.reorderQueue"
     },
     {
+      "$ref": "#/$defs/checkpoint.previewRollback"
+    },
+    {
       "$ref": "#/$defs/checkpoint.readRollbackPart"
     },
     {
@@ -23037,6 +23232,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                         "unknown"
                                                       ],
                                                       "type": "string"
+                                                    },
+                                                    "failure": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "type": "string"
+                                                        },
+                                                        "message": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "message"
+                                                      ],
+                                                      "additionalProperties": false
                                                     }
                                                   },
                                                   "required": [
@@ -24206,6 +24417,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                           "unknown"
                                                         ],
                                                         "type": "string"
+                                                      },
+                                                      "failure": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "kind": {
+                                                            "type": "string"
+                                                          },
+                                                          "message": {
+                                                            "type": "string"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "kind",
+                                                          "message"
+                                                        ],
+                                                        "additionalProperties": false
                                                       }
                                                     },
                                                     "required": [
@@ -30125,6 +30352,129 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## checkpoint.previewRollback
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "checkpoint.previewRollback"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/DialogueRollbackTarget"
+        },
+        "mode": {
+          "enum": [
+            "dialogue",
+            "files",
+            "both"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
 ## checkpoint.readRollbackPart
 
 ```json
@@ -31883,6 +32233,12 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                       "type": "null"
                     }
                   ]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "endpoint": {
                   "anyOf": [
@@ -38358,6 +38714,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "instanceId": {
           "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "permission": {
+          "$ref": "#/$defs/PermissionMode"
         },
         "model": {
           "type": "object",

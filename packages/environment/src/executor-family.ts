@@ -32,9 +32,10 @@ type Model = SessionSetup["model"];
 type Target = { roundId: RoundId; attemptId: AttemptId };
 type Permit<C extends AdapterCommand> = Pick<
   ActionPermit<AdapterFamily, C["capability"]>,
-  "capabilityVersion" | "support"
+  "capabilityVersion" | "support" | "stillAllowed"
 >;
 type SessionView = {
+  pendingRoot?(): import("@kraka/protocol").NativeRootTurnId | null;
   requestOpen?(id: NativeRequestId): boolean;
   update?(payload: AdapterEventPayload, target: Target): ExecutorTurnUpdate | null;
   interrupted?(): { reason: string; message: string };
@@ -129,6 +130,7 @@ export interface FamilyProbe
     | "attemptedAt"
     | "authenticationReason"
   > {
+  canStartWithUnknownAccountAndModel?: boolean;
   declaration: CapabilityDeclaration;
   retryAt: number;
   /** Stable identity for a session resumed after a process restart. */

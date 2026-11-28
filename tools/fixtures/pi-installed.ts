@@ -214,7 +214,7 @@ async function openFixture(
       cleanup.push(() => cache.close());
       const socket = await connectReplica(publication.endpoint, identity, client, cache, {
         minor: 2,
-        installedProtocol: true,
+        subprotocol: "kraka.thread.v1",
       });
       cleanup.push(() => socket.close());
       const until = (predicate: () => boolean, label: string) =>

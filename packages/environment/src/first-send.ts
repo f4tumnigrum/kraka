@@ -105,6 +105,8 @@ export function acceptFirstInput({
         return reject(commandId, "notFound");
       if (content.attachments.length || content.references.length)
         return reject(commandId, "unsupported");
+      if (worktreeId === null && transaction.services.rollbacks.reserves(project.root.realPath))
+        return reject(commandId, "invalidState");
       const threadId = v.parse(ThreadIdSchema, crypto.randomUUID()),
         roundId = v.parse(RoundIdSchema, crypto.randomUUID());
       const directory =
@@ -263,6 +265,12 @@ export function applyThreadChange(
         ) || old.facts.rounds.some((r) => !r.quota && !isTerminalRoundPhase(r.round.attempt.phase));
       const lifecycle = changeThreadLifecycle(old.summary.lifecycle, change, Date.now(), blocked);
       if (!lifecycle) return reject(commandId, "invalidState");
+      if (
+        lifecycle.archivedAt === null &&
+        lifecycle.state.kind === "active" &&
+        store.services.rollbacks.reserves(store.directory(thread), thread.id)
+      )
+        return reject(commandId, "invalidState");
       const updated = v.parse(ThreadSchema, {
         ...thread,
         lifecycle,

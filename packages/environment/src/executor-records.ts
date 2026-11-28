@@ -38,6 +38,7 @@ export type ExecutorRegistration = AdapterInstance & {
   enabled: boolean;
   driver: {
     executable: string | null;
+    args?: readonly string[] | undefined;
     endpoint: string | null;
     configurationRoot: string | null;
     historyRoot: string | null;

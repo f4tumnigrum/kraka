@@ -308,7 +308,7 @@ export async function threadConnection(
             id: actor.principal.id,
             environmentId: host.identity.id,
             allows: (permission, target) =>
-              target.kind === "thread" && allows(target.threadId, permission),
+              target.kind !== "environment" && allowsTarget(target, permission),
           };
           const disclose = (receipt: CommandReceipt, allowed: () => boolean) => {
             const stream = sendLogicalRequest(peer, receipt);

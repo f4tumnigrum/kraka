@@ -213,6 +213,7 @@ type AcceptedInput = { threadId: string; messageId: MessageId; text: string };
 type Membership = {
   cursor: SyncCursor;
   members: Record<string, ObjectKey>;
+  rollbacks?: Record<string, import("@kraka/protocol").RollbackProgress>;
   listRows?: Record<string, ThreadSummary>;
   facts?: Record<string, AttentionFacts>;
   counts: Extract<ObjectChange, { kind: "list.counts" }>["counts"] | null;
@@ -230,6 +231,7 @@ export interface ThreadCache {
   history: Record<string, SavedPage>;
   accepted: Record<string, AcceptedInput>;
   returns: Record<string, TextReturnedEvent>;
+  contextOperations?: Record<string, import("@kraka/protocol").ContextOperation>;
   summaries: Record<string, Extract<ObjectChange, { kind: "thread.summary" }>["summary"]>;
 }
 export function emptyThreadCache(): ThreadCache {
@@ -341,6 +343,7 @@ export async function installThreadPass(
     const scope: Membership = {
       cursor: begin.through,
       members: begin.mode === "replace" ? {} : { ...prior?.members },
+      ...(begin.mode === "merge" && prior?.rollbacks ? { rollbacks: { ...prior.rollbacks } } : {}),
       counts: begin.mode === "replace" ? null : (prior?.counts ?? null),
     };
     const list = begin.through.scope.kind === "list" && begin.through.shapeVersion === 2;
@@ -367,12 +370,24 @@ export async function installThreadPass(
           case "window.leave":
             delete scope.members[keyString(change.key)];
             break;
+          case "checkpoint.rollbackProgress":
+            scope.rollbacks ??= {};
+            scope.rollbacks[change.progress.commandId] = change.progress;
+            break;
           case "tool.activity":
             saveRow(cache, { objectType: "timelineItem", value: change.item });
             break;
           case "executor.observation":
             saveRow(cache, { objectType: "timelineItem", value: change.observation });
             break;
+          case "context.operation": {
+            const op = change.operation,
+              key = JSON.stringify([op.threadId, op.deliveryId]);
+            const prior = cache.contextOperations?.[key];
+            if (!prior || comparePositions(op.version, prior.version) > 0)
+              cache.contextOperations = { ...cache.contextOperations, [key]: op };
+            break;
+          }
           case "handoff.textReturned": {
             if (
               change.result.target.environmentId !== begin.through.environmentId ||

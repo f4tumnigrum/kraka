@@ -1,6 +1,8 @@
 import * as v from "valibot";
 import {
   binarySource,
+  CommandIdSchema,
+  type AuthorizationTarget,
   listWireChange,
   ContentTransferIdSchema,
   SyncPassIdSchema,
@@ -404,11 +406,35 @@ export class ThreadSubscriptions {
   }
   private threadPlan(open: ThreadOpen) {
     const scope = this.scope(open.threadId);
-    return planThreadPass({
+    const plan = planThreadPass({
       ...open,
       authorizedScope: scope,
       readView: this.store.sync.read(scope, this.access.visibility()),
     });
+    if (plan.kind === "pass") {
+      const after = open.after?.through ?? "0";
+      const rows = this.store.db
+        .query<{ id: string }, [string, string, string]>(
+          "SELECT id FROM rollback_operations WHERE thread=? AND CAST(changed AS INTEGER)>CAST(? AS INTEGER) AND CAST(changed AS INTEGER)<=CAST(? AS INTEGER) ORDER BY CAST(changed AS INTEGER)",
+        )
+        .all(open.threadId, after, plan.through.through);
+      for (const row of rows) {
+        const op = this.store.services.rollbacks.read(v.parse(CommandIdSchema, row.id));
+        if (!op || ("directoryId" in op.progress.target && !scope.directoryDiff)) continue;
+        const actor = {
+          id: this.access.principal,
+          allows: (_p: PermissionItem, t: AuthorizationTarget) =>
+            t.kind === "project"
+              ? this.access.canList(t.projectId)
+              : t.kind === "thread" && scope.canRead(t.threadId),
+        };
+        plan.changes.push({
+          kind: "checkpoint.rollbackProgress",
+          progress: this.store.services.rollbacks.project(actor, op),
+        });
+      }
+    }
+    return plan;
   }
   handle(req: SignedRequest): CommandReceipt | null {
     const commandId = req.commandId;
