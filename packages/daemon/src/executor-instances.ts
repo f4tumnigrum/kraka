@@ -12,6 +12,8 @@ import {
   type SessionSetup,
 } from "@kraka/environment";
 import {
+  InstancePermissionSchema,
+  type PermissionMode,
   REQUEST_METHODS,
   ChildModelSchema,
   ExecutorInstanceIdSchema,
@@ -76,7 +78,11 @@ export class ExecutorInstances {
       thread.worktreeId ? () => this.store.directory(thread) : undefined,
     );
     if (entry?.reg.version !== saved.version) return null;
-    return this.select(entry, v.parse(ChildModelSchema, JSON.parse(saved.model)));
+    return this.select(
+      entry,
+      v.parse(ChildModelSchema, JSON.parse(saved.model)),
+      thread.requestedMode,
+    );
   }
   async close() {
     this.closed = true;
@@ -112,7 +118,11 @@ export class ExecutorInstances {
       this.active.delete(work);
     }
   }
-  select(entry: Entry | null, selection: SessionSetup["model"] | undefined) {
+  select(
+    entry: Entry | null,
+    selection: SessionSetup["model"] | undefined,
+    requestedMode?: PermissionMode,
+  ) {
     if (
       !entry ||
       !entry.probe.declaration.permission.modes.includes(entry.snapshot.permission.selected) ||
@@ -122,7 +132,15 @@ export class ExecutorInstances {
     )
       return null;
     const model = entry.probe.selectModel(selection ?? entry.reg.model);
-    return model ? { ...entry, model } : null;
+    const permission = v.safeParse(InstancePermissionSchema, {
+      ...entry.snapshot.permission,
+      selected: requestedMode ?? entry.snapshot.permission.selected,
+    });
+    return model &&
+      permission.success &&
+      entry.probe.declaration.permission.modes.includes(permission.output.selected)
+      ? { ...entry, model, permission: permission.output }
+      : null;
   }
   async probe(
     reg: ExecutorRegistration,

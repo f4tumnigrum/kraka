@@ -27,6 +27,7 @@ export function claudePeerControl() {
     },
   });
   return {
+    totalInputs: () => events.items.filter((e) => e.kind === "input").length,
     url: "ws://127.0.0.1:" + server.port,
     waitFor(kind: string, session: string, key: string) {
       return events.until((e) => e.kind === kind && e.session === session && e.key === key);
@@ -38,8 +39,23 @@ export function claudePeerControl() {
     release(session: string, key: string) {
       peers.get(session)?.send(JSON.stringify({ kind: "release", session, key }));
     },
+    releaseHeld() {
+      for (const e of events.items)
+        if (e.kind === "held")
+          peers
+            .get(e.session)
+            ?.send(JSON.stringify({ kind: "release", session: e.session, key: e.key }));
+    },
     async close() {
-      await server.stop(true);
+      try {
+        await Promise.all(
+          [...peers.keys()]
+            .filter(Boolean)
+            .map((session) => events.until((e) => e.kind === "eof" && e.session === session)),
+        );
+      } finally {
+        await server.stop(true);
+      }
     },
   };
 }

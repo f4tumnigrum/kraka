@@ -68,6 +68,22 @@ jobs:
       - run: bun run typecheck
       - name: Run ordinary live suites and verify their groups
         uses: ./.github/actions/live-suites
+      - name: Verify four Claude SDK cases
+        shell: python
+        run: |
+          import os, pathlib, xml.etree.ElementTree as ET
+          root = ET.parse(pathlib.Path(os.environ["RUNNER_TEMP"]) / "live.xml")
+          cases = root.findall(".//testcase")
+          expected = ["1. Command approval and selected policy", "2. File approval and diff",
+                      "3. Interrupt outcome", "4. Cached approval after restart"]
+          assert sorted(c.get("name") for c in cases) == expected
+          assert all(c.find(tag) is None for c in cases for tag in ("skipped", "failure", "error"))
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: claude-sdk-turn-${{ matrix.os }}
+          path: ${{ runner.temp }}/live.xml
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

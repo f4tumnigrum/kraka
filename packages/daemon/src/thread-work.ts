@@ -38,6 +38,8 @@ import {
   GitStatusCache,
 } from "@kraka/environment";
 import {
+  InstancePermissionSchema,
+  type PermissionMode,
   type CommandId,
   CommandIdSchema,
   AttemptIdSchema,
@@ -433,6 +435,7 @@ export function threadWork<H extends object>(
   async function startThread(
     actor: LocalActor,
     req: Pick<Extract<SignedRequest, { method: "thread.start" }>, "commandId" | "payload">,
+    grantCeiling?: () => PermissionMode | null,
   ) {
     const { projectId } = req.payload;
     const id = req.payload.instanceId ?? executors.registry.defaultFor(projectId);
@@ -447,7 +450,14 @@ export function threadWork<H extends object>(
       entry = await executors.lookup(id, actor.id, projectId);
     if (!accepting) throw Error("Writer closed");
     const model = req.payload.model;
-    const chosen = executors.select(entry, model);
+    const chosen = executors.select(entry, model, req.payload.requestedMode);
+    const authorizedMode = () =>
+      !grantCeiling ||
+      (chosen &&
+        v.safeParse(InstancePermissionSchema, {
+          ceiling: grantCeiling(),
+          selected: chosen.permission.selected,
+        }).success);
     return acceptFirstInput({
       verifiedActor: actor,
       commandId: req.commandId,
@@ -455,7 +465,7 @@ export function threadWork<H extends object>(
       transaction,
       validate: () =>
         id
-          ? chosen
+          ? chosen && authorizedMode()
             ? null
             : "unsupported"
           : replay &&

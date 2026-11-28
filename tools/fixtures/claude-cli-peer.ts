@@ -54,6 +54,7 @@ async function run() {
       });
     if (index === 3 || raw.type === "result")
       Object.assign(row, { user_message_uuid: input, user_message_uuids: [input] });
+    if (index === 2) send("init", input, row);
     write(row);
   }
   const option = (name: string) => {
@@ -91,10 +92,16 @@ async function run() {
               response: {
                 commands: [],
                 agents: [],
-                models: [],
+                models: [
+                  {
+                    value: "claude-sonnet-4-6",
+                    displayName: "Fixture model",
+                    description: "Recorded CLI peer",
+                  },
+                ],
                 output_style: "default",
                 available_output_styles: ["default"],
-                account: {},
+                account: { tokenSource: "fixture" },
               },
             },
           });
@@ -124,6 +131,7 @@ async function run() {
         if (mode === "interrupt") {
           emit(3);
           emit(4);
+          send("text", input);
           continue;
         }
         let name = "Bash";

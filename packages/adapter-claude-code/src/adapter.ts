@@ -36,6 +36,7 @@ export type ClaudeLaunch = {
   instanceId?: ExecutorInstanceId;
   previousEpoch?: number;
   capabilityVersion?: number;
+  environment?: Readonly<Record<string, string>>;
 };
 const supported = new Set<CapabilityId>([
   "startSession",
@@ -203,6 +204,7 @@ export function createClaudeCodeAdapter(
         Object.keys(setup.model.options).length
       )
         return rejected("unsupported");
+      setup = { ...setup, environment: { ...setup.environment, ...launch?.environment } };
       const executable = Bun.which(launch?.executable ?? "claude", {
         cwd: setup.workingDirectory,
         PATH: setup.environment.PATH ?? process.env.PATH ?? "",

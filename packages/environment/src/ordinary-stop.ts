@@ -166,8 +166,7 @@ export class OrdinaryStops {
       const { attempt } = round,
         phase = attempt.phase;
       const binding = frozenInput(this.store, attempt.deliveryId)?.target;
-      if (binding?.family !== "codex" || !binding.nativeSessionId || !("root" in phase))
-        return reject("invalidState");
+      if (!binding?.nativeSessionId || !("root" in phase)) return reject("invalidState");
       const endpoint = this.endpoints.get(attempt.attemptId);
       if (!("endedAt" in phase) && (!endpoint || endpoint.root !== phase.root.id))
         return reject("unsupported");

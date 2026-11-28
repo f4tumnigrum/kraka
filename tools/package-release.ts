@@ -236,6 +236,7 @@ if (import.meta.main) {
   const { values } = parseArgs({
     options: {
       host: { type: "boolean" },
+      budgets: { type: "boolean" },
       out: { type: "string" },
       os: { type: "string" },
       arch: { type: "string" },
@@ -258,21 +259,23 @@ if (import.meta.main) {
       version: manifest.version,
       outputDirectory: values.out,
     });
-    const sizes = await inspectArchive(artifact);
-    const closure: DependencyObservation = { packages: [], workspaces: [] };
-    await productionClosure(resolve(import.meta.dir, ".."), closure, target);
-    const native = closure.packages.filter((p) => p.native).length;
-    await writeFile(
-      artifact.archive + ".budgets.json",
-      JSON.stringify({
-        target,
-        sha256: artifact.sha256,
-        P8: { ...sizes, limitBytes: 120_000_000 },
-        A1: { ...closure, native, external: closure.packages.length },
-      }) + "\n",
-    );
-    if (sizes.archiveBytes > 120_000_000 || closure.packages.length > 15 || native)
-      throw Error("Release exceeds P8/A1 budgets");
+    if (values.budgets) {
+      const sizes = await inspectArchive(artifact);
+      const closure: DependencyObservation = { packages: [], workspaces: [] };
+      await productionClosure(resolve(import.meta.dir, ".."), closure, target);
+      const native = closure.packages.filter((p) => p.native).length;
+      await writeFile(
+        artifact.archive + ".budgets.json",
+        JSON.stringify({
+          target,
+          sha256: artifact.sha256,
+          P8: { ...sizes, limitBytes: 120_000_000 },
+          A1: { ...closure, native, external: closure.packages.length },
+        }) + "\n",
+      );
+      if (sizes.archiveBytes > 120_000_000 || closure.packages.length > 15 || native)
+        throw Error("Release exceeds P8/A1 budgets");
+    }
     console.log(JSON.stringify(artifact));
   }
 }

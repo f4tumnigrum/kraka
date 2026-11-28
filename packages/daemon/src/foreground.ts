@@ -137,19 +137,27 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
       };
       const context = { actor, transaction: store, commandId: r.commandId };
       if (r.method === "thread.start")
-        return work.startThread(actor, r).then((receipt) => {
-          if (receipt.kind === "accepted" && receipt.result.kind === "threadStarted") {
-            const id = r.payload.worktreeId;
-            const claim = id && readManaged(store.db, id);
-            if (
-              claim &&
-              (claim.claim.phase.kind === "building" || claim.claim.phase.kind === "preparing")
-            )
-              void work.resume(claim);
-            else work.schedule(receipt.result.threadId, r.commandId);
-          }
-          return receipt;
-        });
+        return work
+          .startThread(actor, r, () =>
+            host.store.ceiling(
+              device.principal.id,
+              { kind: "project", projectId: r.payload.projectId },
+              "thread.send",
+            ),
+          )
+          .then((receipt) => {
+            if (receipt.kind === "accepted" && receipt.result.kind === "threadStarted") {
+              const id = r.payload.worktreeId;
+              const claim = id && readManaged(store.db, id);
+              if (
+                claim &&
+                (claim.claim.phase.kind === "building" || claim.claim.phase.kind === "preparing")
+              )
+                void work.resume(claim);
+              else work.schedule(receipt.result.threadId, r.commandId);
+            }
+            return receipt;
+          });
       if (r.method === "executor.configure") return executors.configure(context, r.payload);
       if (r.method === "executor.refresh") return executors.refresh(context, r.payload);
       if (r.method === "project.register") {

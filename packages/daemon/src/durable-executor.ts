@@ -37,7 +37,7 @@ export async function resumeBinding(
     additionalDirectories: [],
     environment: {},
     model: s.model,
-    permission: s.snapshot.permission,
+    permission: s.permission,
   });
   return { opened };
 }
@@ -289,6 +289,31 @@ export async function dispatchExecutor(
       )
         throw new Error("Foreign executor event");
       switch (p.kind) {
+        case "permissionApplied": {
+          const current = readRound(store.db, roundId);
+          if (
+            current &&
+            current.attempt.attemptId === attemptId &&
+            p.mode === selection.permission.selected
+          )
+            store.setPhase(
+              {
+                ...current,
+                executorPolicy: {
+                  supported: [...selection.probe.declaration.permission.modes].filter(
+                    (m): m is "ask" | "edits" | "open" =>
+                      m === "ask" || m === "edits" || m === "open",
+                  ),
+                  selected: selection.permission.selected,
+                  effective: selection.permission.selected,
+                  enforcement: p.enforcement,
+                  sessionId,
+                },
+              },
+              current.attempt.phase,
+            );
+          break;
+        }
         case "deliveryReceived":
           if (p.receipt.kind === "input")
             report({

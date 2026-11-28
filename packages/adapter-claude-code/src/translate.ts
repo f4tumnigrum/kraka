@@ -54,7 +54,10 @@ export function translateClaudeCodeFrame(frame: ClaudeCodeNativeFrame, state: Cl
     });
     next = { ...next, received: true };
   }
-  if (answered && !state.answered) next = { ...next, answered: true };
+  if (answered && !state.answered) {
+    next = { ...next, answered: true };
+    events.push({ kind: "roundStarted", attemptId, nativeRootTurnId: input.root, at: null });
+  }
   if (!next.answered) {
     if (p.kind === "result")
       events.push({

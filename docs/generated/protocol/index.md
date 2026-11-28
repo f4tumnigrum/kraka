@@ -8950,9 +8950,16 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
           "$ref": "#/$defs/NativeSessionId"
         },
         "startedAt": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "selectedMode": {
           "$ref": "#/$defs/PermissionMode"
@@ -15709,6 +15716,42 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 {
   "type": "object",
   "properties": {
+    "executorPolicy": {
+      "type": "object",
+      "properties": {
+        "supported": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionMode"
+          }
+        },
+        "selected": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "effective": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "enforcement": {
+          "enum": [
+            "native",
+            "adapter",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/NativeSessionId"
+        }
+      },
+      "required": [
+        "supported",
+        "selected",
+        "effective",
+        "enforcement",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
     "id": {
       "$ref": "#/$defs/RoundId"
     },
@@ -24795,6 +24838,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 {
   "type": "object",
   "properties": {
+    "requestedMode": {
+      "$ref": "#/$defs/PermissionMode"
+    },
     "lifecycle": {
       "$ref": "#/$defs/ThreadLifecycle"
     },
@@ -37262,6 +37308,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
               "type": "null"
             }
           ]
+        },
+        "requestedMode": {
+          "$ref": "#/$defs/PermissionMode"
         },
         "instanceId": {
           "$ref": "#/$defs/ExecutorInstanceId"

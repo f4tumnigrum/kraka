@@ -290,7 +290,12 @@ export type AdapterEventPayload =
       attemptId: AttemptId;
       receipt: NativeReceipt;
     }
-  | { kind: "roundStarted"; attemptId: AttemptId; nativeRootTurnId: NativeRootTurnId; at: number }
+  | {
+      kind: "roundStarted";
+      attemptId: AttemptId;
+      nativeRootTurnId: NativeRootTurnId;
+      at: number | null;
+    }
   | {
       kind: "contentDelta";
       attemptId: AttemptId;

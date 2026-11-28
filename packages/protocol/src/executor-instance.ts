@@ -127,7 +127,7 @@ export const ExecutorTurnUpdateSchema = v.variant("kind", [
     kind: v.literal("round.started"),
     ...root,
     nativeSessionId: NativeSessionIdSchema,
-    startedAt: time,
+    startedAt: v.nullable(time),
     selectedMode: PermissionModeSchema,
     effectiveMode: PermissionModeSchema,
     effectivePolicy: v.optional(CodexEffectivePolicySchema),
