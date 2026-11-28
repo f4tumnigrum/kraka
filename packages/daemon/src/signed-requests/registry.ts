@@ -1,4 +1,5 @@
-import { compact, rollback } from "./context-operations";
+import { compact } from "./context-operations";
+import { rollback } from "./rollback";
 import { checkpoint } from "./checkpoint";
 import { editQueue, input } from "./inputs";
 import { lifecycle, rename, roundControl } from "./threads";
@@ -35,6 +36,12 @@ const routes = new Map<
   (req: Request, c: RequestContext) => CommandReceipt | null | void
 >([
   route("checkpoint.diff", checkpoint),
+  route("checkpoint.previewRollback", rollback),
+  route("checkpoint.readRollbackPart", rollback),
+  route("checkpoint.restoreFiles", rollback),
+  route("checkpoint.retryDialogue", rollback),
+  route("checkpoint.retryFiles", rollback),
+  route("checkpoint.rollback", rollback),
   route("checkpoint.rollbackDialogue", rollback),
   route("executor.cancelLogin", executor),
   route("executor.configure", executor),

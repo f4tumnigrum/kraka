@@ -503,6 +503,15 @@ export const REQUEST_METHODS = {
     "thread",
     QueueOrderSchema,
   ),
+  previewRollback: defineRequestMethod(
+    "checkpoint.previewRollback",
+    "thread.view",
+    "thread",
+    v.strictObject({
+      target: DialogueRollbackTargetSchema,
+      mode: v.picklist(["dialogue", "files", "both"]),
+    }),
+  ),
   inspectRollback: defineRequestMethod(
     "checkpoint.readRollbackPart",
     "thread.view",
@@ -1211,7 +1220,17 @@ export const RequestResultSchema = v.variant("kind", [
   v.strictObject({ kind: v.literal("forgeFileReading"), reading: ForgeMarkViewSchema }),
   v.strictObject({ kind: v.literal("forgeHistory"), history: v.array(ForgeHistorySchema) }),
   v.strictObject({ kind: v.literal("checkpointDiff"), diff: DiffResultSchema }),
-  v.strictObject({ kind: v.literal("checkpointRollback"), progress: RollbackProgressSchema }),
+  v.strictObject({
+    kind: v.literal("rollbackPreview"),
+    rewind: v.picklist(["verified", "unsupported", "unknown"]),
+    restoreFiles: v.boolean(),
+    maySubmit: v.boolean(),
+  }),
+  v.strictObject({
+    kind: v.literal("checkpointRollback"),
+    progress: RollbackProgressSchema,
+    draft: v.optional(InputContentSchema),
+  }),
   v.strictObject({ kind: v.literal("terminalControl"), control: TerminalControlSchema }),
   v.strictObject({ kind: v.literal("terminalSession"), session: TerminalSessionSchema }),
   v.strictObject({ kind: v.literal("terminalInput"), receipt: TerminalInputReceiptSchema }),

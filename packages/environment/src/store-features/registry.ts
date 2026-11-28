@@ -4,6 +4,7 @@ export { diff } from "./diff";
 export { executors } from "./executors";
 export { logins } from "./logins";
 export { queues } from "./queues";
+export { rollbacks } from "./rollbacks";
 export { sessions } from "./sessions";
 export { settings } from "./settings";
 export { todos } from "./todos";

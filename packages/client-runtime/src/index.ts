@@ -4,6 +4,7 @@ export type { DesktopBridge } from "./desktop";
 export * from "./list-connection";
 export * from "./outbox";
 export * from "./platform";
+export { editRolledBackPrompt, fileRestoreMessage, rollbackEffectsLabel } from "./rollback";
 export type { QueueEditDraft } from "./queue-draft";
 export * from "./registration";
 export { RouteAttempt } from "./route-attempt";

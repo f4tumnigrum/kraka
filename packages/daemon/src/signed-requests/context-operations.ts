@@ -1,5 +1,5 @@
 import * as v from "valibot";
-import { recordCommand, readRound, savedBinding } from "@kraka/environment";
+import { recordCommand, savedBinding } from "@kraka/environment";
 import {
   ContextOperationSchema,
   REQUEST_METHODS,
@@ -7,30 +7,6 @@ import {
   type ContextOperationObservation,
 } from "@kraka/protocol";
 import type { Handler } from "./context";
-export const rollback: Handler<"checkpoint.rollbackDialogue"> = (m, { store, principal }) => {
-  const p = m.payload,
-    target = { kind: "thread" as const, threadId: p.threadId };
-  return recordCommand(
-    { actor: principal, commandId: m.commandId, transaction: store },
-    REQUEST_METHODS.rollbackDialogue,
-    p,
-    target,
-    () => {
-      const round = readRound(store.db, p.roundId);
-      if (!round || round.threadId !== p.threadId || round.attempt.attemptId !== p.attemptId)
-        return { kind: "rejected", commandId: m.commandId, failure: { kind: "notFound" } };
-      const phase = round.attempt.phase;
-      if (
-        "nativeSessionId" in p &&
-        (!("root" in phase) ||
-          phase.root.id !== p.nativeRootTurnId ||
-          phase.root.sessionId !== p.nativeSessionId)
-      )
-        return { kind: "rejected", commandId: m.commandId, failure: { kind: "invalidState" } };
-      return { kind: "rejected", commandId: m.commandId, failure: { kind: "unsupported" } };
-    },
-  );
-};
 export const compact: Handler<"thread.compact"> = (m, { store, principal }) => {
   const { threadId, instructions } = m.payload,
     service = store.services.context;

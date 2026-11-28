@@ -492,6 +492,7 @@ export async function probeCodex(
       supported.add("resumeSessionAfterProcessExit");
       supported.add("resumeSessionAfterHostRestart");
     }
+    if (methods.requests.has("thread/rollback")) supported.add("rollbackRounds");
     if (methods.requests.has("turn/interrupt")) supported.add("stopRound");
     if (methods.requests.has("turn/steer")) supported.add("steerCurrentRound");
     for (const [method, id] of [

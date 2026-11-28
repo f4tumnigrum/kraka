@@ -32,7 +32,7 @@ type Model = SessionSetup["model"];
 type Target = { roundId: RoundId; attemptId: AttemptId };
 type Permit<C extends AdapterCommand> = Pick<
   ActionPermit<AdapterFamily, C["capability"]>,
-  "capabilityVersion" | "support"
+  "capabilityVersion" | "support" | "stillAllowed"
 >;
 type SessionView = {
   pendingRoot?(): import("@kraka/protocol").NativeRootTurnId | null;

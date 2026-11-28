@@ -61,6 +61,8 @@ export function applyInputCommand({
     () => {
       const thread = readThread(transaction.db, threadId);
       if (!thread) return refuse("notFound");
+      if (transaction.services.rollbacks.reserves(transaction.directory(thread), thread.id))
+        return refuse("invalidState");
       const queue = loadQueue(transaction, threadId);
       const head = firstPending(queue.rows);
       if (

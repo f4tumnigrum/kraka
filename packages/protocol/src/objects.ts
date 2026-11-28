@@ -121,6 +121,7 @@ export const RoundSchema = v.strictObject({
   threadId: ThreadIdSchema,
   messageId: MessageIdSchema,
   place: QueuePositionSchema,
+  rolledBackBy: v.optional(CommandIdSchema),
   attempt: RoundAttemptSchema,
   attempts: v.optional(
     v.array(
