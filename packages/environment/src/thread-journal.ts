@@ -1,4 +1,5 @@
 import { decodeJournalRow, encodeJournalRow } from "./journal-row";
+import { markStartupDetail } from "./capture-timing";
 import { ListIndex } from "./list-index";
 import type { ListScope } from "./list-pass";
 import type { PrincipalId, TodoRequest, Round, SyncPosition } from "@kraka/protocol";
@@ -84,23 +85,27 @@ function orderBounded(item: ReadRow, edge: Bound) {
   return 0;
 }
 export class ThreadJournal {
-  private readonly activities: ToolActivityStorage;
-  readonly list: ListIndex;
   private readonly listeners = new Set<() => void>();
-  constructor(
+  private constructor(
     readonly db: Database,
     readonly environmentId: EnvironmentId,
-  ) {
-    ({ activities: this.activities, list: this.list } = db.transaction(() => {
+    private readonly activities: ToolActivityStorage,
+    readonly list: ListIndex,
+  ) {}
+  static open(db: Database, environmentId: EnvironmentId) {
+    return db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1),generation TEXT NOT NULL,head TEXT NOT NULL,floor TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
      CREATE TABLE IF NOT EXISTS tool_activity_scoped_changes(thread_id TEXT NOT NULL,event_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread_id,event_id));`);
-      return { activities: new ToolActivityStorage(db), list: new ListIndex(db) };
-    })());
-    db.transaction(() => {
-      if (this.meta()) return;
+      markStartupDetail("db.journal");
+      const activities = ToolActivityStorage.open(db);
+      markStartupDetail("db.activities");
+      const list = ListIndex.open(db);
+      markStartupDetail("db.list");
+      const journal = new ThreadJournal(db, environmentId, activities, list);
+      if (journal.meta()) return journal;
       db.run("INSERT INTO sync_meta VALUES(1,?,'0','0')", [crypto.randomUUID()]);
       const rows: HistoryRow[] = [];
       for (const [table, objectType] of [
@@ -113,7 +118,8 @@ export class ThreadJournal {
           .all())
           rows.push(v.parse(rowSchema, { objectType, value: JSON.parse(data) }));
       }
-      if (rows.length) this.record(rows);
+      if (rows.length) journal.record(rows);
+      return journal;
     })();
   }
   private meta() {

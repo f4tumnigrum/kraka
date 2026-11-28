@@ -47,7 +47,7 @@ function store() {
   db.exec(
     "CREATE TABLE threads(id TEXT PRIMARY KEY,data TEXT NOT NULL); CREATE TABLE messages(id TEXT PRIMARY KEY,data TEXT NOT NULL); CREATE TABLE rounds(id TEXT PRIMARY KEY,data TEXT NOT NULL);",
   );
-  const journal = new ThreadJournal(db, environmentId);
+  const journal = ThreadJournal.open(db, environmentId);
   const recordThread = (id: string) => {
     const value = thread(id);
     db.transaction(() => journal.record([{ objectType: "thread", value }]))();
@@ -486,11 +486,13 @@ test("reopens the previous storage format with identical wire bytes, versions an
     ]);
     f.db.transaction(() => f.journal.record([{ objectType: "timelineItem", value: last.item }]))();
     f.db.run("UPDATE tool_activity_versions SET byte_length=byte_length-1 WHERE version='2'");
-    expect(() => new ThreadJournal(f.db, environmentId)).toThrow("Incomplete legacy activity body");
+    expect(() => ThreadJournal.open(f.db, environmentId)).toThrow(
+      "Incomplete legacy activity body",
+    );
     expect(f.db.query("SELECT 1 FROM tool_activity_blocks LIMIT 1").get()).toBeTruthy();
     f.db.run("UPDATE tool_activity_versions SET byte_length=byte_length+1 WHERE version='2'");
     f.db.exec("DROP TABLE list_sources; DROP TABLE list_attempts; DROP TABLE list_watermarks;");
-    const reopened = new ThreadJournal(f.db, environmentId);
+    const reopened = ThreadJournal.open(f.db, environmentId);
     const list = reopened.readList(
       { kind: "list", projectId: null },
       "visible",

@@ -12,27 +12,84 @@ type StartupStep =
   | "registerRecovery"
   | "publish";
 export type WriterStartupMark = (step: StartupStep) => void;
-const startup = new AsyncLocalStorage<{ active: boolean; gitProcesses: number }>();
+type StartupDetail =
+  | "db.open"
+  | "db.inspect"
+  | "db.wal"
+  | "db.synchronous"
+  | "db.begin"
+  | "db.base"
+  | "db.header"
+  | "db.deliveries"
+  | "db.indexes"
+  | "db.queuesSchema"
+  | "db.version"
+  | "db.worktrees"
+  | "db.settings"
+  | "db.sessions"
+  | "db.diff"
+  | "db.journal"
+  | "db.activities"
+  | "db.list"
+  | "db.journalSeed"
+  | "db.todos"
+  | "db.captures"
+  | "db.executors"
+  | "db.queueRecovery"
+  | "db.commit"
+  | "owner.fixtureRegistry"
+  | "owner.fixtureSecrets"
+  | "owner.openedHook"
+  | "owner.executors"
+  | "owner.stops"
+  | "owner.read"
+  | "owner.key"
+  | "access.directory"
+  | "access.files"
+  | "access.open"
+  | "access.pragma"
+  | "access.identityTable"
+  | "access.identity"
+  | "access.tables"
+  | "access.commit"
+  | "access.key";
+type StartupTrace = {
+  active: boolean;
+  gitProcesses: number;
+  lastDetail: number;
+  details: [StartupDetail, number][];
+};
+const startup = new AsyncLocalStorage<StartupTrace>();
+const roundedMs = (ms: number) => Math.round(ms * 100) / 100;
+export function markStartupDetail(label: StartupDetail) {
+  const trace = startup.getStore();
+  if (!trace?.active) return;
+  const now = performance.now();
+  trace.details.push([label, roundedMs(now - trace.lastDetail)]);
+  trace.lastDetail = now;
+}
 
 export function measureWriterStartup<T>(work: (mark: WriterStartupMark) => Promise<T>) {
   const start = performance.now(),
-    trace = { active: true, gitProcesses: 0 };
+    trace: StartupTrace = { active: true, gitProcesses: 0, lastDetail: start, details: [] };
   const steps: [StartupStep, number][] = [];
   let previous = start;
-  const rounded = (n: number) => Math.round(n * 100) / 100;
+
   const mark = (step: StartupStep) => {
     const now = performance.now();
-    steps.push([step, rounded(now - previous)]);
+    steps.push([step, roundedMs(now - previous)]);
     previous = now;
+    trace.lastDetail = now;
     if (step === "publish") {
       trace.active = false;
       console.error(
         "Writer startup timing " +
           JSON.stringify({
-            totalMs: rounded(now - start),
-            processAgeMs: rounded(now),
+            totalMs: roundedMs(now - start),
+            processAgeMs: roundedMs(now),
             gitProcesses: trace.gitProcesses,
             steps,
+            details: trace.details,
           }),
       );
     }
@@ -107,15 +164,15 @@ export async function measureCaptureBoundary<T>(boundary: Boundary, work: () => 
     return await traces.run(trace, work);
   } finally {
     const totalMs = performance.now() - start - trace.lockWaitMs;
-    const rounded = (n: number) => Math.round(n * 100) / 100;
+
     console.error(
       "Checkpoint boundary timing " +
         JSON.stringify({
           boundary,
-          totalMs: rounded(totalMs),
-          otherMs: rounded(totalMs - trace.steps.reduce((sum, step) => sum + step.ms, 0)),
+          totalMs: roundedMs(totalMs),
+          otherMs: roundedMs(totalMs - trace.steps.reduce((sum, step) => sum + step.ms, 0)),
           gitProcesses: trace.steps.length,
-          steps: trace.steps.map(({ step, ms }) => [step, rounded(ms)]),
+          steps: trace.steps.map(({ step, ms }) => [step, roundedMs(ms)]),
         }),
     );
   }

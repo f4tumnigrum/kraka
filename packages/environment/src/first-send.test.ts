@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as v from "valibot";
@@ -84,6 +84,45 @@ async function create(dir: string) {
     },
   };
 }
+test("opening a fresh writer commits its complete schema and initial rows once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kraka-fresh-store-"));
+  try {
+    const lock = await openWriter(
+      dir,
+      v.parse(HostInstanceIdSchema, crypto.randomUUID()),
+      performance.now() + 1000,
+    );
+    if (lock.kind !== "writer") throw Error(lock.kind);
+    try {
+      const store = openStore(lock.lease);
+      try {
+        expect(store.db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+        expect(store.db.query("SELECT head FROM sync_meta").get()).toEqual({ head: "0" });
+        expect(store.db.query("SELECT version FROM setting_version").get()).toEqual({
+          version: "0",
+        });
+        // SQLite marks the last WAL frame of each committed transaction with a nonzero database size.
+        // This fresh WAL has never been reset. Read it while the original connection is still open.
+        const wal = readFileSync(join(dir, "environment.sqlite-wal"));
+        const frameBytes = 24 + wal.readUInt32BE(8);
+        expect((wal.length - 32) % frameBytes).toBe(0);
+        let commits = 0;
+        for (let frame = 32; frame < wal.length; frame += frameBytes)
+          if (wal.readUInt32BE(frame + 4) !== 0) commits++;
+        expect(commits).toBe(1);
+        expect(store.db.query("SELECT count(*) AS n FROM executor_registrations").get()).toEqual({
+          n: 0,
+        });
+      } finally {
+        store.db.close(true);
+      }
+    } finally {
+      lock.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
 test("a lost reply can be read after restart; a changed intent or revoked grant cannot reuse it", () =>
   withWriter(async (f) => {
     const receipt = acceptFirstInput(f.input);
