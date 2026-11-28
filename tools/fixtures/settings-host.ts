@@ -111,7 +111,7 @@ export async function settingsHost(dir: string, name: string, devices?: Devices)
       });
       const thread = accepted(result.receipt, "threadStarted");
       await events.until((e) => e.event === "dispatch" && e.threadId === thread.threadId);
-      await events.until((e) => e.event === "ended" && e.roundId === thread.roundId);
+      await events.untilDispatch((e) => e.event === "ended" && e.roundId === thread.roundId);
       return { thread, id };
     }
     return {

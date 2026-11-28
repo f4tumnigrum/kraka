@@ -21,7 +21,7 @@ import { connectGitClient } from "../packages/cli-client/src/git-client";
 import { openAccessHost } from "../packages/daemon/src/access";
 import { openReceiptReader } from "@kraka/environment";
 import { accepted, startFirstSendFixture, launchWriter, productRoot } from "./fixtures/first-send";
-import { cli, git, readClaim, seedGit } from "./fixtures/isolated-start";
+import { cli, git, idle, readClaim, seedGit } from "./fixtures/isolated-start";
 import { cliObserver } from "./fixtures/local-diff-cli";
 import { Journal } from "./fixtures/route-network";
 import { withState } from "./fixtures/replay-process";
@@ -169,7 +169,9 @@ async function prepare(dir: string, repo = seedGit(dir)) {
         projectId: project.id,
       });
       const turn = accepted(receipt, "threadStarted");
-      await completed.until((e) => e.roundId === turn.roundId && e.threadId === turn.threadId);
+      await completed.untilDispatch(
+        (e) => e.roundId === turn.roundId && e.threadId === turn.threadId,
+      );
       if (!project.root) throw Error("Missing registered checkout");
       return {
         threadId: turn.threadId,
@@ -331,7 +333,7 @@ test(
           kind: "isolated",
           selection: { baseRef: f.repo.base, branch },
         });
-        await f.completed.until((e) => e.roundId === r.ids.roundId);
+        await f.completed.untilDispatch((e) => e.roundId === r.ids.roundId);
         const wid = r.request.payload.worktreeId;
         if (!wid) throw Error("Missing worktree ID");
         const managed = readClaim(f.state, wid);
@@ -588,6 +590,7 @@ test(
       const other = await prepare(join(f.dir, "second-writer"), f.repo);
       try {
         const otherQuery = { kind: "workingTree" as const, ...(await other.thread()) };
+        await Promise.all([idle(f.daemon), idle(other.daemon)]);
         const otherClient = await fixtureGitClient(other.credentials, other.credentials.url);
         try {
           const userHooks = join(f.dir, "user-hooks");
@@ -620,6 +623,15 @@ test(
             throw Error("Expected second writer's continuation");
           const foreign = pinnedComparison(other, neighbor.to.tree);
           expect(foreign.writer).not.toBe(own.writer);
+          // Both kinds of private ref use the same writer identity in this shared repository.
+          for (const pins of [own, foreign]) {
+            const checkpoints = pins.writer.replace("/diffs/", "/checkpoints/");
+            const names = git(cwd, "for-each-ref", "--format=%(refname)", checkpoints).split(
+              /\r?\n/,
+            );
+            expect(names.some((name) => name.endsWith("/before"))).toBe(true);
+            expect(names.some((name) => name.endsWith("/after"))).toBe(true);
+          }
           expect(neighbor.to.tree).not.toBe(first.to.tree);
           const expectedNeighbor = expectedPatch(cwd, f.repo.base, neighbor.to.tree);
           const ownOrphan = own.writer + crypto.randomUUID() + "/from",
@@ -643,6 +655,13 @@ test(
           const restarted = launchWriter(f.state, productRoot);
           try {
             const { publication } = await restarted.ready();
+            await idle({ instance: publication });
+            const timing = restarted
+              .stderrTail()
+              .split("\n")
+              .find((line) => line.startsWith("Writer startup timing "));
+            if (!timing) throw Error("Missing writer startup timing");
+            expect(JSON.parse(timing.slice("Writer startup timing ".length)).gitProcesses).toBe(0);
             expect(existsSync(own.scratch)).toBe(false);
             expect(cleanupIntents(f.state)).toHaveLength(0);
             expect(git(cwd, "for-each-ref", "--format=%(refname)", own.writer)).toBe("");

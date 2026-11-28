@@ -1,3 +1,4 @@
+import { finishedCapture } from "./fixtures/first-send-client";
 import { test, expect } from "bun:test";
 import { readRound, openReceiptReader } from "@kraka/environment";
 import { runCodexCase as run } from "./fixtures/codex-resume";
@@ -140,6 +141,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
       timedOutAt: null,
       reachedAt: expect.any(Number),
     });
+    const captureId = await finishedCapture(s.client, first);
     await s.restart();
     expect(
       accepted((await s.client.send("round.readStop", payload)).receipt, "stopResult"),
@@ -147,7 +149,8 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     const db = openReceiptReader(s.state);
     try {
       expect(readRound(db, first.roundId)?.attempt.phase).toMatchObject({
-        kind: "closing",
+        kind: "finished",
+        captureId,
         endTimeEvidence: "endTimeEvidence" in ended ? ended.endTimeEvidence : null,
       });
     } finally {
@@ -194,6 +197,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     const r = await s.start("unavailable");
     s.action(r.turn.handle, "finish");
     await s.updates.until((e) => e.kind === "round.ended");
+    const captureId = await finishedCapture(s.client, r);
     await s.restart();
     expect((await s.input(r.threadId, "retry")).receipt).toMatchObject({
       kind: "rejected",
@@ -201,7 +205,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     });
     expect(
       (await s.client.readInputHistory(r.threadId, r.roundId)).rounds[0]?.attempt,
-    ).toMatchObject({ attemptId: r.attemptId, phase: { kind: "closing" } });
+    ).toMatchObject({ attemptId: r.attemptId, phase: { kind: "finished", captureId } });
     expect(s.events.items.filter((e) => e.event === "turn")).toHaveLength(1);
   });
 }, 45000);
@@ -309,8 +313,10 @@ test(
       s.action(linked.handle, "finish");
       await s.event("root-ended", since);
       const input = accepted((await s.input(first.threadId, "steer")).receipt, "inputScheduled"),
-        running = await s.events.until((e) => e.event === "turn" && e.text === "steer");
-      await s.updates.until((e) => e.kind === "round.started" && e.attemptId === input.attemptId);
+        running = await s.events.untilDispatch((e) => e.event === "turn" && e.text === "steer");
+      await s.updates.untilDispatch(
+        (e) => e.kind === "round.started" && e.attemptId === input.attemptId,
+      );
       for (const [mode, text] of [
         ["queueNext", "resume"],
         ["insertCurrent", "add detail"],
@@ -341,7 +347,7 @@ test(
       ).toMatchObject([{ state: "pending", submission: "submitted" }]);
       expect(s.events.items.some((e) => e.text === "resume")).toBe(false);
       s.action(running.handle, "finish");
-      const queued = await s.events.until((e) => e.event === "turn" && e.text === "resume");
+      const queued = await s.events.untilDispatch((e) => e.event === "turn" && e.text === "resume");
       expect(queued).toMatchObject({ session: linked.session });
       s.action(queued.handle, "finish");
       expect(s.events.items.filter((e) => e.event === "turn" && e.text === "blue")).toHaveLength(1);

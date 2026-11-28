@@ -1,3 +1,8 @@
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { readRound } from "./first-send-store";
 import { expect, test } from "bun:test";
 import * as v from "valibot";
 import {
@@ -835,4 +840,64 @@ test("executor time remains independent of observation time on early termination
     { kind: "rejected", reason: "invalidState" },
   );
   expect(v.parse(RoundPhaseSchema, phases.finished)).not.toHaveProperty("endTimeEvidence");
+});
+
+test("settling a reopened closing round preserves the first native end and its two clocks", () => {
+  for (const source of ["executorReported", "environmentObserved", "unknown"] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "kraka-round-time-")),
+      path = join(dir, "round.sqlite");
+    let db = new Database(path, { create: true });
+    try {
+      const endedAt = source === "environmentObserved" ? 45 : 20;
+      const report = {
+        ...reports.rootEnded,
+        endedAt,
+        ...(source === "unknown"
+          ? {}
+          : { endTimeEvidence: { source, executorEndedAt: 20, environmentObservedAt: 45 } }),
+      };
+      const closing = accepted(transitionRound({ ...ticket, phase: phases.working }, report));
+      db.run("CREATE TABLE rounds(id TEXT PRIMARY KEY,data TEXT)");
+      const round = {
+        id: "round",
+        threadId,
+        messageId,
+        place: "1",
+        version: "2",
+        attempt: { ...ticket, phase: closing },
+      };
+      db.run("INSERT INTO rounds VALUES(?,?)", [round.id, JSON.stringify(round)]);
+      db.close(true);
+      db = new Database(path);
+      const restored = readRound(db, round.id);
+      if (!restored) throw Error("Missing closing round");
+      const duplicate = accepted(
+        transitionRound(restored.attempt, {
+          ...report,
+          endedAt: 70,
+          endTimeEvidence: {
+            source: "executorReported",
+            executorEndedAt: 70,
+            environmentObservedAt: 85,
+          },
+        }),
+      );
+      const outcome = accepted(
+        transitionRound({ ...ticket, phase: duplicate }, reports.captureSettled),
+      );
+      expect(outcome).toMatchObject({
+        kind: "finished",
+        captureId,
+        endedAt,
+        endTimeEvidence: {
+          source,
+          executorEndedAt: source === "unknown" ? null : 20,
+          environmentObservedAt: source === "unknown" ? null : 45,
+        },
+      });
+    } finally {
+      db.close(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });

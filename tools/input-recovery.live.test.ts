@@ -198,7 +198,9 @@ test(
         expect((await read()).rounds[0]?.steering?.[0]?.state).toBe("completed");
         await f.release("turn");
         await f.seen("ended", a.deliveryId);
-        expect((await read()).rounds[0]?.attempt.phase.kind).toBe("closing");
+        expect(["closing", "finished"]).toContain(
+          (await read()).rounds[0]?.attempt.phase.kind ?? "",
+        );
         expect((await f.client.send("input.steer", payload, key)).receipt).toEqual(
           original.receipt,
         );

@@ -66,7 +66,10 @@ async function exitedWithin(exit: Promise<number>, ms: number) {
   }
 }
 export async function runWorktreeWorker(arg: string | undefined) {
-  const task = v.parse(taskSchema, JSON.parse(arg ?? "null"));
+  const raw = JSON.parse(arg ?? "null");
+  if (raw?.kind === "directoryLease")
+    return (await import("./directory-lease")).runDirectoryWriter(raw);
+  const task = v.parse(taskSchema, raw);
   const group =
     process.platform === "win32"
       ? (await import("./worktree-windows")).ownWindowsJob()

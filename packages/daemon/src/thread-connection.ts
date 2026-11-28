@@ -189,8 +189,6 @@ export async function threadConnection(
           });
         if (!allows(query.threadId, "thread.view"))
           return { kind: "rejected", commandId, failure: { kind: "notFound" } };
-        if (query.kind === "round" || query.kind === "roundRange")
-          return { kind: "rejected", commandId, failure: { kind: "unsupported" } };
         const directoryDiff = session?.features.includes("directoryDiff") ?? false;
         if ("directoryId" in query && !directoryDiff)
           return {
@@ -199,23 +197,26 @@ export async function threadConnection(
             failure: { kind: "unsupported" },
           };
         const directory = resolveDiffDirectory(store, query);
-        const diff = directory
-          ? await diffService.readLocalDiff({
-              actor: {
-                scope: canonicalJson([
-                  session?.principal.id,
-                  query.threadId,
-                  host.store.db
-                    .query<{ v: number }, []>("SELECT COALESCE(MAX(rowid),0) v FROM changes")
-                    .get()?.v,
-                ]),
-                directoryDiff,
-              },
-              query,
-              cursor,
-              resolvedDirectory: directory,
-            })
-          : unavailable("invalidated");
+        const actor = { scope: visibility(), directoryDiff };
+        const diff = !directory
+          ? unavailable("invalidated")
+          : query.kind === "round" || query.kind === "roundRange"
+            ? await store.captures.readCaptureRange({
+                thread: query.threadId,
+                worktree: directory,
+                fromCaptureId: query.kind === "round" ? query.captureId : query.fromCaptureId,
+                toCaptureId: query.kind === "round" ? query.captureId : query.toCaptureId,
+                single: query.kind === "round",
+                cursor,
+                actor,
+                reader: diffService,
+              })
+            : await diffService.readLocalDiff({
+                actor,
+                query,
+                cursor,
+                resolvedDirectory: directory,
+              });
         return { kind: "accepted", commandId, result: { kind: "checkpointDiff", diff } };
       }
       function accept(
@@ -340,6 +341,7 @@ export async function threadConnection(
                 : {}),
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
+              directoryDiff: m.features.includes("directoryDiff"),
               protocolMinor: m.protocolVersion.minor,
             },
             inspectPage,

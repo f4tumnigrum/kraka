@@ -1,3 +1,5 @@
+import { revParseLines } from "./git-process";
+import { measureGit } from "./capture-timing";
 import { dirname, join, resolve } from "node:path";
 import { lstatSync, readFileSync } from "node:fs";
 import * as v from "valibot";
@@ -7,11 +9,13 @@ import type { Managed } from "./worktree-storage";
 import { projectWorktree, selectRebuildOrigin, type WorktreeObservation } from "./worktrees";
 
 export function gitRead(cwd: string, ...args: string[]) {
-  return Bun.spawnSync(["git", "--no-optional-locks", "-C", cwd, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 300000,
-  });
+  return measureGit("worktree", args, () =>
+    Bun.spawnSync(["git", "--no-optional-locks", "-C", cwd, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 300000,
+    }),
+  );
 }
 export function gitText(cwd: string, ...args: string[]) {
   const r = gitRead(cwd, ...args);
@@ -75,14 +79,40 @@ export function observe(m: Managed): WorktreeObservation {
   if (m.inspection || !matches(m.root) || !matches(m.common) || (m.parent && !matches(m.parent)))
     return seen;
   try {
-    if (!Bun.deepEquals(commonDirectory(repo), m.common)) return seen;
     const phase = claim.phase,
       origin = "origin" in phase ? phase.origin : null;
     const ref = `refs/heads/${claim.branch}`;
-    const lookup = gitRead(repo, "show-ref", "--exists", ref);
-    const oid = lookup.exitCode === 0 ? pinned(repo, ref) : null;
+    const probe = gitRead(
+      repo,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+      "--revs-only",
+      ref + "^{commit}",
+      "--symbolic-full-name",
+      ref,
+      "--",
+    );
+    const rootFields = revParseLines(probe.stdout);
+    const fastRoot =
+      probe.exitCode === 0 &&
+      rootFields.length === 3 &&
+      rootFields[2] === ref &&
+      rootFields[0] &&
+      v.is(GitObjectIdSchema, rootFields[1])
+        ? { common: rootFields[0], oid: rootFields[1] }
+        : null;
+    if (
+      !Bun.deepEquals(
+        fastRoot ? physicalDirectory(fastRoot.common) : commonDirectory(repo),
+        m.common,
+      )
+    )
+      return seen;
+    const lookup = fastRoot ? 0 : gitRead(repo, "show-ref", "--exists", ref).exitCode;
+    const oid = fastRoot?.oid ?? (lookup === 0 ? pinned(repo, ref) : null);
     seen.branch =
-      lookup.exitCode === 2
+      lookup === 2
         ? "absent"
         : !oid
           ? "unknown"
@@ -112,16 +142,38 @@ export function observe(m: Managed): WorktreeObservation {
     }
     seen.disk = "ownedPartial";
     if (!row?.includes(`branch ${ref}`) || !oid || !row.includes(`HEAD ${oid}`)) return seen;
-    const admin = physicalDirectory(gitText(path, "rev-parse", "--absolute-git-dir"));
+    const checkout = gitRead(
+      path,
+      "rev-parse",
+      "--path-format=absolute",
+      "--absolute-git-dir",
+      "--git-common-dir",
+      "HEAD^{commit}",
+      "--symbolic-full-name",
+      "HEAD",
+    );
+    const fields = revParseLines(checkout.stdout);
+    // Fall back to the individual observations for unusual pathnames or a checkout in transition.
+    const fast =
+      checkout.exitCode === 0 &&
+      fields.length === 4 &&
+      fields[0] &&
+      fields[1] &&
+      fields[2] === oid &&
+      fields[3] === ref
+        ? { admin: fields[0], common: fields[1] }
+        : null;
+    const admin = physicalDirectory(
+      fast?.admin ?? gitText(path, "rev-parse", "--absolute-git-dir"),
+    );
     const back = admin && readFileSync(join(admin.realPath, "gitdir"), "utf8").trimEnd();
     if (
       !admin ||
       dirname(admin.realPath) !== join(m.common.realPath, "worktrees") ||
       (m.admin && !Bun.deepEquals(admin, m.admin)) ||
       resolve(admin.realPath, back || ".") !== join(path, ".git") ||
-      !Bun.deepEquals(commonDirectory(path), m.common) ||
-      gitText(path, "symbolic-ref", "HEAD") !== ref ||
-      pinned(path, "HEAD") !== oid
+      !Bun.deepEquals(fast ? physicalDirectory(fast.common) : commonDirectory(path), m.common) ||
+      (!fast && (gitText(path, "symbolic-ref", "HEAD") !== ref || pinned(path, "HEAD") !== oid))
     )
       return seen;
     seen.registration = "owned";

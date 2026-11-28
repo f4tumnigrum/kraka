@@ -23,6 +23,8 @@ export * from "./adapter-contract";
 export * from "./settings";
 export * from "./setting-store";
 export * from "./checkpoints";
+export * from "./capture-boundary";
+export * from "./directory-lease";
 export * from "./terminal";
 export * from "./worktrees";
 export * from "./git-status";
@@ -52,6 +54,7 @@ export {
 } from "./tool-activity";
 export * from "./access-store";
 export * from "./writer";
+export { measureWriterStartup, type WriterStartupMark } from "./capture-timing";
 export * from "./first-send-store";
 export * from "./first-send";
 export { recordCommand, type FirstSendContext, type LocalActor } from "./command-receipts";

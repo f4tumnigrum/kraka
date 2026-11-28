@@ -92,6 +92,7 @@ export * from "./thread-pass";
 
 export * from "./thread-installation";
 export * from "./thread-replica";
+export * from "./capture-range";
 export * from "./tool-activity";
 export * from "./setting-storage";
 export * from "./setting-batch";

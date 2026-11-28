@@ -18,7 +18,7 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
     if (!f) throw Error("Missing recording frame " + seq);
     return object(f.frame);
   }
-  const statePath = join(process.cwd(), "native-history.json");
+  let statePath = join(process.cwd(), "native-history.json");
   const stateSchema = v.object({
     session: v.string(),
     epoch: v.number(),
@@ -142,6 +142,11 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
   }
   return {
     async open(method: string, params: Record<string, unknown>) {
+      if (process.env.PEER_HISTORY_DIRECTORY) {
+        session = method === "thread/resume" ? String(params.threadId) : crypto.randomUUID();
+        if (!/^[a-f0-9-]+$/.test(session)) throw Error("Invalid fixture session");
+        statePath = join(process.env.PEER_HISTORY_DIRECTORY, session + ".json");
+      }
       if (method === "thread/resume") {
         const recorded = frame("resume", 4);
         const h = saved();
@@ -151,7 +156,7 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
         writeFileSync(statePath, JSON.stringify({ ...h, epoch }));
       } else {
         if (existsSync(statePath)) throw Error("New session replaced an existing conversation");
-        session = String(object(frame("command-approval", 1).params).threadId);
+        session ||= String(object(frame("command-approval", 1).params).threadId);
         epoch = 1;
         writeFileSync(statePath, JSON.stringify({ session, epoch, turns: [] }));
       }

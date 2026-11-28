@@ -4,7 +4,6 @@ import type { ActiveSteers } from "./durable-replay";
 import {
   canonicalJson,
   DeliveryIdSchema,
-  CaptureIdSchema,
   type Round,
   type ExecutorTurnUpdate,
 } from "@kraka/protocol";
@@ -141,7 +140,7 @@ export async function reconcileCodex(
       ...(p.outcome.reason === "completed"
         ? ({
             outcome: "completed",
-            captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
+            captureId: store.captures.id(initial),
           } as const)
         : { outcome: p.outcome.reason }),
     });
@@ -280,6 +279,10 @@ export async function dispatchCodex(
       return claim;
     })();
     if (claim.kind === "rejected") return;
+    await store.captures.before(initial);
+    signal.throwIfAborted();
+    if (!isCurrent() || store.directory(thread) !== cwd)
+      return failed("invalidState", "Directory changed before delivery");
     const events = adapter.events(session, null)[Symbol.asyncIterator]();
     const first = events.next();
     void first.catch(() => {});
@@ -480,7 +483,7 @@ export async function dispatchCodex(
               ...(p.outcome.reason === "completed"
                 ? ({
                     outcome: "completed",
-                    captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
+                    captureId: store.captures.id(initial),
                   } as const)
                 : { outcome: p.outcome.reason }),
             });

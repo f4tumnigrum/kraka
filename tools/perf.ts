@@ -55,7 +55,8 @@ export interface ReportBase extends ProbeSpec {
     | "tool.readActivity"
     | "worktree.recovery"
     | "browserTLS"
-    | "codex.recovery";
+    | "codex.recovery"
+    | "capture.recovery";
   role: Role;
   platform: ReturnType<typeof hostInfo>;
   revision: string | null;
@@ -348,6 +349,7 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
                 { metric },
                 { metric, variant: "worktree.recovery" },
                 { metric, variant: "codex.recovery" },
+                { metric, variant: "capture.recovery" },
               ]
             : metric === "P11"
               ? [{ metric }, { metric, variant: "tool.readActivity" }]
@@ -435,6 +437,32 @@ export async function prepareBudget(root: string, role: Role) {
         } else {
           const { measureToolActivity } = await import("./measure-tool-activity");
           report = measured(base, await measureToolActivity(base, root, nextBlock));
+        }
+      } else if (variant === "capture.recovery") {
+        base.workload =
+          "Five interrupted round checkpoints after seal or conditional ref publication";
+        base.endpoint = "restart to the original verified tree and a single committed settlement";
+        base.thresholds = [
+          { series: "captureRecovery", unit: "ms", statistic: "each", limit: 2000 },
+        ];
+        if (
+          role === "baseline" &&
+          !(await Bun.file(join(root, "packages/environment/src/capture-boundary.ts")).exists())
+        )
+          report = unavailable(base, "Parent lacks the sealed round capture workload");
+        else {
+          const { interruptedCapture } = await import("./fixtures/round-patch");
+          base.expected = { recoveries: 5 };
+          base.actual = { recoveries: 0 };
+          for (let i = 0; i < 5; i++) {
+            const stage = i % 2 === 0 ? "sealed" : "published";
+            const r = await interruptedCapture(stage, root);
+            base.observations.push({ stage, ...r });
+            base.samples.push({ series: "captureRecovery", unit: "ms", value: r.elapsedMs });
+            base.actual.recoveries = i + 1;
+            await nextBlock();
+          }
+          report = measured(base, { captureRecovery: 5 });
         }
       } else if (variant === "codex.recovery") {
         base.workload = "Five interrupted Codex approvals on isolated persistent threads";
