@@ -60,7 +60,16 @@ const alt = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256"
 const alternativeKey = Buffer.from(await crypto.subtle.exportKey("raw", alt.publicKey)).toString(
   "base64url",
 );
+const outbox = options?.outbox
+  ? await (await import("./outbox-peer")).outboxPeer(
+      join(stateDir, "host"),
+      host,
+      options.outbox,
+      emit,
+    )
+  : null;
 const peerPort = {
+  ...(outbox ? { openThread: outbox.openThread } : {}),
   ...host.port,
   get identity() {
     if (!alternate || alternate === "silent") return originalIdentity;
@@ -115,6 +124,9 @@ const executorGate = Promise.withResolvers<void>();
 let running: Promise<void> | null = null;
 let project: ProjectId | null = null;
 const control = v.variant("op", [
+  v.object({ op: v.literal("outboxStatus") }),
+  v.object({ op: v.literal("outboxRelease") }),
+  v.object({ op: v.literal("outboxNetwork"), enabled: v.boolean() }),
   v.object({ op: v.literal("project"), projectId: ProjectIdSchema, threadId: ThreadIdSchema }),
   v.object({
     op: v.literal("owner"),
@@ -153,6 +165,14 @@ const control = v.variant("op", [
 async function act(raw: unknown) {
   const msg = v.parse(control, raw);
   switch (msg.op) {
+    case "outboxRelease":
+      outbox?.release();
+      return true;
+    case "outboxStatus":
+      return outbox?.status();
+    case "outboxNetwork":
+      outbox?.network(msg.enabled);
+      return true;
     case "deviceCount":
       return host.store.db
         .query("SELECT count(*) AS count FROM devices WHERE device=?")
@@ -247,6 +267,7 @@ async function act(raw: unknown) {
       executorGate.resolve();
       await closing;
       await running;
+      await outbox?.close();
       host.close();
       return true;
     }

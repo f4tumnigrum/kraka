@@ -9,6 +9,7 @@ import {
   type RoundId,
   type SignedRequest,
 } from "@kraka/protocol";
+import { settingsSnapshot } from "./setting-store";
 import { readProject } from "./first-send-store";
 import { recordCommand, reject, type FirstSendContext } from "./command-receipts";
 import { REQUEST_METHODS } from "@kraka/protocol";
@@ -113,7 +114,12 @@ export function acceptIsolatedStart({
   const { db, writer } = transaction;
   const root = registeredRoot(db, project);
   if (!root || !v.is(uuid, worktreeId) || readManaged(db, worktreeId)) return null;
-  const config = policy(writer.stateDirectory, project);
+  const snapshot = settingsSnapshot(transaction, {
+    target: { kind: "project", environmentId: project.environmentId, projectId: project.id },
+    checkout: null,
+  });
+  if (!snapshot) return null;
+  const config = policy(writer.stateDirectory, project, snapshot);
   const branch =
     selectedOrigin?.branch ?? worktreeName(worktreeId, config.settings.worktreeBranchNaming);
   const commit = selectedOrigin?.commit ?? pinned(root.realPath, "HEAD");

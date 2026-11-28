@@ -1,6 +1,7 @@
 import { AppNoteReadSchema } from "./executor-tools";
 import { TextReturnedEventSchema } from "./handoffs";
 import { ContextOperationChangeSchema } from "./context-operations";
+import { ToolActivityDetailFrameSchema } from "./tool-activity";
 import {
   ExecutorSessionObservationSchema,
   ToolActivityHistoryItemSchema,
@@ -19,6 +20,7 @@ import {
 } from "./terminal";
 import { WorktreeViewSchema } from "./worktrees";
 import * as v from "valibot";
+import { ListValueChangeSchema } from "./list-wire";
 import { AttentionFactsSchema } from "./attention";
 import {
   ConnectionChallengeIdSchema,
@@ -58,6 +60,7 @@ import {
   SessionConfigurationSchema,
   SessionRejectedSchema,
   SignedRequestSchema,
+  InboundSettingWriteSchema,
 } from "./requests";
 import { P256SignatureSchema } from "./access";
 import { EnvironmentIdentitySchema } from "./routes";
@@ -166,6 +169,7 @@ export const ControlMessageSchema = v.union([
   PairingExchangeSchema,
   DevicePairingResultSchema,
   SignedRequestSchema,
+  InboundSettingWriteSchema,
   CommandReceiptSchema,
   v.strictObject({
     kind: v.literal("transport.content"),
@@ -276,7 +280,7 @@ export const ObjectChangeSchema = v.union([
   }),
 ]);
 
-export const SubscriptionPageSchema = v.strictObject({
+const fullPage = v.strictObject({
   kind: v.literal("subscription.page"),
   subscriptionId: SubscriptionIdSchema,
   passId: SyncPassIdSchema,
@@ -285,7 +289,17 @@ export const SubscriptionPageSchema = v.strictObject({
   pageCount,
   changes: v.array(ObjectChangeSchema),
 });
-export type SubscriptionPage = v.InferOutput<typeof SubscriptionPageSchema>;
+const listPage = v.strictObject({
+  ...fullPage.entries,
+  through: v.strictObject({
+    ...SyncCursorSchema.entries,
+    shapeVersion: v.literal(2),
+    scope: SyncCursorSchema.entries.scope.options[0],
+  }),
+  changes: v.array(v.union([ListValueChangeSchema, ObjectChangeSchema])),
+});
+export const SubscriptionPageSchema = v.union([listPage, fullPage]);
+export type SubscriptionPage = v.InferOutput<typeof fullPage>;
 
 export const HistoryPageSchema = v.strictObject({
   kind: v.literal("history.page"),
@@ -348,6 +362,7 @@ export const DataMessageSchema = v.union([
   TerminalOutputSchema,
   SubscriptionPageSchema,
   HistoryPageSchema,
+  ToolActivityDetailFrameSchema,
   ContentChunkHeaderSchema,
 ]);
 export type DataMessage = v.InferOutput<typeof DataMessageSchema>;

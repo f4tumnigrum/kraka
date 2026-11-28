@@ -2,6 +2,7 @@ import { createPublicKey, randomBytes, verify } from "node:crypto";
 import * as v from "valibot";
 import {
   canonicalJson,
+  DEFAULT_DEVICE_PERMISSIONS,
   sendLogicalRequest,
   type PermissionItem,
   type PrivateSecretRequest,
@@ -10,23 +11,41 @@ import {
   ServerHelloSchema,
   SessionAuthorizedSchema,
   TRANSPORT_LIMITS,
+  TOOL_ACTIVITY_DETAIL_MINOR,
   RequestUploads,
+  sendLogicalControl,
+  SETTING_GENERATION_MINOR,
+  settingReceiptForVersion,
   type SubscriptionPage,
   type SessionAuthorized,
   type SignedRequest,
+  type InboundSettingWrite,
   type ClientAuthentication,
   type ThreadId,
+  type ProjectId,
   type CommandReceipt,
   type CommandId,
+  DiffResultSchema,
+  type WorkspaceTargetSchema,
+  workspaceAuthorizationTarget,
 } from "@kraka/protocol";
 import {
   acceptTodoReply,
+  type GitStatusCache,
+  LocalDiffService,
+  applyInputCommand,
   type LocalActor,
+  readProject,
   readThread,
   renameThread,
+  resolveDiffDirectory,
+  settingCommand,
+  watchSettingFile,
+  applyThreadChange,
   type FirstSendStore,
 } from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
+import { GitStatusSubscriptions } from "./git-status-subscriptions";
 import type { openAccessHost } from "./access";
 import type { SocketApplication } from "./flow-socket";
 
@@ -34,7 +53,15 @@ export type FixtureThreadCommand = (
   request: SignedRequest,
   store: FirstSendStore,
 ) => CommandReceipt | null;
+export type SettingIngress =
+  | Extract<SignedRequest, { method: "settings.read" }>
+  | InboundSettingWrite;
+export type FixtureSettingReply = (
+  req: SettingIngress,
+  execute: () => CommandReceipt,
+) => CommandReceipt;
 type Access = Awaited<ReturnType<typeof openAccessHost>>;
+type WorkspaceTarget = v.InferOutput<typeof WorkspaceTargetSchema>;
 export async function threadConnection(
   store: FirstSendStore,
   host: Access,
@@ -44,6 +71,7 @@ export async function threadConnection(
     actor: LocalActor,
     command: Extract<SignedRequest, { method: "input.send" }>,
   ) => Promise<CommandReceipt>,
+  gitStatusCache: GitStatusCache,
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   beforeTodo?: (id: CommandId, proceed: () => void) => void,
@@ -55,6 +83,13 @@ export async function threadConnection(
     actor: LocalActor,
     command: Extract<SignedRequest, { method: "input.steer" }>,
   ) => CommandReceipt,
+  settingReply?: FixtureSettingReply,
+  reportPermissions = false,
+  beforeInputReceipt?: (
+    request: SignedRequest,
+    receipt: CommandReceipt,
+    deliver: () => void,
+  ) => void,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -64,7 +99,10 @@ export async function threadConnection(
     challengeId: crypto.randomUUID(),
     challenge: randomBytes(32).toString("base64url"),
     clientNonce: nonce,
-    protocolVersion: { major: 1, minor: 1 },
+    protocolVersion: {
+      major: 1,
+      minor: Math.max(TOOL_ACTIVITY_DETAIL_MINOR, SETTING_GENERATION_MINOR),
+    },
     features: [
       "strictSchemas",
       "signedRequests",
@@ -72,7 +110,9 @@ export async function threadConnection(
       "perStreamFlowControl",
       "binaryContentChunks",
       "timelineItems",
+      "directoryDiff",
       "privateSecretSubmission",
+      "queueEditing",
     ],
     identity: host.identity,
   };
@@ -86,9 +126,12 @@ export async function threadConnection(
     epoch,
     beforeSend: () => check(),
     attach(peer, wake) {
+      let watching: string | null = null,
+        stopWatching: (() => void) | undefined;
       let seq = 0,
         session: SessionAuthorized | null = null,
-        subs: ThreadSubscriptions | null = null;
+        subs: ThreadSubscriptions | null = null,
+        gitStatus: GitStatusSubscriptions | null = null;
       const uploads = new RequestUploads(peer);
       const disclosures = new Map<
         CommandId,
@@ -105,14 +148,79 @@ export async function threadConnection(
           ? d
           : null;
       }
-      const allows = (threadId: ThreadId, permission: PermissionItem) => {
+      const allowsTarget = (
+        target: { kind: "thread"; threadId: ThreadId } | { kind: "project"; projectId: ProjectId },
+        permission: PermissionItem,
+      ) => {
         if (!session || !usable(session.signer)) return false;
-        const thread = readThread(store.db, threadId);
-        if (!thread) return false;
-        if (!host.store.ensureThread(threadId, thread.projectId)) return false;
-        return !!host.store.ceiling(session.principal.id, { kind: "thread", threadId }, permission);
+        if (target.kind === "thread") {
+          const thread = readThread(store.db, target.threadId);
+          if (!thread || !host.store.ensureThread(target.threadId, thread.projectId)) return false;
+        } else {
+          const project = readProject(store.db, target.projectId);
+          if (!project || project.environmentId !== host.identity.id) return false;
+          host.store.provisionProject(target.projectId);
+        }
+        return !!host.store.ceiling(session.principal.id, target, permission);
       };
-      function accept(m: SignedRequest | PrivateSecretRequest | ClientAuthentication) {
+      function visibility() {
+        const n = host.store.db
+          .query<{ n: string }, []>("SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes")
+          .get()?.n;
+        return JSON.stringify([session?.principal.id, n]);
+      }
+      const allows = (threadId: ThreadId, permission: PermissionItem) =>
+        allowsTarget({ kind: "thread", threadId }, permission);
+      const allowsWorkspace = (target: WorkspaceTarget) =>
+        allowsTarget(workspaceAuthorizationTarget(target), "thread.view");
+      const diffService = new LocalDiffService();
+      function readDiff(
+        request: Extract<SignedRequest, { method: "checkpoint.diff" }>,
+      ): CommandReceipt {
+        const { commandId } = request;
+        const { query, cursor } = request.payload;
+        const unavailable = (reason: string) =>
+          v.parse(DiffResultSchema, {
+            kind: "unavailable",
+            request: query,
+            from: null,
+            to: null,
+            reason,
+          });
+        if (!allows(query.threadId, "thread.view"))
+          return { kind: "rejected", commandId, failure: { kind: "notFound" } };
+        if (query.kind === "round" || query.kind === "roundRange")
+          return { kind: "rejected", commandId, failure: { kind: "unsupported" } };
+        const directoryDiff = session?.features.includes("directoryDiff") ?? false;
+        if ("directoryId" in query && !directoryDiff)
+          return {
+            kind: "rejected",
+            commandId,
+            failure: { kind: "unsupported" },
+          };
+        const directory = resolveDiffDirectory(store, query);
+        const diff = directory
+          ? diffService.readLocalDiff({
+              actor: {
+                scope: canonicalJson([
+                  session?.principal.id,
+                  query.threadId,
+                  host.store.db
+                    .query<{ v: number }, []>("SELECT COALESCE(MAX(rowid),0) v FROM changes")
+                    .get()?.v,
+                ]),
+                directoryDiff,
+              },
+              query,
+              cursor,
+              resolvedDirectory: directory,
+            })
+          : unavailable("invalidated");
+        return { kind: "accepted", commandId, result: { kind: "checkpointDiff", diff } };
+      }
+      function accept(
+        m: SignedRequest | InboundSettingWrite | PrivateSecretRequest | ClientAuthentication,
+      ) {
         const actor = usable(m.signer);
         if (
           !actor ||
@@ -189,22 +297,101 @@ export async function threadConnection(
             store,
             {
               principal: actor.principal.id,
-              visibility: () => {
-                const n = host.store.db
-                  .query<{ n: string }, []>(
-                    "SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes",
-                  )
-                  .get()?.n;
-                return JSON.stringify([actor.principal.id, n]);
+              visibility,
+              canList: (projectId) => {
+                if (!session || !usable(session.signer)) return false;
+                if (
+                  projectId &&
+                  !host.store.db
+                    .query("SELECT 1 FROM objects WHERE kind='project' AND id=?")
+                    .get(projectId)
+                ) {
+                  if (!store.db.query("SELECT 1 FROM projects WHERE id=?").get(projectId))
+                    return false;
+                  host.store.provisionProject(projectId);
+                }
+                const target = projectId
+                  ? { kind: "project" as const, projectId }
+                  : { kind: "environment" as const, environmentId: host.identity.id };
+                return !!host.store.ceiling(actor.principal.id, target, "thread.view");
               },
+              canAnswer: (todo) => {
+                if (
+                  todo.state.kind !== "open" ||
+                  (todo.state.route.kind === "live" && !store.todos.isLive(todo))
+                )
+                  return false;
+                if (todo.body.kind === "approval") {
+                  const right = store.todos.get(todo.id)?.binding.approval?.permission;
+                  return (
+                    !!right && allows(todo.threadId, right) && allows(todo.threadId, "owner.decide")
+                  );
+                }
+                return allows(
+                  todo.threadId,
+                  todo.body.kind === "question" ? "thread.reply" : "owner.decide",
+                );
+              },
+              ...(reportPermissions
+                ? {
+                    permissions: (id: ThreadId) =>
+                      DEFAULT_DEVICE_PERMISSIONS.filter((right) => allows(id, right)),
+                  }
+                : {}),
               canRead: (id) => allows(id, "thread.view"),
               timelineItems: m.features.includes("timelineItems"),
               protocolMinor: m.protocolVersion.minor,
             },
             inspectPage,
           );
+          gitStatus = new GitStatusSubscriptions(
+            peer,
+            wake,
+            store,
+            host.identity.id,
+            allowsWorkspace,
+            gitStatusCache,
+            (id) => subs?.has(id) ?? false,
+          );
         } else {
           if (!session || !subs) throw Error("Configuration required");
+          if (m.method === "settings.read" || m.method === "settings.write") {
+            const principal = actor.principal.id;
+            const local: LocalActor = {
+              id: principal,
+              environmentId: host.identity.id,
+              allows(permission, target) {
+                if (target.kind === "project") {
+                  if (!readProject(store.db, target.projectId)) return false;
+                  host.store.provisionProject(target.projectId);
+                }
+                return !!host.store.ceiling(principal, target, permission);
+              },
+            };
+            const execute = () =>
+              settingCommand(
+                { actor: local, transaction: store, commandId: m.commandId },
+                m.method,
+                m.payload,
+              );
+            const receipt = settingReply ? settingReply(m, execute) : execute();
+            if (
+              receipt.kind === "accepted" &&
+              (receipt.result.kind === "settingRead" || receipt.result.kind === "settingSaved")
+            ) {
+              const rb = receipt.result.readback,
+                context = rb.checkout ?? rb.target;
+              const key = context.kind === "checkout" ? canonicalJson(context) : null;
+              if (key !== watching) {
+                stopWatching?.();
+                watching = key;
+                stopWatching =
+                  context.kind === "checkout" ? watchSettingFile(store, context) : undefined;
+              }
+            }
+            sendLogicalControl(peer, settingReceiptForVersion(receipt, m.protocolVersion.minor));
+            return;
+          }
           if (
             m.method === "todo.answer" ||
             m.method === "todo.decide" ||
@@ -262,7 +449,21 @@ export async function threadConnection(
             else proceed();
             return;
           }
-          let result = subs.handle(m);
+          let result = gitStatus?.handle(m) ?? null;
+          if (
+            !result &&
+            (m.method === "subscription.openThread" ||
+              m.method === "subscription.openList" ||
+              m.method === "tool.readActivity") &&
+            gitStatus?.has(m.payload.subscriptionId)
+          )
+            result = {
+              kind: "rejected",
+              commandId: m.commandId,
+              failure: { kind: "invalidState" },
+            };
+          if (!result && m.method === "checkpoint.diff") result = readDiff(m);
+          if (!result) result = subs.handle(m);
           if (
             !result &&
             (m.method === "round.stop" ||
@@ -280,6 +481,32 @@ export async function threadConnection(
                 ? steerCommand?.(principal, m)
                 : stopCommand?.(principal, m)) ?? null;
           }
+          if (!result && m.method === "thread.changeLifecycle") {
+            result = applyThreadChange(
+              {
+                actor: {
+                  id: actor.principal.id,
+                  environmentId: host.identity.id,
+                  allows: (right, target) =>
+                    target.kind === "thread" && allows(target.threadId, right),
+                },
+                commandId: m.commandId,
+                transaction: store,
+              },
+              m.payload,
+              visibility(),
+            );
+          }
+          if (
+            result?.kind === "accepted" &&
+            (result.result.kind === "earlierSettled" || result.result.kind === "threadChanged")
+          ) {
+            const authorizedAt = visibility();
+            const stream = sendLogicalRequest(peer, result);
+            disclosures.set(m.commandId, { stream, allowed: () => authorizedAt === visibility() });
+            wake();
+            return;
+          }
           if (!result && m.method === "thread.rename")
             result = renameThread({
               actor: {
@@ -290,6 +517,22 @@ export async function threadConnection(
               commandId: m.commandId,
               transaction: store,
               ...m.payload,
+            });
+          if (
+            !result &&
+            session.features.includes("queueEditing") &&
+            (m.method === "input.editQueued" ||
+              m.method === "input.cancelQueued" ||
+              m.method === "input.reorderQueue")
+          )
+            result = applyInputCommand({
+              actor: {
+                id: actor.principal.id,
+                environmentId: host.identity.id,
+                allows: (right) => allows(m.payload.threadId, right),
+              },
+              transaction: store,
+              command: m,
             });
           if (!result && m.method === "input.send") {
             const permitted = allows(m.payload.threadId, "thread.send");
@@ -306,10 +549,14 @@ export async function threadConnection(
               ).then(
                 (receipt) => {
                   if (receipt.kind === "accepted") schedule(m.payload.threadId, m.commandId);
-                  if (session) {
-                    peer.control(receipt);
-                    wake();
-                  }
+                  const deliver = () => {
+                    if (session) {
+                      peer.control(receipt);
+                      wake();
+                    }
+                  };
+                  if (beforeInputReceipt) beforeInputReceipt(m, receipt, deliver);
+                  else deliver();
                 },
                 () => {
                   if (session) {
@@ -324,6 +571,20 @@ export async function threadConnection(
               );
               return;
             }
+          }
+          if (
+            result?.kind === "accepted" &&
+            (result.result.kind === "checkpointDiff" || result.result.kind === "gitStatus")
+          ) {
+            const stream = sendLogicalRequest(peer, result);
+            disclosures.set(m.commandId, {
+              stream,
+              allowed: () =>
+                m.method === "checkpoint.diff"
+                  ? allows(m.payload.query.threadId, "thread.view")
+                  : m.method === "git.readStatus" && allowsWorkspace(m.payload.target),
+            });
+            return;
           }
           peer.control(
             result ?? {
@@ -352,7 +613,10 @@ export async function threadConnection(
         if (!device || device.deviceKey.state.kind !== "usable")
           throw Error("Device registration ended");
         expires = device.deviceKey.state.expiresAt;
-        if (next !== last) subs?.recheckAccess();
+        if (next !== last) {
+          subs?.recheckAccess();
+          gitStatus?.recheckAccess();
+        }
         last = next;
       };
       const timer = setInterval(wake, 250);
@@ -375,9 +639,12 @@ export async function threadConnection(
           uploads.drop(id);
         },
         close() {
+          stopWatching?.();
           session = null;
           clearInterval(timer);
+          diffService.close();
           subs?.close();
+          gitStatus?.close();
         },
       };
     },

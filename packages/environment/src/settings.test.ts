@@ -312,3 +312,29 @@ test("structured setting retries keep the saved version and only submodules inhe
     ).toBe(false);
   }
 });
+
+test("a stale base succeeds only for the same explicit layer, including a versioned reset", () => {
+  const choose = edit({ kind: "set", value: "worktree" });
+  const saved = applySettingWrite(base, command, choose);
+  const retry = applySettingWrite(saved.snapshot, v.parse(CommandIdSchema, "already-set"), choose);
+  expect(retry.snapshot).toBe(saved.snapshot);
+  expect(retry.receipt).toMatchObject({
+    result: {
+      kind: "settingSaved",
+      readback: {
+        fieldVersion: "1",
+        readVersion: "41",
+        atLayer: choose.change,
+        effective: { value: "worktree", source: project },
+      },
+    },
+  });
+  expect(
+    applySettingWrite(saved.snapshot, command, edit({ kind: "absent" })).receipt,
+  ).toMatchObject({
+    failure: {
+      kind: "settingVersionConflict",
+      readback: { fieldVersion: "1", atLayer: choose.change },
+    },
+  });
+});

@@ -97,6 +97,7 @@ export async function dispatchReplay<H extends object>(
         readSteer(attempt, message) {
           recordSteerRead(store, thread.id, attempt, message);
         },
+        journal: store.sync,
       },
       emit(event) {
         if (event.kind === "rejected") throw Error(event.failure.kind);

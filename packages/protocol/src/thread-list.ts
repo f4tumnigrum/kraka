@@ -84,3 +84,6 @@ export const EarlierSettledPageSchema = v.strictObject({
 });
 export type ThreadChange = v.InferOutput<typeof ThreadChangeSchema>;
 export type ThreadSummary = v.InferOutput<typeof ThreadSummarySchema>;
+
+export type EarlierSettledPage = v.InferOutput<typeof EarlierSettledPageSchema>;
+export type EarlierSettledRequest = v.InferOutput<typeof EarlierSettledRequestSchema>;

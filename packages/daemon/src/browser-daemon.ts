@@ -38,6 +38,7 @@ export async function listenBrowserDaemon(stateDir: string, options: BrowserList
       if (writer.kind !== "ready" || !store)
         throw Error("Durable writer already owned or unavailable");
       closeWriter = writer.close;
+      port.openThread = (nonce) => writer.openThread(nonce, true);
       const transaction = store;
       const access = port.request;
       port.request = (device, r) => {

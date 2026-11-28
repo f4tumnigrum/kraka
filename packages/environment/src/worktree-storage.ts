@@ -15,11 +15,12 @@ import {
   RoundIdSchema,
   SettingReadSchema,
   SettingRowSchema,
+  sameSettingTarget,
   type WorktreeBranchNaming,
   type Project,
   type WorktreeId,
 } from "@kraka/protocol";
-import { readSetting } from "./settings";
+import { readSetting, type SettingsSnapshot } from "./settings";
 import { physicalDirectory } from "./project-directory";
 
 export const selectionLifetimeMs = 24 * 60 * 60 * 1000;
@@ -72,23 +73,35 @@ export function worktreeName(id: WorktreeId, naming: WorktreeBranchNaming) {
     ? `kraka/wt-${digits}`
     : `${naming.prefix}-${digits.slice(-8)}`;
 }
-export function policy(state: string, project: Project) {
+function projectPolicy(state: string, project: Project) {
   const path = join(state, "project-policies", `${hashId(project.id)}.json`);
-  const saved = v.parse(
+  return v.parse(
     v.strictObject({
       rows: v.optional(v.array(SettingRowSchema), []),
       setup: v.optional(v.nullable(v.tupleWithRest([v.string()], v.string())), null),
     }),
     existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {},
   );
-  const snapshot = {
-    environmentId: project.environmentId,
-    version: project.version,
-    projects: [project],
-    worktrees: [],
-    rows: saved.rows,
-    overlays: [],
-  };
+}
+
+export function policy(state: string, project: Project, committed?: SettingsSnapshot) {
+  const saved = projectPolicy(state, project);
+  const fallback = saved.rows.filter(
+    (old) =>
+      !committed?.rows.some(
+        (row) => row.field === old.field && sameSettingTarget(row.target, old.target),
+      ),
+  );
+  const snapshot: SettingsSnapshot = committed
+    ? { ...committed, rows: [...committed.rows, ...fallback] }
+    : {
+        environmentId: project.environmentId,
+        version: project.version,
+        projects: [project],
+        worktrees: [],
+        rows: saved.rows,
+        overlays: [],
+      };
   const target = {
     kind: "project" as const,
     environmentId: project.environmentId,

@@ -5,6 +5,7 @@ import {
   ObjectVersionSchema,
   ProjectIdSchema,
   WorktreeIdSchema,
+  WorktreeGenerationSchema,
 } from "./ids";
 
 const environment = v.strictObject({
@@ -31,6 +32,7 @@ const repository = v.strictObject({
   ...checkout.entries,
   kind: v.literal("repository"),
   path: v.pipe(v.string(), v.minLength(1)),
+  generation: v.optional(WorktreeGenerationSchema),
 });
 export const RemoteSettingTargetSchema = v.variant("kind", [environment, project, checkout]);
 export type RemoteSettingTarget = v.InferOutput<typeof RemoteSettingTargetSchema>;

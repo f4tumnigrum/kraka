@@ -99,6 +99,7 @@ export async function connectDevice(
 }
 export type Client = Awaited<ReturnType<typeof connectDevice>>;
 export interface BrowserPeerOptions {
+  outbox?: "send" | "reject" | "approval";
   host: string;
   port: number;
   publicOrigin?: string;
@@ -257,17 +258,20 @@ export async function startPairedProject({
   projectId,
   requests,
   browser,
+  devices,
   signal,
 }: {
   stateDir: string;
   projectId: string;
   browser?: BrowserPeerOptions;
   requests: readonly (readonly PermissionItem[])[];
+  devices?: { owner: LocalDevice; applicants: readonly LocalDevice[] };
   signal?: AbortSignal;
 }) {
   const project = v.parse(ProjectIdSchema, projectId);
   const threadId = v.parse(ThreadIdSchema, crypto.randomUUID());
-  const cleanup: (() => void)[] = [];
+  const credentials: LocalDevice[] = [];
+  const connections: Client[] = [];
   const clients: Client[] = [];
   const stateDir = await mkdtemp(join(parent, "paired-"));
   let host = await startTestHost(stateDir, signal, browser).catch(async (error) => {
@@ -279,25 +283,26 @@ export async function startPairedProject({
     const dir = join(stateDir, name);
 
     const d = await openDeviceCredentials(join(dir, "device.sqlite"));
-    cleanup.push(d.close);
+    credentials.push(d);
     return d;
   }
   async function attach(d: LocalDevice, principal: v.InferOutput<typeof DevicePrincipalSchema>) {
     const c = await connectDevice(host.origin, identity, d, principal);
-    cleanup.push(c.close);
+    connections.push(c);
     return c;
   }
   async function close() {
-    for (const f of cleanup.splice(0).reverse()) f();
+    for (const c of connections.splice(0)) c.close();
     try {
       await host.stop();
     } finally {
+      for (const d of credentials.splice(0)) d.close();
       await rm(stateDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
     }
   }
   try {
     await host.control("project", { projectId: project, threadId });
-    const device = await local("owner");
+    const device = devices?.owner ?? (await local("owner"));
     const ownerInput = {
       deviceId: device.deviceId,
       keyId: device.keyId,
@@ -310,7 +315,7 @@ export async function startPairedProject({
     const first = v.parse(principalKey, await host.control("owner", ownerInput));
     let owner = await attach(device, first.principal);
     for (const [index, permissions] of requests.entries()) {
-      const d = await local(`device-${index}`);
+      const d = devices?.applicants[index] ?? (await local(`device-${index}`));
       const id = await invite(owner, project);
       const app = await beginApplication(d, host.origin, identity, project, id, [...permissions]);
       try {

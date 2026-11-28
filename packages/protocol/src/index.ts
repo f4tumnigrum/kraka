@@ -32,6 +32,7 @@ export * from "./preview";
 export * from "./handoffs";
 export * from "./context-operations";
 export * from "./timeline";
+export * from "./tool-activity";
 export * from "./route-diagnostics";
 
 export * from "./device-registration";
@@ -43,3 +44,5 @@ export * from "./executor-instance";
 export { ControlStream } from "./control-stream";
 export * from "./sync";
 export * from "./logical-control";
+
+export { subscriptionWirePage, listWireChange } from "./list-wire";

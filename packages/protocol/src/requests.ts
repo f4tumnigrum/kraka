@@ -7,6 +7,7 @@ import {
 } from "./thread-list";
 import { TextReturnResultSchema } from "./handoffs";
 import { ContextOperationReceiptSchema } from "./context-operations";
+import { ToolActivityReadResultSchema } from "./tool-activity";
 import {
   AccessPageRequestSchema,
   AccessChangeSchema,
@@ -144,6 +145,7 @@ import {
   SubscriptionIdSchema,
   SyncCursorSchema,
   SyncPassIdSchema,
+  TimelineItemIdSchema,
   ThreadIdSchema,
   TodoRequestIdSchema,
   WorktreeIdSchema,
@@ -186,6 +188,7 @@ export const PROTOCOL_FEATURES = [
   "privateSecretSubmission",
   "queueEditing",
   "timelineItems",
+  "directoryDiff",
 ] as const;
 export const ProtocolFeatureSchema = v.picklist(PROTOCOL_FEATURES);
 export const ProtocolFeatureSetSchema = v.pipe(
@@ -881,6 +884,16 @@ export const REQUEST_METHODS = {
     "environment",
     ListSubscriptionPayloadSchema,
   ),
+  markThreadRead: defineRequestMethod(
+    "thread.markRead",
+    "thread.view",
+    "thread",
+    v.strictObject({
+      threadId: ThreadIdSchema,
+      subscriptionId: SubscriptionIdSchema,
+      cursor: SyncCursorSchema,
+    }),
+  ),
   readHistoryPage: defineRequestMethod(
     "thread.readHistory",
     "thread.view",
@@ -888,6 +901,18 @@ export const REQUEST_METHODS = {
     v.strictObject({
       threadId: ThreadIdSchema,
       anchor: v.nullable(HistoryAnchorIdSchema),
+      streamId: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)),
+    }),
+  ),
+  readToolActivity: defineRequestMethod(
+    "tool.readActivity",
+    "thread.view",
+    "thread",
+    v.strictObject({
+      threadId: ThreadIdSchema,
+      itemId: TimelineItemIdSchema,
+      expectedVersion: v.nullable(ObjectVersionSchema),
+      subscriptionId: SubscriptionIdSchema,
       streamId: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)),
     }),
   ),
@@ -998,6 +1023,12 @@ export const SignedRequestSchema = v.variant(
   "method",
   Object.values(REQUEST_METHODS).map((definition) => definition.schema),
 );
+// Authenticate the intact envelope before classifying a future field or malformed edit.
+export const InboundSettingWriteSchema = v.strictObject({
+  ...REQUEST_METHODS.writeSetting.schema.entries,
+  payload: v.unknown(),
+});
+export type InboundSettingWrite = v.InferOutput<typeof InboundSettingWriteSchema>;
 export type SignedRequest = v.InferOutput<typeof SignedRequestSchema>;
 
 export const PairingRequestSchema = v.pipe(
@@ -1097,6 +1128,7 @@ export const StopResultSchema = v.strictObject({
 export type StopResult = v.InferOutput<typeof StopResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
   StopResultSchema,
+  ToolActivityReadResultSchema,
   ExecutorRefreshedSchema,
   v.strictObject({
     kind: v.literal("executorConfigured"),
@@ -1210,6 +1242,7 @@ export const RequestResultSchema = v.variant("kind", [
   }),
   v.strictObject({
     kind: v.literal("subscriptionOpened"),
+    permissions: v.optional(PermissionSetSchema),
     subscriptionId: SubscriptionIdSchema,
     streamId: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(2_147_483_647)),
   }),
@@ -1277,6 +1310,35 @@ export const CommandReceiptSchema = v.variant("kind", [
   }),
 ]);
 export type CommandReceipt = v.InferOutput<typeof CommandReceiptSchema>;
+
+export const SETTING_GENERATION_MINOR = 2;
+
+/** Older strict readers understand repository paths and versions, but not directory generations. */
+export function settingReceiptForVersion(receipt: CommandReceipt, minor: number): CommandReceipt {
+  if (minor >= SETTING_GENERATION_MINOR) return receipt;
+  const result =
+    receipt.kind === "accepted"
+      ? receipt.result
+      : receipt.kind === "rejected"
+        ? receipt.failure
+        : null;
+  if (
+    !result ||
+    !("readback" in result) ||
+    result.readback.effective.source.kind !== "repository" ||
+    result.readback.effective.source.generation === undefined
+  )
+    return receipt;
+  const { generation: _, ...source } = result.readback.effective.source;
+  const value = {
+    ...result,
+    readback: { ...result.readback, effective: { ...result.readback.effective, source } },
+  };
+  return v.parse(
+    CommandReceiptSchema,
+    receipt.kind === "accepted" ? { ...receipt, result: value } : { ...receipt, failure: value },
+  );
+}
 
 /** Decode old acknowledgements through the same strict receipt schema as current frames. */
 export function readSettingWriteReceipt(raw: unknown): CommandReceipt | null {

@@ -95,4 +95,8 @@ export {
   browserPins,
 } from "./storage";
 export type { BrowserHostOptions };
-export { startBrowserPage, pageSession, pagePairing } from "./page";
+export { startBrowserPage, pageSession, pagePairing, pageThread } from "./page";
+
+export { browserInputs, openBrowserThread } from "./thread";
+export * from "./settings";
+export { openBrowserList } from "./thread-list";
