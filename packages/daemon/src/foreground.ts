@@ -20,7 +20,7 @@ import {
 import * as v from "valibot";
 import { openAccessHost } from "./access";
 import { browserAssets, preflight } from "./browser-listener";
-import { CodexInstances } from "./codex-instances";
+import { ExecutorInstances } from "./executor-instances";
 import { threadWork } from "./thread-work";
 import { listenIdentity } from "./identity";
 
@@ -70,8 +70,8 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
   try {
     const store = openStore(lock.lease);
     cleanup.push(() => store.db.close(true));
-    const codex = new CodexInstances(store);
-    cleanup.push(() => codex.close());
+    const executors = new ExecutorInstances(store);
+    cleanup.push(() => executors.close());
     const local = await openDeviceCredentials(clientDeviceFile());
     cleanup.push(local.close);
     let confirmed = false;
@@ -120,7 +120,7 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
           return owner.principal.id;
         },
       },
-      codex,
+      executors,
       null,
     );
     cleanup.push(() => work.close());
@@ -150,8 +150,8 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
           }
           return receipt;
         });
-      if (r.method === "executor.configure") return codex.registry.configure(context, r.payload);
-      if (r.method === "executor.refresh") return codex.refresh(context, r.payload);
+      if (r.method === "executor.configure") return executors.configure(context, r.payload);
+      if (r.method === "executor.refresh") return executors.refresh(context, r.payload);
       if (r.method === "project.register") {
         const response = registerProject({ ...context, environmentId, ...r.payload });
         if (response.kind === "accepted" && response.result.kind === "projectRegistered")
@@ -176,7 +176,7 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
         emit(v.parse(PairingCompletedSchema, result));
     };
     host.port.confirmInstance = (nonce) =>
-      nonce.endsWith("?idle") && (codex.active.size || work.busy) ? null : lock.confirm(nonce);
+      nonce.endsWith("?idle") && (executors.active.size || work.busy) ? null : lock.confirm(nonce);
     host.port.configuration.description = {
       owner: "foreground",
       platform:
