@@ -85,6 +85,8 @@ export const ExecutorRefreshedSchema = v.strictObject({
   configurationVersion: ObjectVersionSchema,
   snapshot: v.nullable(ExecutorInstanceSnapshotSchema),
   readiness: ReadinessSchema,
+  authenticationReason: v.optional(v.nullable(text)),
+  attemptedAt: v.optional(time),
   models: v.nullable(ModelCatalogSchema),
   binaryVersion: v.nullable(text),
   variables: v.array(v.strictObject({ name: text, kind: v.picklist(["secret", "literal"]) })),

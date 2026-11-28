@@ -1,5 +1,5 @@
 // Live cases 4; required groups ["1.", "2.", "3.", "4."]
-// Live junit live.xml
+// Live junit claude-sdk-turn.xml
 import { beforeAll, afterAll, test, expect } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
