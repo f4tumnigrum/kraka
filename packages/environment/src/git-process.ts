@@ -31,6 +31,10 @@ export function gitCommand(
     ...args,
   ];
 }
+export type GitCheckout = { gitDir: string; workTree: string };
+export function gitCheckoutArgs({ gitDir, workTree }: GitCheckout) {
+  return ["--git-dir=" + gitDir, "--work-tree=" + workTree];
+}
 export function gitRepositoryIdentity(directory: string) {
   const r = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return r.exitCode === 0 ? physicalDirectory(r.stdout.toString().trimEnd()) : null;
@@ -42,9 +46,15 @@ export type GitProcessResult = {
   stderr: Buffer;
 };
 
-export function gitEnvironment(extra: Record<string, string> = {}) {
+export function gitEnvironment(
+  extra: Record<string, string> = {},
+  platform: NodeJS.Platform = process.platform,
+  inherited = process.env,
+) {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+  const keyFor = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
+  for (const [key, value] of Object.entries(inherited))
+    if (value !== undefined) env[keyFor(key)] = value;
   for (const key of [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -58,8 +68,8 @@ export function gitEnvironment(extra: Record<string, string> = {}) {
     GIT_TERMINAL_PROMPT: "0",
     GIT_OPTIONAL_LOCKS: "0",
     LC_ALL: "C",
-    ...extra,
   });
+  for (const [key, value] of Object.entries(extra)) env[keyFor(key)] = value;
   return env;
 }
 

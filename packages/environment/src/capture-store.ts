@@ -30,7 +30,7 @@ import {
   type Boundary,
   type PathObservation,
 } from "./checkpoints";
-import { captureBoundary, decodeSeal, type CaptureHook } from "./capture-boundary";
+import { captureBoundary, captureLayout, decodeSeal, type CaptureHook } from "./capture-boundary";
 import {
   openCaptureStorage,
   bindCaptureSource,
@@ -243,7 +243,7 @@ export class RoundCaptures {
     const key = state.key;
     const ids = { id: key.id, attemptId: key.attemptId };
     const scratch = join(this.store.writer.stateDirectory, "capture-scratch");
-    const tmp = join(scratch, captureDirectory(key, boundary));
+    let tmp = join(scratch, captureDirectory(key, boundary));
     const queueCleanup = () => db.run("INSERT OR IGNORE INTO capture_cleanup VALUES(?)", [tmp]);
     const settled = (capture: CheckpointCapture, owners?: Map<string, FileOwnership>) => {
       if (boundary === "before") {
@@ -265,6 +265,9 @@ export class RoundCaptures {
       queueCleanup();
     };
     try {
+      const seal = row.seal ? decodeSeal(row.seal) : null;
+      const layout = captureLayout(scratch, key, boundary, seal);
+      if (layout === "legacy") tmp = join(scratch, captureDirectory(key, boundary, layout));
       if (!Bun.deepEquals(binding, thread.directory)) throw Error("directoryLost");
       const path = this.store.directory(thread);
       if (!path) throw Error("directoryLost");
@@ -311,7 +314,8 @@ export class RoundCaptures {
             directoryBinding: binding,
             lease,
             scratch,
-            seal: row.seal ? decodeSeal(row.seal) : null,
+            layout,
+            seal,
             recover,
             source: row.repo ? v.parse(physical, JSON.parse(row.repo)) : null,
             bindSource: (repo) => {

@@ -62,22 +62,30 @@ export function checkpointRef(
   ].join("/");
 }
 
+export type CaptureLayout = "compact" | "legacy";
 export function captureDirectory(
   key: Pick<CaptureKey, "id" | "threadId" | "environmentId">,
   boundary: Boundary,
+  layout: CaptureLayout = "compact",
 ) {
-  return checkpointRef(key, boundary).slice("refs/kraka/".length);
+  const ref = checkpointRef(key, boundary);
+  return layout === "legacy"
+    ? ref.slice("refs/kraka/".length)
+    : new Bun.CryptoHasher("sha256").update(ref).digest("hex");
 }
 
 /** Paths are relative to the environment's scratch root. Probe the published ref before repeating work on restart. */
-export function captureWorkspace(state: CaptureState): CaptureWorkspace | null {
+export function captureWorkspace(
+  state: CaptureState,
+  layout: CaptureLayout = "compact",
+): CaptureWorkspace | null {
   if (
     (state.kind !== "before" && state.kind !== "after") ||
     !(state.key.worktreeId || state.key.projectRoot)
   )
     return null;
   const ref = checkpointRef(state.key, state.kind);
-  const directory = captureDirectory(state.key, state.kind);
+  const directory = captureDirectory(state.key, state.kind, layout);
   return {
     ref,
     privateIndexPath: `${directory}/index`,

@@ -5,7 +5,13 @@ import { createHash } from "node:crypto";
 import * as v from "valibot";
 import { GitObjectIdSchema, type DirectoryBinding, type EnvironmentId } from "@kraka/protocol";
 import { physicalDirectory } from "./project-directory";
-import { runGit, gitPath, gitProcessError, type GitProcessResult } from "./git-process";
+import {
+  runGit,
+  gitCheckoutArgs,
+  gitPath,
+  gitProcessError,
+  type GitProcessResult,
+} from "./git-process";
 import { worktreeWorkerCommand } from "./worktree-worker";
 
 export type LeaseKey = Pick<DirectoryBinding, "directoryId" | "generation"> & {
@@ -27,7 +33,7 @@ const gitRequest = v.object({
   timeout: v.number(),
 });
 const transfer = v.object({
-  repository: v.string(),
+  checkout: v.strictObject({ gitDir: v.string(), workTree: v.string() }),
   commit: GitObjectIdSchema,
   parent: v.nullable(GitObjectIdSchema),
   env: v.record(v.string(), v.string()),
@@ -39,7 +45,7 @@ function installObjects(path: string, req: v.InferOutput<typeof transfer>) {
   const scratch = dirname(index),
     pack = join(scratch, "capture.pack");
   const config = [
-    "--git-dir=" + gitPath(req.repository),
+    ...gitCheckoutArgs(req.checkout),
     "-c",
     "core.hooksPath=" + gitPath(join(scratch, "hooks")),
     "-c",

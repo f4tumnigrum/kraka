@@ -1,14 +1,16 @@
 import { dirname, join } from "node:path";
-import { lstatSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { GitObjectIdSchema, type DirectoryBinding } from "@kraka/protocol";
 import * as v from "valibot";
 import {
   captureWorkspace,
   type CaptureState,
+  type CaptureLayout,
+  captureDirectory,
   type Boundary,
   type PublishedBoundary,
 } from "./checkpoints";
-import { gitAlternateDirectory, gitPath, gitProcessError } from "./git-process";
+import { gitAlternateDirectory, gitCheckoutArgs, gitPath, gitProcessError } from "./git-process";
 import type { DirectoryLease } from "./directory-lease";
 import { physicalDirectory } from "./project-directory";
 
@@ -23,6 +25,18 @@ const sealSchema = v.strictObject({
 });
 export type CaptureSeal = v.InferOutput<typeof sealSchema>;
 export const decodeSeal = (json: string) => v.parse(sealSchema, JSON.parse(json));
+/** Keep the original objects across a daemon upgrade, including a ref already published before cleanup. */
+export function captureLayout(
+  scratch: string,
+  key: CaptureState["key"],
+  boundary: Boundary,
+  seal: CaptureSeal | null,
+): CaptureLayout {
+  const legacy = join(scratch, captureDirectory(key, boundary, "legacy"));
+  return (seal ? seal.objects === join(legacy, "objects") : existsSync(legacy))
+    ? "legacy"
+    : "compact";
+}
 export type CaptureStage = "sealed" | "published" | "summary" | "settled";
 export type CaptureHook = (
   stage: CaptureStage,
@@ -34,6 +48,7 @@ export async function captureBoundary({
   captureKey: state,
   boundary,
   directoryBinding,
+  layout,
   lease,
   scratch,
   seal,
@@ -46,6 +61,7 @@ export async function captureBoundary({
   captureKey: CaptureState;
   boundary: Boundary;
   directoryBinding: DirectoryBinding;
+  layout?: CaptureLayout;
   lease: DirectoryLease;
   scratch: string;
   seal: CaptureSeal | null;
@@ -55,7 +71,7 @@ export async function captureBoundary({
   remember: (seal: CaptureSeal) => void;
   hook?: CaptureHook | undefined;
 }): Promise<{ point: PublishedBoundary; repo: RepositoryIdentity }> {
-  const plan = captureWorkspace(state);
+  const plan = captureWorkspace(state, layout ?? captureLayout(scratch, state.key, boundary, seal));
   if (
     !plan ||
     state.kind !== boundary ||
@@ -80,9 +96,34 @@ export async function captureBoundary({
       });
     return ms;
   }
+  async function locate(option: "--absolute-git-dir" | "--show-toplevel" | "--git-common-dir") {
+    const result = await lease.git(
+      ["rev-parse", "--path-format=absolute", option],
+      {},
+      undefined,
+      remaining(),
+    );
+    if (result.exitCode !== 0)
+      throw gitProcessError(
+        result.stderr.toString().includes("not a git repository")
+          ? "noRepository"
+          : "repository.rev-parse",
+        result,
+      );
+    return result.stdout.toString().replace(process.platform === "win32" ? /\r?\n$/ : /\n$/, "");
+  }
+  const checkout = {
+    gitDir: await locate("--absolute-git-dir"),
+    workTree: await locate("--show-toplevel"),
+  };
+  const checkoutArgs = gitCheckoutArgs(checkout);
+  const common = await locate("--git-common-dir");
+  const repo = physicalDirectory(common);
+  if (!repo || (source && !Bun.deepEquals(source, repo))) throw Error("sourceRepositoryChanged");
   const run = (args: string[], env: Record<string, string> = {}, input?: Buffer) =>
     lease.git(
       [
+        ...checkoutArgs,
         "-c",
         "core.hooksPath=" + gitPath(hooks),
         "-c",
@@ -118,16 +159,6 @@ export async function captureBoundary({
     }
     return r.stdout.toString().replace(/\r?\n$/, "");
   };
-  const gitDir = await run(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (gitDir.exitCode !== 0)
-    throw gitProcessError(
-      gitDir.stderr.toString().includes("not a git repository")
-        ? "noRepository"
-        : "repository.rev-parse",
-      gitDir,
-    );
-  const repo = physicalDirectory(gitDir.stdout.toString().trimEnd());
-  if (!repo || (source && !Bun.deepEquals(source, repo))) throw Error("sourceRepositoryChanged");
   bindSource(repo);
   const commonObjects = join(repo.realPath, "objects");
   const env = {
@@ -152,7 +183,22 @@ export async function captureBoundary({
       const exists = await run(["show-ref", "--exists", ref]);
       if (exists.exitCode !== 2) throw gitProcessError("headUnavailable", head);
     }
-    await read("index.read-tree", parent ? ["read-tree", parent] : ["read-tree", "--empty"], env);
+    try {
+      await read("index.read-tree", parent ? ["read-tree", parent] : ["read-tree", "--empty"], env);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "index.read-tree") throw error;
+      throw Error(error.message, {
+        cause: JSON.stringify({
+          cwd: lease.path,
+          ...checkout,
+          commonDir: common,
+          index: env.GIT_INDEX_FILE,
+          objects: env.GIT_OBJECT_DIRECTORY,
+          alternates: env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+          detail: String(error.cause),
+        }),
+      });
+    }
     const tracked = (await read("index.ls-files", ["ls-files", "--cached", "-z", "--", "."]))
       .split("\0")
       .filter(Boolean);
@@ -220,22 +266,14 @@ export async function captureBoundary({
   );
   if (
     lease.revalidate(lease.key) !== "current" ||
-    !Bun.deepEquals(
-      repo,
-      physicalDirectory(
-        await read("repository.rev-parse", [
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-common-dir",
-        ]),
-      ),
-    )
+    (await locate("--absolute-git-dir")) !== checkout.gitDir ||
+    (await locate("--show-toplevel")) !== checkout.workTree ||
+    !Bun.deepEquals(repo, physicalDirectory(await locate("--git-common-dir")))
   )
     throw Error("lease.revalidate");
   const point = { ref: plan.ref, commit, tree: seal.tree };
-  const commonDir = "--git-dir=" + gitPath(repo.realPath);
   const existing = recover
-    ? await lease.git([commonDir, "rev-parse", "--verify", "--quiet", plan.ref])
+    ? await lease.git([...checkoutArgs, "rev-parse", "--verify", "--quiet", plan.ref])
     : null;
   if (existing?.exitCode === 0 && existing.stdout.toString().trim() !== commit)
     throw Error("idConflict");
@@ -243,27 +281,20 @@ export async function captureBoundary({
   try {
     if (existing?.exitCode !== 0) {
       await lease.installObjects({
-        repository: repo.realPath,
+        checkout,
         env,
         commit,
         parent: seal.parent,
         timeout: remaining(),
       });
       await read("objects.fsck", [
-        commonDir,
         "fsck",
         "--connectivity-only",
         "--no-reflogs",
         "--no-dangling",
         commit,
       ]);
-      const published = await run([
-        commonDir,
-        "update-ref",
-        plan.ref,
-        commit,
-        "0".repeat(commit.length),
-      ]);
+      const published = await run(["update-ref", plan.ref, commit, "0".repeat(commit.length)]);
       if (published.exitCode !== 0) {
         remaining();
         publicationError = gitProcessError("ref.update-ref", published);
@@ -274,8 +305,8 @@ export async function captureBoundary({
     publicationError = error;
   }
   // A timeout may race with the ref rename. Reconcile only this exact publication.
-  const verify = await lease.git([commonDir, "rev-parse", "--verify", plan.ref]);
-  const tree = await lease.git([commonDir, "rev-parse", "--verify", plan.ref + "^{tree}"]);
+  const verify = await lease.git([...checkoutArgs, "rev-parse", "--verify", plan.ref]);
+  const tree = await lease.git([...checkoutArgs, "rev-parse", "--verify", plan.ref + "^{tree}"]);
   if (verify.exitCode === 0 && verify.stdout.toString().trim() !== commit)
     throw Error("idConflict", { cause: "ref.verify: published commit differs from sealed commit" });
   if (verify.exitCode !== 0) throw publicationError ?? gitProcessError("ref.verify", verify);
