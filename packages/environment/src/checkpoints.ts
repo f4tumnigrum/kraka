@@ -62,6 +62,13 @@ export function checkpointRef(
   ].join("/");
 }
 
+export function captureDirectory(
+  key: Pick<CaptureKey, "id" | "threadId" | "environmentId">,
+  boundary: Boundary,
+) {
+  return checkpointRef(key, boundary).slice("refs/kraka/".length);
+}
+
 /** Paths are relative to the environment's scratch root. Probe the published ref before repeating work on restart. */
 export function captureWorkspace(state: CaptureState): CaptureWorkspace | null {
   if (
@@ -70,7 +77,7 @@ export function captureWorkspace(state: CaptureState): CaptureWorkspace | null {
   )
     return null;
   const ref = checkpointRef(state.key, state.kind);
-  const directory = ref.slice("refs/kraka/".length);
+  const directory = captureDirectory(state.key, state.kind);
   return {
     ref,
     privateIndexPath: `${directory}/index`,

@@ -1,3 +1,4 @@
+import { p10DatabaseBytes } from "./p10-storage";
 import { retainedCaptureBytes } from "./fixtures/round-patch";
 import { seedGit, isolatedFixture, readClaim, setupPolicy, idle } from "./fixtures/isolated-start";
 import { managedView } from "@kraka/environment";
@@ -12,7 +13,12 @@ import {
   readRound,
   readThread,
 } from "@kraka/environment";
-import { CommandIdSchema, type CommandReceipt, PrincipalIdSchema } from "@kraka/protocol";
+import {
+  CheckpointCaptureSchema,
+  CommandIdSchema,
+  type CommandReceipt,
+  PrincipalIdSchema,
+} from "@kraka/protocol";
 import * as v from "valibot";
 import { accepted, startFirstSendFixture, waitFile } from "./fixtures/first-send";
 import { connectFirstSend, fixtureActor } from "./fixtures/first-send-client";
@@ -426,13 +432,22 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
   const captures = await Bun.file(
     join(root, "packages/environment/src/capture-boundary.ts"),
   ).exists();
+  if (captures)
+    base.workload +=
+      "; one real Git capture per turn, retaining both private refs and their objects; include Git and scratch bytes";
   const input = "I".repeat(28),
     answer = "A".repeat(34),
     tool = "x".repeat(140),
     output = "o".repeat(96);
-  const counts = { databases: 0, turns: 0, workRecords: 0, checkpoints: 0 };
+  const counts = { databases: 0, turns: 0, workRecords: 0, checkpoints: 0, captures: 0 };
   base.actual = counts;
-  base.expected = { databases: 3, turns: 60, workRecords: 180, checkpoints: 6 };
+  base.expected = {
+    databases: 3,
+    turns: 60,
+    workRecords: 180,
+    checkpoints: 6,
+    captures: captures ? 60 : 0,
+  };
   for (let trial = 0; trial < 3; trial++)
     await withState(async (dir) => {
       const repo = seedGit(dir, "project");
@@ -498,6 +513,24 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
               !seen.has(ids.roundId),
             "Missing P10 turn",
           );
+          if (round.attempt.phase.kind === "finished") {
+            const id = round.attempt.phase.captureId;
+            const saved = db
+              .query<{ payload: string }, [string, string]>(
+                "SELECT payload FROM sync_rows WHERE source=? AND key=?",
+              )
+              .get(threadId, JSON.stringify(["checkpointCapture", id]));
+            const c = saved && v.parse(CheckpointCaptureSchema, JSON.parse(saved.payload).value);
+            verifyObservation(
+              c?.id === id &&
+                c.roundId === round.id &&
+                c.attemptId === ids.attemptId &&
+                c.result.kind === "ready" &&
+                c.result.comparison,
+              "Missing P10 checkpoint",
+            );
+            counts.captures++;
+          }
           seen.add(ids.roundId);
           const updates = db
             .query<{ data: string }, [string]>(
@@ -536,7 +569,7 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
               storage.refs === (captures ? turn * 2 : 0) && storage.scratchBytes === 0,
               "Missing settled P10 refs or retained scratch",
             );
-            retained.push({ turn, ...storage });
+            retained.push({ turn, ...storage, wal, database: p10DatabaseBytes(db) });
             const bytes =
               statSync(dbFile).size +
               wal +
@@ -561,7 +594,7 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
         sample(base, "growth", bytesPerTurn, "B/turn");
         counts.databases++;
       } finally {
-        db.close();
+        db.close(true);
         await f.close();
       }
     }),

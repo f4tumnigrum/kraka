@@ -144,7 +144,7 @@ export async function interruptedCapture(stage: "sealed" | "published", root = p
       let tree: string;
       try {
         const row = db
-          .query<{ seal: string }, [string]>("SELECT seal FROM round_captures WHERE id=?")
+          .query<{ seal: string }, [string]>("SELECT seal FROM capture_intents WHERE id=?")
           .get(hit.id);
         assert.ok(row);
         tree = JSON.parse(row.seal).tree;

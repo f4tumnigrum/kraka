@@ -238,6 +238,11 @@ export class FirstSendStore {
         { captureThread: round.threadId },
       );
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(saved), round.id]);
+      if (phase.kind === "finished" || phase.kind === "endedEarly" || phase.kind === "notDelivered")
+        this.db.run("DELETE FROM capture_intents WHERE round=? AND attempt=?", [
+          round.id,
+          saved.attempt.attemptId,
+        ]);
       if (phase.kind !== "filed" || phase.gate !== "eligible")
         this.db.run("DELETE FROM ready_dispatch WHERE round=?", [round.id]);
       const pending =

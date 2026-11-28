@@ -6,6 +6,8 @@ import {
   DirectoryBindingSchema,
   GitObjectIdSchema,
   CheckpointCaptureSchema,
+  CheckpointResultSchema,
+  comparePositions,
   NativeItemIdSchema,
   ObjectVersionSchema,
   type CheckpointCapture,
@@ -19,7 +21,7 @@ import {
 import * as v from "valibot";
 import {
   beginCapture,
-  captureWorkspace,
+  captureDirectory,
   checkpointRef,
   attributeFile,
   transitionCapture,
@@ -29,6 +31,13 @@ import {
   type PathObservation,
 } from "./checkpoints";
 import { captureBoundary, decodeSeal, type CaptureHook } from "./capture-boundary";
+import {
+  openCaptureStorage,
+  bindCaptureSource,
+  readIntent,
+  pendingBaselines,
+  type CaptureIntent,
+} from "./capture-storage";
 import { DirectoryWriters, type LeaseKey } from "./directory-lease";
 import { physicalDirectory } from "./project-directory";
 import { readThread, readRound, type FirstSendStore } from "./first-send-store";
@@ -45,28 +54,8 @@ import { resolveDiffDirectory } from "./git-workspace";
 import { gitRepositoryIdentity, runGit } from "./git-process";
 
 const version = v.parse(ObjectVersionSchema, "1");
-const publication = v.strictObject({
-  ref: v.string(),
-  commit: GitObjectIdSchema,
-  tree: GitObjectIdSchema,
-});
 const physical = v.strictObject({ realPath: v.string(), identity: v.string() });
 const ownersSchema = v.array(v.tuple([v.string(), FileOwnershipSchema]));
-type Stored = {
-  seq: number;
-  id: string;
-  thread: string;
-  round: string;
-  attempt: string;
-  binding: string;
-  repo: string | null;
-  baseline: string | null;
-  end: string | null;
-  seal: string | null;
-  result: string | null;
-  owners: string | null;
-  scratch: string | null;
-};
 function apply(state: CaptureState, event: CaptureEvent) {
   const next = transitionCapture(state, event);
   if (next.kind === "rejected") throw Error(next.reason);
@@ -83,9 +72,7 @@ export class RoundCaptures {
   hook?: CaptureHook;
   signal?: AbortSignal;
   constructor(private readonly store: FirstSendStore) {
-    store.db.exec(`CREATE TABLE IF NOT EXISTS round_captures(seq INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,thread TEXT NOT NULL,round TEXT NOT NULL,attempt TEXT NOT NULL UNIQUE,binding TEXT NOT NULL,repo TEXT,baseline TEXT,end TEXT,seal TEXT,result TEXT,owners TEXT,scratch TEXT,cleanup INTEGER NOT NULL DEFAULT 0);
-    CREATE INDEX IF NOT EXISTS capture_pending_baseline ON round_captures(seq) WHERE baseline IS NULL AND result IS NULL;
-    CREATE INDEX IF NOT EXISTS capture_scratch ON round_captures(seq) WHERE scratch IS NOT NULL;`);
+    openCaptureStorage(store.db);
     this.writers = new DirectoryWriters(store.writer.stateDirectory, (key) =>
       this.resolveLease(key),
     );
@@ -101,18 +88,14 @@ export class RoundCaptures {
     const path = t && this.store.directory(t);
     return path ? physicalDirectory(path) : null;
   }
-  private row(attempt: string) {
-    return this.store.db
-      .query<Stored, [string]>("SELECT * FROM round_captures WHERE attempt=?")
-      .get(attempt);
-  }
   id(round: Round) {
-    const row = this.row(round.attempt.attemptId);
-    const phase = round.attempt.phase;
-    return v.parse(
-      CaptureIdSchema,
-      row?.id ?? ("captureId" in phase ? phase.captureId : crypto.randomUUID()),
-    );
+    const row = readIntent(this.store.db, round.id, round.attempt.attemptId);
+    if (row) return v.parse(CaptureIdSchema, row.id);
+    const current = readRound(this.store.db, round.id);
+    const phase =
+      current?.attempts?.find((a) => a.attemptId === round.attempt.attemptId)?.phase ??
+      round.attempt.phase;
+    return "captureId" in phase ? phase.captureId : v.parse(CaptureIdSchema, crypto.randomUUID());
   }
   private initial(round: Round, binding: DirectoryBinding, id: CaptureId) {
     return beginCapture({
@@ -125,72 +108,64 @@ export class RoundCaptures {
       ...(binding.kind === "projectRoot" ? { projectRoot: binding } : {}),
     });
   }
-  private state(row: Stored, round: Round, binding: DirectoryBinding, boundary: Boundary) {
-    const state = this.initial(round, binding, v.parse(CaptureIdSchema, row.id));
-    if (boundary === "before") return state;
-    if (!row.baseline) throw Error("baselineMissing");
-    const ids = { id: state.key.id, attemptId: state.key.attemptId };
-    const baseline = apply(state, {
-      ...ids,
-      kind: "baselinePublished",
-      point: v.parse(publication, JSON.parse(row.baseline)),
-    });
-    return apply(baseline, { ...ids, kind: "rootEnded" });
-  }
-  private clean(row: Pick<Stored, "id" | "scratch">) {
-    if (!row.scratch) return;
-    rmSync(row.scratch, { recursive: true, force: true });
-    this.store.db.run("UPDATE round_captures SET scratch=NULL,cleanup=0 WHERE id=?", [row.id]);
+  private clean(path: string) {
+    rmSync(path, { recursive: true, force: true });
+    this.store.db.run("DELETE FROM capture_cleanup WHERE path=?", [path]);
   }
   cleanSettled() {
-    for (const row of this.store.db
-      .query<Stored, []>("SELECT * FROM round_captures WHERE scratch IS NOT NULL AND cleanup=1")
+    for (const { path } of this.store.db
+      .query<{ path: string }, []>("SELECT path FROM capture_cleanup")
       .all())
-      this.clean(row);
+      this.clean(path);
   }
   async recoverBaselines() {
-    const rows = this.store.db
-      .query<Stored, []>("SELECT * FROM round_captures WHERE baseline IS NULL AND result IS NULL")
-      .all();
-    for (const row of rows) {
+    for (const row of pendingBaselines(this.store.db)) {
       const round = readRound(this.store.db, row.round),
-        thread = readThread(this.store.db, row.thread);
-      if (round && thread && round.attempt.attemptId === row.attempt)
+        thread = round && readThread(this.store.db, round.threadId);
+      if (round?.attempt.attemptId === row.attempt && thread)
         await this.boundary(round, thread, row, "before", true);
     }
   }
   async before(round: Round) {
-    const thread = readThread(this.store.db, round.threadId);
-    const binding = thread?.directory;
+    const db = this.store.db,
+      thread = readThread(db, round.threadId),
+      binding = thread?.directory;
     if (!thread || !binding) return;
     const attempt = round.attempt.attemptId;
-    let row = this.row(attempt);
-    if (!row) {
-      this.store.db.run(
-        "INSERT INTO round_captures(id,thread,round,attempt,binding) VALUES(?,?,?,?,?)",
-        [crypto.randomUUID(), thread.id, round.id, attempt, JSON.stringify(binding)],
-      );
-      row = this.row(attempt);
-    }
-    if (!row || row.baseline || row.result) return;
-    await this.boundary(round, thread, row, "before", round.attempt.phase.kind !== "filed");
+    const intent = db.transaction(() => {
+      let row = readIntent(db, round.id, attempt);
+      if (!row) {
+        db.run("INSERT INTO capture_intents(round,attempt,id,source) VALUES(?,?,?,?)", [
+          round.id,
+          attempt,
+          crypto.randomUUID(),
+          bindCaptureSource(db, binding, null),
+        ]);
+        row = readIntent(db, round.id, attempt);
+      }
+      return row;
+    })();
+    if (intent && !intent.baseline && !intent.failure)
+      await this.boundary(round, thread, intent, "before", round.attempt.phase.kind !== "filed");
   }
   async finish(round: Round, recover: boolean) {
     const phase = round.attempt.phase;
     if (phase.kind !== "closing") return;
-    const row = this.row(round.attempt.attemptId);
+    const row = readIntent(this.store.db, round.id, round.attempt.attemptId);
     if (row && row.id !== phase.captureId) throw Error("wrongCapture");
-    if (!row || row.result) {
-      const capture = row?.result
-        ? v.parse(CheckpointCaptureSchema, JSON.parse(row.result))
-        : v.parse(CheckpointCaptureSchema, {
-            id: phase.captureId,
-            roundId: round.id,
-            attemptId: round.attempt.attemptId,
-            version,
-            result: { kind: "missing", boundary: "before", reason: "baselineMissing" },
-          });
-      this.store.db.transaction(() => this.settle(round, capture))();
+    if (!row || row.failure) {
+      const result = row?.failure
+        ? v.parse(CheckpointResultSchema, JSON.parse(row.failure))
+        : { kind: "missing" as const, boundary: "before" as const, reason: "baselineMissing" };
+      this.store.db.transaction(() =>
+        this.settle(round, {
+          id: phase.captureId,
+          roundId: round.id,
+          attemptId: round.attempt.attemptId,
+          version,
+          result,
+        }),
+      )();
       return;
     }
     const thread = readThread(this.store.db, round.threadId);
@@ -245,40 +220,39 @@ export class RoundCaptures {
   private async boundary(
     round: Round,
     thread: Thread,
-    row: Stored,
+    row: CaptureIntent,
     boundary: Boundary,
     recover: boolean,
   ) {
     const db = this.store.db,
       binding = v.parse(DirectoryBindingSchema, JSON.parse(row.binding));
-    const state = this.state(row, round, binding, boundary);
-    const ids = { id: state.key.id, attemptId: state.key.attemptId };
-    const plan = captureWorkspace(state);
+    let state = this.initial(round, binding, v.parse(CaptureIdSchema, row.id));
+    const key = state.key;
+    const ids = { id: key.id, attemptId: key.attemptId };
     const scratch = join(this.store.writer.stateDirectory, "capture-scratch");
-    const write = (next: CaptureState, owners?: Map<string, FileOwnership>) => {
-      db.transaction(() => {
-        if (next.kind === "working")
-          db.run("UPDATE round_captures SET baseline=?,seal=NULL,cleanup=1 WHERE id=?", [
-            JSON.stringify(next.baseline),
+    const tmp = join(scratch, captureDirectory(key, boundary));
+    const queueCleanup = () => db.run("INSERT OR IGNORE INTO capture_cleanup VALUES(?)", [tmp]);
+    const settled = (capture: CheckpointCapture, owners?: Map<string, FileOwnership>) => {
+      if (boundary === "before") {
+        db.run("UPDATE capture_intents SET failure=?,seal=NULL WHERE round=? AND attempt=?", [
+          JSON.stringify(capture.result),
+          round.id,
+          key.attemptId,
+        ]);
+      } else {
+        if (row.baseline && row.repo)
+          db.run("INSERT INTO round_captures(id,source,partial_before,owners) VALUES(?,?,?,?)", [
             row.id,
+            row.source,
+            capture.result.kind === "ready" ? null : row.baseline,
+            owners?.size ? JSON.stringify([...owners]) : null,
           ]);
-        else if (next.kind === "settled") {
-          db.run(
-            "UPDATE round_captures SET end=?,result=?,owners=?,seal=NULL,cleanup=1 WHERE id=?",
-            [
-              next.end ? JSON.stringify(next.end) : null,
-              JSON.stringify(next.capture),
-              owners?.size ? JSON.stringify([...owners]) : null,
-              row.id,
-            ],
-          );
-          if (boundary === "after") this.settle(round, next.capture);
-        }
-      })();
-      this.store.sync.notify();
+        this.settle(round, capture);
+      }
+      queueCleanup();
     };
     try {
-      if (!plan || !Bun.deepEquals(binding, thread.directory)) throw Error("directoryLost");
+      if (!Bun.deepEquals(binding, thread.directory)) throw Error("directoryLost");
       const path = this.store.directory(thread);
       if (!path) throw Error("directoryLost");
       if (!enclosingCheckout(path)) throw Error("noRepository");
@@ -293,9 +267,30 @@ export class RoundCaptures {
         async (lease) => {
           if (this.store.directory(readThread(db, thread.id) ?? thread) !== lease.path)
             throw Error("directoryLost");
-          const tmp = dirname(join(scratch, plan.privateIndexPath));
-          row.scratch = tmp;
-          db.run("UPDATE round_captures SET scratch=?,cleanup=0 WHERE id=?", [tmp, row.id]);
+          if (boundary === "after") {
+            if (
+              !row.baseline ||
+              !row.repo ||
+              !Bun.deepEquals(gitRepositoryIdentity(path), JSON.parse(row.repo))
+            )
+              throw Error("baselineUnavailable");
+            const ref = checkpointRef(key, "before"),
+              commit = v.parse(GitObjectIdSchema, row.baseline);
+            const found = await lease.git([
+              "--no-replace-objects",
+              "rev-parse",
+              ref,
+              commit + "^{tree}",
+            ]);
+            const [actual, tree] = found.stdout.toString().trim().split(/\r?\n/);
+            if (found.exitCode !== 0 || actual !== commit) throw Error("baselineUnavailable");
+            const working = apply(state, {
+              ...ids,
+              kind: "baselinePublished",
+              point: { ref, commit, tree: v.parse(GitObjectIdSchema, tree) },
+            });
+            state = apply(working, { ...ids, kind: "rootEnded" });
+          }
           const { point } = await captureBoundary({
             captureKey: state,
             boundary,
@@ -306,15 +301,22 @@ export class RoundCaptures {
             recover,
             source: row.repo ? v.parse(physical, JSON.parse(row.repo)) : null,
             bindSource: (repo) => {
-              if (!row.repo)
-                db.run("UPDATE round_captures SET repo=? WHERE id=?", [
-                  JSON.stringify(repo),
-                  row.id,
+              if (!row.repo) {
+                row.source = bindCaptureSource(db, binding, repo);
+                row.repo = JSON.stringify(repo);
+                db.run("UPDATE capture_intents SET source=? WHERE round=? AND attempt=?", [
+                  row.source,
+                  round.id,
+                  row.attempt,
                 ]);
+              }
             },
-            remember: (seal) => {
-              db.run("UPDATE round_captures SET seal=? WHERE id=?", [JSON.stringify(seal), row.id]);
-            },
+            remember: (seal) =>
+              db.run("UPDATE capture_intents SET seal=? WHERE round=? AND attempt=?", [
+                JSON.stringify(seal),
+                round.id,
+                row.attempt,
+              ]),
             hook: this.hook,
           });
           if (lease.revalidate(lease.key) !== "current") throw Error("directoryLost");
@@ -329,7 +331,15 @@ export class RoundCaptures {
           };
           if (boundary === "before") {
             await verifyPoint();
-            write(apply(state, { ...ids, kind: "baselinePublished", point }));
+            const working = apply(state, { ...ids, kind: "baselinePublished", point });
+            if (working.kind !== "working") throw Error("invalidState");
+            db.transaction(() => {
+              db.run(
+                "UPDATE capture_intents SET baseline=?,seal=NULL WHERE round=? AND attempt=?",
+                [working.baseline.commit, round.id, row.attempt],
+              );
+              queueCleanup();
+            })();
             return;
           }
           if (state.kind !== "after") throw Error("invalidState");
@@ -382,25 +392,28 @@ export class RoundCaptures {
             comparison = { kind: "unknown", reason: "summaryUnavailable" };
           }
           await verifyPoint();
-          write(apply(state, { ...ids, kind: "endPublished", point, version, comparison }), owners);
+          const ready = apply(state, { ...ids, kind: "endPublished", point, version, comparison });
+          if (ready.kind !== "settled") throw Error("invalidState");
+          db.transaction(() => settled(ready.capture, owners))();
         },
         this.signal,
       );
     } catch (error) {
       const reason = error instanceof Error ? error.message : "captureFailed";
-      write(
-        apply(state, {
-          ...ids,
-          kind: reason === "noRepository" ? "missing" : "error",
-          boundary,
-          reason,
+      db.transaction(() =>
+        settled({
+          id: key.id,
+          roundId: round.id,
+          attemptId: key.attemptId,
           version,
+          result: { kind: reason === "noRepository" ? "missing" : "error", boundary, reason },
         }),
-      );
+      )();
     }
-    this.clean(row);
+    this.clean(tmp);
     await this.hook?.("settled", boundary, state);
   }
+
   readCaptureRange(input: {
     thread: Thread["id"];
     worktree: ResolvedDiffDirectory;
@@ -436,9 +449,22 @@ export class RoundCaptures {
   ) {
     const find = (id: CaptureId) => {
       const row = this.store.db
-        .query<Stored, [string, string]>("SELECT * FROM round_captures WHERE id=? AND thread=?")
-        .get(id, thread);
-      if (!row || !row.result || !row.repo) return null;
+        .query<
+          {
+            created: string;
+            payload: string;
+            binding: string;
+            repo: string;
+            partial_before: string | null;
+            owners: string | null;
+          },
+          [string, string, string]
+        >(
+          "SELECT j.created,j.payload,s.binding,s.repo,c.partial_before,c.owners FROM sync_rows j JOIN round_captures c ON c.id=? JOIN capture_sources s ON s.id=c.source WHERE j.source=? AND j.key=? AND j.payload IS NOT NULL",
+        )
+        .get(id, thread, JSON.stringify(["checkpointCapture", id]));
+      if (!row) return null;
+      const capture = v.parse(CheckpointCaptureSchema, JSON.parse(row.payload).value);
       const b = v.parse(DirectoryBindingSchema, JSON.parse(row.binding)),
         a = worktree.address;
       if (
@@ -450,29 +476,32 @@ export class RoundCaptures {
           b.worktreeId !== a.worktreeId)
       )
         return null;
-      const round = readRound(this.store.db, row.round);
+      const round = readRound(this.store.db, capture.roundId);
       if (round?.attempt.phase.kind !== "finished" || round.attempt.phase.captureId !== id)
         return null;
-      return row;
+      const pair = capture.result.kind === "ready" ? capture.result.comparison : null;
+      return { ...row, baseline: pair?.before ?? row.partial_before, end: pair?.after ?? null };
     };
     const first = find(fromCaptureId),
       last = fromCaptureId === toCaptureId ? first : find(toCaptureId);
     const physicalRepo = gitRepositoryIdentity(worktree.path);
-    const point = (row: Stored | null, boundary: Boundary, id: CaptureId) => {
+    const point = (row: ReturnType<typeof find>, boundary: Boundary, id: CaptureId) => {
       const data = boundary === "before" ? row?.baseline : row?.end;
       if (!row?.repo || !data || !Bun.deepEquals(physicalRepo, JSON.parse(row.repo))) return null;
-      const p = v.parse(publication, JSON.parse(data));
+      const commit = v.parse(GitObjectIdSchema, data);
       const ref = checkpointRef(
         { environmentId: this.store.writer.environmentId, threadId: thread, id },
         boundary,
       );
       const r = runGit(worktree.path, ["rev-parse", "--verify", ref]);
-      const t = runGit(worktree.path, ["rev-parse", "--verify", p.commit + "^{tree}"]);
-      return r.exitCode === 0 &&
-        t.exitCode === 0 &&
-        r.stdout.toString().trim() === p.commit &&
-        t.stdout.toString().trim() === p.tree
-        ? p
+      const t = runGit(worktree.path, [
+        "--no-replace-objects",
+        "rev-parse",
+        "--verify",
+        commit + "^{tree}",
+      ]);
+      return r.exitCode === 0 && t.exitCode === 0 && r.stdout.toString().trim() === commit
+        ? { commit, tree: v.parse(GitObjectIdSchema, t.stdout.toString().trim()) }
         : null;
     };
     const a = point(first, "before", fromCaptureId),
@@ -501,7 +530,7 @@ export class RoundCaptures {
       !to ||
       !a ||
       !b ||
-      first.seq > last.seq ||
+      comparePositions(first.created, last.created) > 0 ||
       first.repo !== last.repo ||
       !first.end ||
       !last.baseline
