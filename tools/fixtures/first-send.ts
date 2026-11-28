@@ -77,7 +77,7 @@ export function launchWriter(
     executable ? [executable, ...argv.slice(1)] : [process.execPath, ...argv],
     {
       cwd: root,
-      stdin: "ignore",
+      stdin: point === "codex" ? "pipe" : "ignore",
       stdout: "pipe",
       stderr: "pipe",
       ...(ipc && { ipc }),
@@ -124,8 +124,16 @@ export function launchWriter(
     started,
     ready,
     async stop() {
-      await terminate(child);
-      await Promise.all([drained, stderr]);
+      try {
+        if (child.stdin && child.exitCode === null && child.signalCode === null) {
+          await child.stdin.end();
+          const code = await within(child.exited, 10000, "Codex writer shutdown");
+          if (code !== 0) throw Error(`Codex writer exited with ${code}: ${await stderr}`);
+        }
+      } finally {
+        await terminate(child);
+        await Promise.all([drained, stderr]);
+      }
     },
     async kill() {
       if (child.exitCode === null) child.kill("SIGKILL");
@@ -201,7 +209,7 @@ export async function startFirstSendFixture({
               v.parse(CommandIdSchema, command),
             );
           } finally {
-            db.close();
+            db.close(true);
           }
         },
         async close() {

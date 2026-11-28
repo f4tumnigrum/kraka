@@ -26,6 +26,8 @@ const writer = await startWriter(state, null, {
   },
 });
 if (writer.kind !== "ready") throw new Error("Expected owned writer");
+process.stdin.once("end", writer.close);
+process.stdin.resume();
 process.once("SIGTERM", writer.close);
 process.once("SIGINT", writer.close);
 console.log(JSON.stringify({ kind: writer.kind, publication: writer.instance }));
