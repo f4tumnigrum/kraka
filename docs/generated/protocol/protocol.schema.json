@@ -4608,6 +4608,38 @@
                   "type": "object",
                   "properties": {
                     "kind": {
+                      "const": "forgeAccount"
+                    },
+                    "account": {
+                      "$ref": "#/$defs/ForgeAccountView"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "account"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "repositorySource"
+                    },
+                    "source": {
+                      "$ref": "#/$defs/RepositorySource"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
                       "const": "forgeOperation"
                     },
                     "operation": {
@@ -8983,6 +9015,127 @@
       ],
       "additionalProperties": false
     },
+    "ForgeAccount": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "login": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "login"
+      ],
+      "additionalProperties": false
+    },
+    "ForgeAccountView": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9.-]+$"
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "git": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9][0-9A-Za-z.+-]{0,63}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gh": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9][0-9A-Za-z.+-]{0,63}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "git",
+            "gh"
+          ],
+          "additionalProperties": false
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "verified"
+                },
+                "account": {
+                  "$ref": "#/$defs/ForgeAccount"
+                }
+              },
+              "required": [
+                "kind",
+                "account"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "unavailable"
+                },
+                "reason": {
+                  "enum": [
+                    "hostNotConfigured",
+                    "toolMissing",
+                    "notLoggedIn",
+                    "loginExpired",
+                    "forbidden",
+                    "rateLimited",
+                    "notVisible",
+                    "unreachable",
+                    "unexpectedResponse",
+                    "rootUnavailable",
+                    "noRemote",
+                    "unsupportedRemote"
+                  ],
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "reason",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "tools",
+        "status"
+      ],
+      "additionalProperties": false
+    },
     "ForgeBranch": {
       "type": "object",
       "properties": {
@@ -10499,6 +10652,38 @@
           "additionalProperties": false
         }
       ]
+    },
+    "ForgeRemote": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "enum": [
+            "upstream",
+            "origin"
+          ],
+          "type": "string"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9.-]+$"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name",
+        "host",
+        "owner",
+        "repository"
+      ],
+      "additionalProperties": false
     },
     "ForgeRepository": {
       "type": "object",
@@ -14389,6 +14574,89 @@
         "host",
         "port",
         "path"
+      ],
+      "additionalProperties": false
+    },
+    "RepositorySource": {
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "root": {
+          "$ref": "#/$defs/ProjectRoot"
+        },
+        "remote": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ForgeRemote"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "resolved"
+                },
+                "repository": {
+                  "$ref": "#/$defs/ForgeRepository"
+                }
+              },
+              "required": [
+                "kind",
+                "repository"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "unavailable"
+                },
+                "reason": {
+                  "enum": [
+                    "hostNotConfigured",
+                    "toolMissing",
+                    "notLoggedIn",
+                    "loginExpired",
+                    "forbidden",
+                    "rateLimited",
+                    "notVisible",
+                    "unreachable",
+                    "unexpectedResponse",
+                    "rootUnavailable",
+                    "noRemote",
+                    "unsupportedRemote"
+                  ],
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "reason",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "projectId",
+        "root",
+        "remote",
+        "status"
       ],
       "additionalProperties": false
     },
@@ -20086,6 +20354,12 @@
         },
         {
           "$ref": "#/$defs/environment.upgrade"
+        },
+        {
+          "$ref": "#/$defs/forge.account"
+        },
+        {
+          "$ref": "#/$defs/project.repositorySource"
         },
         {
           "$ref": "#/$defs/forge.publish"
@@ -30079,6 +30353,117 @@
       "additionalProperties": false,
       "description": "Requires settings.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
+    "forge.account": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "forge.account"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-z0-9.-]+$"
+            }
+          },
+          "required": [
+            "host"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
     "forge.fileReading": {
       "type": "object",
       "properties": {
@@ -32160,6 +32545,115 @@
       ],
       "additionalProperties": false,
       "description": "Requires workspace.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
+    "project.repositorySource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "project.repositorySource"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "projectId": {
+              "$ref": "#/$defs/ProjectId"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on project. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
     "round.readStop": {
       "type": "object",

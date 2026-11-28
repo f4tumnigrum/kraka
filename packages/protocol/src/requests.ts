@@ -49,6 +49,9 @@ import {
 } from "./workspace";
 import { UpgradeViewSchema, EnvironmentDescriptionSchema, UpgradeRequestSchema } from "./upgrades";
 import {
+  ForgeAccountViewSchema,
+  ForgeRepositorySchema,
+  RepositorySourceSchema,
   ForgePublishSchema,
   ForgeProgressSchema,
   ForgeFileKeySchema,
@@ -625,6 +628,18 @@ export const REQUEST_METHODS = {
     "environment.upgrade",
     "environment",
     UpgradeRequestSchema,
+  ),
+  readForgeAccount: defineRequestMethod(
+    "forge.account",
+    "thread.view",
+    "environment",
+    v.strictObject({ host: ForgeRepositorySchema.entries.host }),
+  ),
+  readRepositorySource: defineRequestMethod(
+    "project.repositorySource",
+    "thread.view",
+    "project",
+    v.strictObject({ projectId: ProjectIdSchema }),
   ),
   publishForge: defineRequestMethod(
     "forge.publish",
@@ -1205,6 +1220,8 @@ export const RequestResultSchema = v.variant("kind", [
   v.strictObject({ kind: v.literal("appConfirmed"), confirmation: AppConfirmationSchema }),
   v.strictObject({ kind: v.literal("appNoteChanged"), note: AppNoteSchema }),
 
+  v.strictObject({ kind: v.literal("forgeAccount"), account: ForgeAccountViewSchema }),
+  v.strictObject({ kind: v.literal("repositorySource"), source: RepositorySourceSchema }),
   v.strictObject({ kind: v.literal("forgeOperation"), operation: ForgeProgressSchema }),
   v.strictObject({ kind: v.literal("forgeFileReading"), reading: ForgeMarkViewSchema }),
   v.strictObject({ kind: v.literal("forgeHistory"), history: v.array(ForgeHistorySchema) }),

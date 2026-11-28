@@ -9,6 +9,7 @@ import {
   ThreadIdSchema,
   WorktreeIdSchema,
 } from "./ids";
+import { ProjectRootSchema } from "./workspace";
 
 const name = v.pipe(v.string(), v.minLength(1));
 const positive = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
@@ -20,6 +21,59 @@ export const ForgeRepositorySchema = v.strictObject({
   id: name,
 });
 export type ForgeRepository = v.InferOutput<typeof ForgeRepositorySchema>;
+/** The permanent user ID identifies the account. The login is the name it currently shows. */
+export const ForgeAccountSchema = v.strictObject({ id: name, login: name });
+export type ForgeAccount = v.InferOutput<typeof ForgeAccountSchema>;
+export const ForgeUnavailableReasonSchema = v.picklist([
+  "hostNotConfigured",
+  "toolMissing",
+  "notLoggedIn",
+  "loginExpired",
+  "forbidden",
+  "rateLimited",
+  "notVisible",
+  "unreachable",
+  "unexpectedResponse",
+  "rootUnavailable",
+  "noRemote",
+  "unsupportedRemote",
+]);
+export type ForgeUnavailableReason = v.InferOutput<typeof ForgeUnavailableReasonSchema>;
+/** The message is fixed text chosen by the environment. It never quotes gh or GitHub output. */
+const forgeUnavailable = v.strictObject({
+  kind: v.literal("unavailable"),
+  reason: ForgeUnavailableReasonSchema,
+  message: name,
+});
+const toolVersion = v.nullable(v.pipe(v.string(), v.regex(/^[0-9][0-9A-Za-z.+-]{0,63}$/)));
+/** A null tool version means the environment host could not run that tool. */
+export const ForgeAccountViewSchema = v.strictObject({
+  host: ForgeRepositorySchema.entries.host,
+  tools: v.strictObject({ git: toolVersion, gh: toolVersion }),
+  status: v.variant("kind", [
+    v.strictObject({ kind: v.literal("verified"), account: ForgeAccountSchema }),
+    forgeUnavailable,
+  ]),
+});
+export type ForgeAccountView = v.InferOutput<typeof ForgeAccountViewSchema>;
+/** The remote the project publishes against. Its name on GitHub may change while the ID stays. */
+export const ForgeRemoteSchema = v.strictObject({
+  name: v.picklist(["upstream", "origin"]),
+  host: ForgeRepositorySchema.entries.host,
+  owner: name,
+  repository: name,
+});
+export type ForgeRemote = v.InferOutput<typeof ForgeRemoteSchema>;
+export const RepositorySourceSchema = v.strictObject({
+  projectId: ProjectIdSchema,
+  root: ProjectRootSchema,
+  remote: v.nullable(ForgeRemoteSchema),
+  status: v.variant("kind", [
+    v.strictObject({ kind: v.literal("resolved"), repository: ForgeRepositorySchema }),
+    forgeUnavailable,
+  ]),
+});
+export type RepositorySource = v.InferOutput<typeof RepositorySourceSchema>;
 export const ForgeBranchSchema = v.strictObject({ repository: ForgeRepositorySchema, name });
 export type ForgeBranch = v.InferOutput<typeof ForgeBranchSchema>;
 const pair = { source: ForgeBranchSchema, target: ForgeBranchSchema };
@@ -231,6 +285,10 @@ export const forgeSchemas = {
   ThreadPullLink: ThreadPullLinkSchema,
   ForgePullMatch: ForgePullMatchSchema,
   ForgeRepository: ForgeRepositorySchema,
+  ForgeAccount: ForgeAccountSchema,
+  ForgeAccountView: ForgeAccountViewSchema,
+  ForgeRemote: ForgeRemoteSchema,
+  RepositorySource: RepositorySourceSchema,
   ForgeBranch: ForgeBranchSchema,
   ForgePublish: ForgePublishSchema,
   ForgeProgress: ForgeProgressSchema,

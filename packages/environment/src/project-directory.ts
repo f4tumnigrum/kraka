@@ -23,7 +23,7 @@ function git(path: string, ...args: string[]) {
   });
   return result.exitCode === 0 ? result.stdout.toString().trim() : null;
 }
-function remoteIdentity(remote: string | null) {
+export function remoteIdentity(remote: string | null) {
   if (!remote) return null;
   try {
     const normalized = remote.includes("://")
