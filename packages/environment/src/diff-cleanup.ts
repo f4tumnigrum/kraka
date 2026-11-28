@@ -6,12 +6,11 @@ import * as v from "valibot";
 import { GitObjectIdSchema, type GitObjectId } from "@kraka/protocol";
 import { gitEnvironment, runGit } from "./git-process";
 import { physicalDirectory } from "./project-directory";
-import { hashId, readManaged } from "./worktree-storage";
-import type { FirstSendStore } from "./first-send-store";
+import { hashId } from "./worktree-storage";
 
 const diffRefs = "refs/kraka/diffs/";
 const uuid = v.pipe(v.string(), v.uuid());
-type Repository = NonNullable<ReturnType<typeof physicalDirectory>>;
+type ComparedRepository = { common: string; identity: string; legacyRef: string | null };
 type Row = {
   id: string;
   scratch: string;
@@ -108,9 +107,10 @@ export class DiffCleanup {
     this.namespace = `${diffRefs}w-${hashId(JSON.stringify([environmentId, state]))}/`;
     this.scratchRoot = join(state, "diff-scratch");
     this.emptyHooks = join(state, "diff-empty-hooks");
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS diff_cleanup(id TEXT PRIMARY KEY,scratch TEXT NOT NULL,common TEXT NOT NULL,identity TEXT NOT NULL,leftOid TEXT,rightOid TEXT)",
-    );
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS diff_cleanup(id TEXT PRIMARY KEY,scratch TEXT NOT NULL,common TEXT NOT NULL,identity TEXT NOT NULL,leftOid TEXT,rightOid TEXT);
+      CREATE TABLE IF NOT EXISTS compared_repositories(identity TEXT PRIMARY KEY,common TEXT NOT NULL,legacyRef TEXT);
+    `);
   }
 
   begin(cwd: string) {
@@ -121,12 +121,18 @@ export class DiffCleanup {
     const id = crypto.randomUUID(),
       scratch = join(this.scratchRoot, `kraka-diff-${id}`);
     // Commit the cleanup intent before creating scratch or publishing either endpoint.
-    this.db.run("INSERT INTO diff_cleanup(id,scratch,common,identity) VALUES(?,?,?,?)", [
-      id,
-      scratch,
-      repo.realPath,
-      repo.identity,
-    ]);
+    this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO compared_repositories(identity,common) VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET common=excluded.common WHERE common<>excluded.common",
+        [repo.identity, repo.realPath],
+      );
+      this.db.run("INSERT INTO diff_cleanup(id,scratch,common,identity) VALUES(?,?,?,?)", [
+        id,
+        scratch,
+        repo.realPath,
+        repo.identity,
+      ]);
+    })();
     try {
       mkdirSync(scratch, { mode: 0o700 });
       return { id, scratch };
@@ -201,53 +207,54 @@ export class DiffCleanup {
       console.warn("Comparison cleanup deferred", id, String(error));
     }
   }
+  private inspectLegacy(repo: ComparedRepository) {
+    // NULL is pending. An empty result records that Git found no legacy ref.
+    if (repo.legacyRef !== null) return;
+    const result = runGit(repo.common, [
+      "--git-dir=.",
+      "for-each-ref",
+      "--count=1",
+      "--format=%(refname)",
+      `--exclude=${diffRefs}w-*/*`,
+      `${diffRefs}*/*`,
+    ]);
+    if (result.exitCode !== 0) {
+      console.warn("Legacy comparison ref scan deferred", repo.common);
+      return;
+    }
+    const firstRef = result.stdout.toString().trimEnd();
+    this.db.run("UPDATE compared_repositories SET legacyRef=? WHERE identity=?", [
+      firstRef,
+      repo.identity,
+    ]);
+    if (firstRef) console.warn("Preserved legacy comparison refs", repo.common, firstRef);
+  }
   /** Called once under the state-directory writer lock, before opening any client connection. */
-  recover(store: FirstSendStore) {
-    const repositories = new Map<string, Repository>();
-    for (const row of this.db.query<Row, []>(`SELECT ${columns} FROM diff_cleanup`).all()) {
-      const repo = physicalDirectory(row.common);
-      if (repo?.identity === row.identity) repositories.set(repo.realPath, repo);
+  recover() {
+    const pending = this.db
+      .query<Pick<Row, "id" | "common" | "identity">, []>(
+        "SELECT id,common,identity FROM diff_cleanup",
+      )
+      .all();
+    for (const row of pending) {
+      // Older databases can have unfinished intents but no repository history.
+      this.db.run("INSERT OR IGNORE INTO compared_repositories(identity,common) VALUES(?,?)", [
+        row.identity,
+        row.common,
+      ]);
       this.release(row.id);
     }
-    for (const { id } of this.db
-      .query<{ id: string }, [string]>("SELECT id FROM projects WHERE environment=?")
-      .all(store.writer.environmentId)) {
-      const cwd = store.projectDirectory(id);
-      const repo = cwd && repository(cwd);
-      if (repo) repositories.set(repo.realPath, repo);
-    }
-    for (const { id } of this.db
-      .query<{ id: string }, []>("SELECT id FROM managed_worktrees")
+    for (const repo of this.db
+      .query<ComparedRepository, []>("SELECT common,identity,legacyRef FROM compared_repositories")
       .all()) {
-      const managed = readManaged(this.db, id);
-      if (
-        managed &&
-        physicalDirectory(managed.common.realPath)?.identity === managed.common.identity
-      )
-        repositories.set(managed.common.realPath, managed.common);
-    }
-    for (const repo of repositories.values()) {
+      const common = repo.common;
+      if (physicalDirectory(common)?.identity !== repo.identity) continue;
       try {
-        const common = repo.realPath;
-        const legacy = runGit(common, [
-          "--git-dir=.",
-          "for-each-ref",
-          "--count=1",
-          "--format=%(refname)",
-          `--exclude=${diffRefs}w-*/*`,
-          `${diffRefs}*/*`,
-        ]);
-        if (legacy.exitCode !== 0) throw Error("Cannot inspect legacy comparison refs");
-        if (legacy.stdout.length)
-          console.warn(
-            "Preserved legacy comparison refs",
-            common,
-            legacy.stdout.toString().trimEnd(),
-          );
+        this.inspectLegacy(repo);
         const registered = new Set(
           this.db
-            .query<{ id: string }, [string]>("SELECT id FROM diff_cleanup WHERE common=?")
-            .all(common)
+            .query<{ id: string }, [string]>("SELECT id FROM diff_cleanup WHERE identity=?")
+            .all(repo.identity)
             .map((row) => row.id),
         );
         for (const ref of refs(common, this.namespace)) {
@@ -266,7 +273,7 @@ export class DiffCleanup {
           else console.warn("Orphan comparison ref needs inspection", common, ref.name);
         }
       } catch (error) {
-        console.warn("Comparison ref scan deferred", repo.realPath, String(error));
+        console.warn("Comparison ref scan deferred", repo.common, String(error));
       }
     }
   }

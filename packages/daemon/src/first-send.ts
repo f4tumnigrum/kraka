@@ -146,7 +146,7 @@ export async function startWriter<H extends object>(
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease, replay?.recovery);
     store = transaction;
-    transaction.diffCleanup.recover(transaction);
+    transaction.diffCleanup.recover();
     lifecycle?.opened?.(transaction);
     const codex = new CodexInstances(transaction);
     const stops = new OrdinaryStops(transaction);

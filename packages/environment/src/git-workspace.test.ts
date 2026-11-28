@@ -399,3 +399,57 @@ test("retries partial cleanup without deleting a changed endpoint or following a
     repo.close();
   }
 });
+
+test.each([false, true])(
+  "recovery remembers a completed legacy scan (prior legacy ref: %p)",
+  (hasLegacy) => {
+    const repo = repository();
+    const trace = join(repo.path, "..", "recovery.trace");
+    function recoveryGitStarts() {
+      writeFileSync(trace, "");
+      const previous = process.env.GIT_TRACE2_EVENT;
+      process.env.GIT_TRACE2_EVENT = trace;
+      try {
+        repo.cleanup.recover();
+      } finally {
+        if (previous === undefined) delete process.env.GIT_TRACE2_EVENT;
+        else process.env.GIT_TRACE2_EVENT = previous;
+      }
+      const events = readFileSync(trace, "utf8").split(/\r?\n/).filter(Boolean);
+      return events.flatMap((line) => {
+        const e = JSON.parse(line);
+        return e.event === "start" ? [v.parse(v.array(v.string()), e.argv)] : [];
+      });
+    }
+    try {
+      expect(recoveryGitStarts()).toEqual([]);
+      git(repo.path, "commit", "--allow-empty", "-qm", "base");
+      const intent = repo.cleanup.begin(repo.path);
+      if (!intent) throw Error("Missing comparison intent");
+      if (hasLegacy) {
+        // An upgrade can open a database with an old cleanup intent and no history table rows.
+        repo.db.run("DELETE FROM compared_repositories");
+      } else {
+        // Completed comparisons must still be known after their intent rows have been released.
+        repo.cleanup.release(intent.id);
+      }
+      const legacy = "refs/kraka/diffs/" + crypto.randomUUID() + "/from";
+      if (hasLegacy) git(repo.path, "update-ref", legacy, "HEAD");
+      const first = recoveryGitStarts();
+      expect(first.filter((args) => args.includes("--count=1"))).toHaveLength(1);
+      expect(repo.db.query("SELECT legacyRef FROM compared_repositories").all()).toEqual([
+        { legacyRef: hasLegacy ? legacy : "" },
+      ]);
+      if (!hasLegacy) git(repo.path, "update-ref", legacy, "HEAD");
+      const orphan = repo.cleanup.namespace + crypto.randomUUID() + "/to";
+      git(repo.path, "update-ref", orphan, "HEAD");
+      const second = recoveryGitStarts();
+      expect(second.some((args) => args.includes("--count=1"))).toBe(false);
+      expect(git(repo.path, "for-each-ref", "--format=%(refname)", "refs/kraka/diffs/")).toBe(
+        legacy,
+      );
+    } finally {
+      repo.close();
+    }
+  },
+);
