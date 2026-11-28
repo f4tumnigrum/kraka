@@ -1,10 +1,6 @@
 import * as v from "valibot";
-import {
-  createCodexAdapter,
-  probeCodex,
-  selectedModel,
-  type CodexProbe,
-} from "@kraka/adapter-codex";
+import * as registered from "./executor-families/registry";
+import type { ExecutorFamily, FamilyProbe } from "@kraka/environment";
 import {
   readProject,
   recordCommand,
@@ -32,18 +28,32 @@ import {
 type Entry = {
   reg: ExecutorRegistration;
   cwd: string;
-  probe: CodexProbe;
+  probe: FamilyProbe;
   snapshot: ExecutorInstanceSnapshot;
-  adapter: (previousEpoch: number) => ReturnType<typeof createCodexAdapter>;
 };
-export class CodexInstances {
+export class ExecutorInstances {
   readonly registry;
   private entries = new Map<string, Entry>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private closed = false;
   readonly active = new Set<Promise<unknown>>();
-  constructor(private store: FirstSendStore) {
+  private readonly families;
+  constructor(
+    private store: FirstSendStore,
+    families: readonly ExecutorFamily[] = Object.values(registered),
+  ) {
+    this.families = new Map(families.map((family) => [family.family, family]));
     this.registry = new WriterExecutorRegistry(store);
+  }
+  configure(
+    ctx: FirstSendContext,
+    payload: Extract<SignedRequest, { method: "executor.configure" }>["payload"],
+  ) {
+    return this.registry.configure(
+      ctx,
+      payload,
+      (reg) => this.families.get(reg.family)?.supports(reg) ?? false,
+    );
   }
   forThread(threadId: ThreadId) {
     return this.store.db
@@ -53,7 +63,7 @@ export class CodexInstances {
       .get(threadId);
   }
   async resolve(
-    saved: NonNullable<ReturnType<CodexInstances["forThread"]>>,
+    saved: NonNullable<ReturnType<ExecutorInstances["forThread"]>>,
     actor: PrincipalId,
     thread: Thread,
   ) {
@@ -111,7 +121,7 @@ export class CodexInstances {
       )
     )
       return null;
-    const model = selectedModel(entry.probe.models, selection ?? entry.reg.model);
+    const model = entry.probe.selectModel(selection ?? entry.reg.model);
     return model ? { ...entry, model } : null;
   }
   async probe(
@@ -122,23 +132,17 @@ export class CodexInstances {
   ) {
     const token = this.registry.begin(reg.instanceId, cwd);
     const prev = this.entries.get(reg.instanceId);
-    const env = this.registry.environment(reg);
-    const executable = reg.driver.executable ?? "codex";
-    const launch = {
-      executable:
-        Bun.which(executable, { cwd, PATH: env.PATH ?? process.env.PATH ?? "" }) ?? executable,
-      cwd,
-      env,
-    };
-    const probe = await probeCodex(
-      reg,
-      launch,
-      prev?.reg.version === reg.version && prev.cwd === cwd ? prev.probe : undefined,
-    );
+    const family = this.families.get(reg.family);
+    if (!family || !family.supports(reg)) return null;
+    const probe =
+      prev?.reg.version === reg.version && prev.cwd === cwd
+        ? await prev.probe.refresh()
+        : await family.probe(reg, cwd, this.registry.environment(reg));
+    if (probe.declaration.family !== reg.family) throw Error("Mismatched probe family");
     if (this.closed || !this.registry.isCurrent(reg.instanceId, token) || directory() !== cwd)
       return null;
     const snapshot = await this.registry.publish({
-      family: "codex",
+      family: reg.family,
       instanceId: reg.instanceId,
       configurationVersion: reg.version,
       credential: reg.credential,
@@ -153,13 +157,6 @@ export class CodexInstances {
       cwd,
       probe,
       snapshot,
-      adapter: (previousEpoch: number) =>
-        createCodexAdapter(
-          { family: "codex", instanceId: reg.instanceId },
-          launch,
-          probe,
-          previousEpoch,
-        ),
     };
     this.entries.set(reg.instanceId, entry);
     clearTimeout(this.timers.get(reg.instanceId));
@@ -241,4 +238,4 @@ export class CodexInstances {
     );
   }
 }
-export type CodexSelection = NonNullable<ReturnType<CodexInstances["select"]>>;
+export type ExecutorSelection = NonNullable<ReturnType<ExecutorInstances["select"]>>;
