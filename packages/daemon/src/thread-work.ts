@@ -6,14 +6,13 @@ import {
   type FixtureSettingReply,
 } from "./thread-connection";
 import { rollbackRuntime } from "./rollback-native";
-import { CodexInstances } from "./codex-instances";
+import { ExecutorInstances } from "./executor-instances";
 import {
-  bindingContext,
-  dispatchCodex,
-  reconcileCodex,
+  dispatchExecutor,
+  reconcileExecutor,
   resumeBinding,
   type PreparedSession,
-} from "./durable-codex";
+} from "./durable-executor";
 import {
   acceptFirstInput,
   OrdinaryStops,
@@ -90,12 +89,12 @@ export function threadWork<H extends object>(
   transaction: FirstSendStore,
   authHost: Awaited<ReturnType<typeof openAccessHost>>,
   actor: Pick<LocalActor, "id">,
-  codex: CodexInstances,
+  executors: ExecutorInstances,
   replay: ReplayWriter<H>,
   lifecycle?: WriterLifecycle,
   stops = new OrdinaryStops(transaction),
 ) {
-  transaction.services.rollbacks.runtime = rollbackRuntime(transaction, codex, actor, authHost);
+  transaction.services.rollbacks.runtime = rollbackRuntime(transaction, executors, actor, authHost);
   const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
   const turns = new Map<string, Promise<void>>();
   const controller = new AbortController();
@@ -122,20 +121,20 @@ export function threadWork<H extends object>(
     const active = recovering.get(threadId);
     if (active) return active;
     const recover = async () => {
-      const reg = codex.forThread(threadId),
+      const reg = executors.forThread(threadId),
         thread = readThread(transaction.db, threadId);
       if (!thread || !reg) return false;
-      const selection = await codex.resolve(reg, actor.id, thread),
+      const selection = await executors.resolve(reg, actor.id, thread),
         round = readRound(transaction.db, roundId);
       return (
         !!(selection && round && accepting) &&
-        reconcileCodex(
+        reconcileExecutor(
           transaction,
           round,
           selection,
           () =>
             accepting &&
-            codex.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+            executors.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
               selection.snapshot &&
             transaction.directory(thread) === selection.cwd,
           stops,
@@ -151,9 +150,9 @@ export function threadWork<H extends object>(
     const session = prepared.get(roundId);
     prepared.delete(roundId);
     if (session?.opened.kind === "ok") {
-      const closing = session.adapter.close(session.opened.value, "restart");
-      codex.active.add(closing);
-      void closing.finally(() => codex.active.delete(closing)).catch(() => {});
+      const closing = session.opened.value.close("restart");
+      executors.active.add(closing);
+      void closing.finally(() => executors.active.delete(closing)).catch(() => {});
     }
   }
   transaction.onQueueChanged = (threadId) =>
@@ -166,7 +165,7 @@ export function threadWork<H extends object>(
           (round.attempt.phase.kind !== "filed" ||
             round.attempt.phase.gate !== "eligible" ||
             session.opened.kind !== "ok" ||
-            session.opened.value.handle.attemptId !== round.attempt.attemptId)
+            session.opened.value.attemptId !== round.attempt.attemptId)
         )
           discardPrepared(roundId);
       }
@@ -177,7 +176,7 @@ export function threadWork<H extends object>(
     command: Extract<SignedRequest, { method: "input.send" }>,
   ) {
     const threadId = command.payload.threadId;
-    if (!codex.forThread(threadId)) return fileInput(sender, command);
+    if (!executors.forThread(threadId)) return fileInput(sender, command);
     const work = (opening.get(threadId) ?? Promise.resolve())
       .catch(() => {})
       .then(async () => {
@@ -185,7 +184,7 @@ export function threadWork<H extends object>(
           ctx = { actor: sender, commandId: command.commandId, transaction };
         let prior = savedBinding(transaction, threadId);
         const thread = readThread(transaction.db, threadId),
-          reg = codex.forThread(threadId);
+          reg = executors.forThread(threadId);
         if (
           !prior ||
           !thread ||
@@ -213,8 +212,8 @@ export function threadWork<H extends object>(
           !transaction.directory(thread)
         )
           return fileInput(sender, command);
-        const s = await codex.resolve(reg, actor.id, thread);
-        if (!accepting || !s || bindingContext(s) !== prior.context) return refuse();
+        const s = await executors.resolve(reg, actor.id, thread);
+        if (!accepting || !s || s.probe.bindingContext !== prior.context) return refuse();
         const attempt = v.parse(AttemptIdSchema, crypto.randomUUID());
         const candidate = await resumeBinding(s, prior.nativeSessionId, prior.epoch, attempt);
         if (candidate.opened.kind === "rejected") return refuse();
@@ -224,7 +223,7 @@ export function threadWork<H extends object>(
             !accepting ||
             transaction.directory(thread) !== s.cwd ||
             !Bun.deepEquals(savedBinding(transaction, threadId), prior) ||
-            codex.current(s.reg.instanceId, actor.id, s.cwd)?.snapshot !== s.snapshot
+            executors.current(s.reg.instanceId, actor.id, s.cwd)?.snapshot !== s.snapshot
           )
             return refuse();
           const receipt = await fileInput(sender, command, attempt);
@@ -238,7 +237,7 @@ export function threadWork<H extends object>(
           }
           return receipt;
         } finally {
-          if (!retained) await candidate.adapter.close(candidate.opened.value, "restart");
+          if (!retained) await candidate.opened.value.close("restart");
         }
       });
     opening.set(threadId, work);
@@ -340,11 +339,11 @@ export function threadWork<H extends object>(
           return;
         const round = readRound(transaction.db, head.id);
         if (!round) return;
-        const saved = codex.forThread(threadId);
+        const saved = executors.forThread(threadId);
         if (saved) {
           const thread = readThread(transaction.db, threadId);
           if (!thread) return;
-          const selection = await codex.resolve(saved, actor.id, thread);
+          const selection = await executors.resolve(saved, actor.id, thread);
           if (!accepting) return;
           if (!selection) {
             const current = readRound(transaction.db, round.id);
@@ -371,12 +370,12 @@ export function threadWork<H extends object>(
           }
           const ready = prepared.get(round.id);
           prepared.delete(round.id);
-          await dispatchCodex(
+          await dispatchExecutor(
             transaction,
             round,
             selection,
             () =>
-              codex.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+              executors.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
               selection.snapshot,
             (event: ExecutorTurnUpdate) => {
               const recipient = recipients.get(round.id);
@@ -435,22 +434,22 @@ export function threadWork<H extends object>(
 
   async function startThread(
     actor: LocalActor,
-    req: Extract<SignedRequest, { method: "thread.start" }>,
+    req: Pick<Extract<SignedRequest, { method: "thread.start" }>, "commandId" | "payload">,
   ) {
     const { projectId } = req.payload;
-    const id = req.payload.instanceId ?? codex.registry.defaultFor(projectId);
+    const id = req.payload.instanceId ?? executors.registry.defaultFor(projectId);
     const cwd = id ? transaction.projectDirectory(projectId) : null;
-    let entry = id && cwd ? codex.current(id, actor.id, cwd) : null;
+    let entry = id && cwd ? executors.current(id, actor.id, cwd) : null;
     if (
       id &&
       !entry &&
       actor.allows("thread.send", { kind: "project", projectId }) &&
       !readReceipt(transaction.db, actor.id, req.commandId)
     )
-      entry = await codex.lookup(id, actor.id, projectId);
+      entry = await executors.lookup(id, actor.id, projectId);
     if (!accepting) throw Error("Writer closed");
     const model = req.payload.model;
-    const chosen = codex.select(entry, model);
+    const chosen = executors.select(entry, model);
     return acceptFirstInput({
       verifiedActor: actor,
       commandId: req.commandId,
@@ -533,7 +532,7 @@ export function threadWork<H extends object>(
       ]);
       await Promise.allSettled(opening.values());
       for (const r of prepared.values())
-        if (r.opened.kind === "ok") await r.adapter.close(r.opened.value, "shutdown");
+        if (r.opened.kind === "ok") await r.opened.value.close("shutdown");
 
       stops.close();
     },

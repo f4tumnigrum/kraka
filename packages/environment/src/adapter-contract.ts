@@ -133,6 +133,7 @@ export type ActionPermit<F extends AdapterFamily, C extends AdapterCapability> =
   instanceId: ExecutorInstanceId;
   family: F;
   capabilityVersion: number;
+  stillAllowed?: () => boolean;
   capability: C;
   support: Exclude<CapabilitySupport, { kind: "unsupported" }>;
 };
@@ -246,6 +247,14 @@ export type AdapterCommand =
       deliveryId: DeliveryId;
       action: "fork" | "rollback" | "clear" | "readHistory";
       target: NativeRootTurnId | null;
+    }
+  | {
+      kind: "rewind";
+      capability: "rollbackRounds";
+      deliveryId: DeliveryId;
+      roots: readonly NativeRootTurnId[];
+      keep: number;
+      inspectOnly: boolean;
     };
 
 export type InspectionResult =
@@ -253,6 +262,7 @@ export type InspectionResult =
   | { kind: "definitelyAbsent" }
   | { kind: "unknown" };
 export type InvocationResult =
+  | { kind: "rewind"; outcome: "succeeded" | "failed" | "unknown" }
   | { kind: "written"; deliveryId: DeliveryId }
   | { kind: "inspection"; result: InspectionResult }
   | { kind: "history"; rows: readonly AdapterJsonValue[]; next: string | null }

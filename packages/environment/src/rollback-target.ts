@@ -11,7 +11,7 @@ import {
 import { readRound, readThread, type FirstSendStore } from "./first-send-store";
 import { physicalDirectory } from "./project-directory";
 import { frozenInput } from "./input-store";
-import { savedBinding } from "./codex-bindings";
+import { savedBinding } from "./executor-bindings";
 
 export function activeRounds(store: FirstSendStore, thread: ThreadId) {
   return store.db

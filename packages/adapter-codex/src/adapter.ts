@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { rewindCodex } from "./rollback";
 import { NativeRootTurnIdSchema, type AttemptId, type NativeSessionId } from "@kraka/protocol";
 import type {
   ActionPermit,
@@ -283,6 +284,17 @@ export function createCodexAdapter(
     }
     if (!owns(target) || target.handle.closed) return denied("invalidState");
     const h = target.handle;
+    if (cmd.kind === "rewind")
+      return ok({
+        kind: "rewind",
+        outcome: await rewindCodex(
+          h,
+          cmd.roots,
+          cmd.keep,
+          cmd.inspectOnly,
+          () => permit.stillAllowed?.() === true,
+        ),
+      });
     if (cmd.kind === "deliverAnswer")
       return h.callbacks.replyToNative(cmd, (id, body) => h.rpc.respond(id, body));
     if (cmd.kind === "nativeAction" && cmd.action === "readHistory" && cmd.target) {

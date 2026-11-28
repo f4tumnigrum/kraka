@@ -1,4 +1,5 @@
-import { rewindCodex } from "@kraka/adapter-codex";
+import { DeliveryIdSchema } from "@kraka/protocol";
+import * as v from "valibot";
 import {
   readThread,
   savedBinding,
@@ -7,13 +8,13 @@ import {
   type FirstSendStore,
 } from "@kraka/environment";
 import type { PrincipalId } from "@kraka/protocol";
-import { resumeBinding, bindingContext } from "./durable-codex";
-import type { CodexInstances } from "./codex-instances";
+import { resumeBinding } from "./durable-executor";
+import type { ExecutorInstances } from "./executor-instances";
 import type { openAccessHost } from "./access";
 
 export function rollbackRuntime(
   store: FirstSendStore,
-  codex: CodexInstances,
+  executors: ExecutorInstances,
   owner: { readonly id: PrincipalId },
   host: Awaited<ReturnType<typeof openAccessHost>>,
 ): NonNullable<RollbackOperationStore["runtime"]> {
@@ -35,7 +36,7 @@ export function rollbackRuntime(
         binding = savedBinding(store, target.threadId);
       if (!thread || !binding) return "unknown";
       const cwd = store.directory(thread) ?? store.projectDirectory(thread.projectId);
-      const entry = cwd ? codex.current(binding.instanceId, owner.id, cwd) : null;
+      const entry = cwd ? executors.current(binding.instanceId, owner.id, cwd) : null;
       if (!entry) return "unknown";
       return entry.snapshot.matrix.rollbackRounds.kind === "native" ? "verified" : "unsupported";
     },
@@ -44,7 +45,7 @@ export function rollbackRuntime(
         native = op.native;
       const thread = readThread(store.db, target.threadId),
         prior = savedBinding(store, target.threadId),
-        reg = codex.forThread(target.threadId);
+        reg = executors.forThread(target.threadId);
       if (
         !thread ||
         !native ||
@@ -54,19 +55,16 @@ export function rollbackRuntime(
         prior.nativeSessionId !== native.session
       )
         return recovery ? "unknown" : "failed";
-      const s = await codex.resolve(reg, owner.id, thread);
+      const s = await executors.resolve(reg, owner.id, thread);
       if (
         !s ||
         s.snapshot.matrix.rollbackRounds.kind !== "native" ||
-        bindingContext(s) !== native.context
+        s.probe.bindingContext !== native.context ||
+        s.reg.family !== prior.family ||
+        s.reg.instanceId !== prior.instanceId
       )
         return recovery ? "unknown" : "failed";
-      const { opened, adapter } = await resumeBinding(
-        s,
-        native.session,
-        prior.epoch,
-        target.attemptId,
-      );
+      const { opened } = await resumeBinding(s, native.session, prior.epoch, target.attemptId);
       if (opened.kind !== "ok") return recovery ? "unknown" : "failed";
       try {
         if (
@@ -74,17 +72,30 @@ export function rollbackRuntime(
           !replaceBinding(store, prior, { ...prior, epoch: opened.value.epoch })
         )
           return recovery ? "unknown" : "failed";
-        return await rewindCodex(
-          opened.value.handle,
-          native.roots,
-          native.keep,
-          recovery,
-          () =>
-            this.allowed(op, "thread.send") &&
-            savedBinding(store, target.threadId)?.epoch === opened.value.epoch,
+        const result = await opened.value.invoke(
+          {
+            capabilityVersion: s.snapshot.version,
+            support: s.snapshot.matrix.rollbackRounds,
+            stillAllowed: () =>
+              this.allowed(op, "thread.send") &&
+              savedBinding(store, target.threadId)?.epoch === opened.value.epoch,
+          },
+          {
+            kind: "rewind",
+            capability: "rollbackRounds",
+            deliveryId: v.parse(DeliveryIdSchema, op.progress.commandId),
+            roots: native.roots,
+            keep: native.keep,
+            inspectOnly: recovery,
+          },
         );
+        return result.kind === "ok" && result.value.kind === "rewind"
+          ? result.value.outcome
+          : recovery
+            ? "unknown"
+            : "failed";
       } finally {
-        await adapter.close(opened.value, "finished");
+        await opened.value.close("finished");
       }
     },
   };
