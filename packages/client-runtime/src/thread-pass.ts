@@ -232,6 +232,7 @@ export interface ThreadCache {
   accepted: Record<string, AcceptedInput>;
   returns: Record<string, TextReturnedEvent>;
   childTransfers?: Record<string, ChildResultTransfer>;
+  contextOperations?: Record<string, import("@kraka/protocol").ContextOperation>;
   summaries: Record<string, Extract<ObjectChange, { kind: "thread.summary" }>["summary"]>;
 }
 export function emptyThreadCache(): ThreadCache {
@@ -389,6 +390,14 @@ export async function installThreadPass(
               cache.childTransfers[id] = t;
             else if (earlier.version === t.version && canonicalJson(t) !== canonicalJson(earlier))
               throw Error("Conflicting child result");
+            break;
+          }
+          case "context.operation": {
+            const op = change.operation,
+              key = JSON.stringify([op.threadId, op.deliveryId]);
+            const prior = cache.contextOperations?.[key];
+            if (!prior || comparePositions(op.version, prior.version) > 0)
+              cache.contextOperations = { ...cache.contextOperations, [key]: op };
             break;
           }
           case "handoff.textReturned": {

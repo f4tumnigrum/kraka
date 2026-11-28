@@ -1,3 +1,4 @@
+import { ContextOperationSchema, type ContextOperation } from "@kraka/protocol";
 import { decodeJournalRow, encodeJournalRow } from "./journal-row";
 import { markStartupDetail } from "./capture-timing";
 import { ListIndex } from "./list-index";
@@ -98,6 +99,7 @@ export class ThreadJournal {
     return db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1),generation TEXT NOT NULL,head TEXT NOT NULL,floor TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
+     CREATE TABLE IF NOT EXISTS sync_context_operations(source TEXT NOT NULL,id TEXT PRIMARY KEY,changed TEXT NOT NULL,data TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_child_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
@@ -230,6 +232,7 @@ export class ThreadJournal {
       removed?: readonly { source: ThreadId; key: ObjectKey; version: string }[];
       returns?: readonly TextReturnedEvent[];
       childTransfer?: ChildResultTransfer;
+      context?: ContextOperation;
       captureThread?: ThreadId;
       activity?: { item: ToolActivityHistoryItem; round: string | null };
     } = {},
@@ -237,6 +240,7 @@ export class ThreadJournal {
     if (!this.db.inTransaction) throw Error("Sync index must share the object write transaction");
     if (
       !extras.childTransfer &&
+      !extras.context &&
       !extras.activity &&
       !rows.length &&
       !extras.removed?.length &&
@@ -309,6 +313,13 @@ export class ThreadJournal {
         [transfer.parentThreadId, transfer.id, position, JSON.stringify(transfer)],
       );
     }
+    if (extras.context)
+      this.db.run("INSERT OR REPLACE INTO sync_context_operations VALUES(?,?,?,?)", [
+        extras.context.threadId,
+        extras.context.deliveryId,
+        position,
+        JSON.stringify(extras.context),
+      ]);
     for (const event of extras.returns ?? [])
       this.db.run(
         "INSERT INTO sync_returns VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET changed=excluded.changed,data=excluded.data",
@@ -550,7 +561,18 @@ export class ThreadJournal {
               },
             }))
         : [];
-      return { ...result, rows, deletions, returns: [...returns, ...childReturns] };
+      const operations = scope.canRead(scope.threadId)
+        ? this.db
+            .query<{ changed: string; data: string }, [string]>(
+              "SELECT changed,data FROM sync_context_operations WHERE source=?",
+            )
+            .all(scope.threadId)
+            .map((r) => ({
+              changed: v.parse(SyncPositionSchema, r.changed),
+              operation: v.parse(ContextOperationSchema, JSON.parse(r.data)),
+            }))
+        : [];
+      return { ...result, rows, deletions, returns: [...returns, ...childReturns], operations };
     })();
   }
   history(

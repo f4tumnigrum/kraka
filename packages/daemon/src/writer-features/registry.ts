@@ -1,5 +1,6 @@
 export { captures } from "./captures";
 export { children } from "./children";
+export { context } from "./context";
 export { diff } from "./diff";
 export { executors } from "./executors";
 export { inputs } from "./inputs";

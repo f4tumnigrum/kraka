@@ -14,6 +14,7 @@ import {
 } from "@kraka/environment";
 import {
   REQUEST_METHODS,
+  PermissionModeSchema,
   ChildModelSchema,
   InstancePermissionSchema,
   ExecutorInstanceIdSchema,
@@ -140,8 +141,14 @@ export class ExecutorInstances {
     if (
       !entry ||
       !entry.probe.declaration.permission.modes.includes(entry.snapshot.permission.selected) ||
-      Object.values(entry.probe.declaration.readiness).some(
-        (l) => l.state !== "yes" || l.verifiedAt === null,
+      Object.entries(entry.probe.declaration.readiness).some(
+        ([key, l]) =>
+          !(
+            entry.probe.canStartWithUnknownAccountAndModel &&
+            (key === "authenticated" || key === "model") &&
+            l.state === "unknown"
+          ) &&
+          (l.state !== "yes" || l.verifiedAt === null),
       )
     )
       return null;
@@ -362,6 +369,17 @@ export class ExecutorInstances {
           instanceId,
           snapshot,
           readiness: { ...probe.declaration.readiness },
+          ...(registration.family === "acp"
+            ? {
+                sessionPolicy: {
+                  supportedModes: v.parse(
+                    v.array(PermissionModeSchema),
+                    probe.declaration.permission.modes,
+                  ),
+                  enforcement: probe.declaration.permission.enforcement,
+                },
+              }
+            : {}),
           models: probe.models,
           authenticationReason: probe.authenticationReason ?? null,
           attemptedAt: probe.attemptedAt ?? probe.declaration.checkedAt,
