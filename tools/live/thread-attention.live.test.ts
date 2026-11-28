@@ -1,4 +1,5 @@
 // Live cases 3; required groups ["1.", "2.", "3."]
+// Live shell bash
 import * as v from "valibot";
 import { TextReturnedEventSchema } from "@kraka/protocol";
 import { expect, test } from "bun:test";

@@ -1,4 +1,5 @@
 // Live cases 3; required groups []
+// Live shell bash
 import { expect, test } from "bun:test";
 import { join, resolve } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";

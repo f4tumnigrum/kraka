@@ -1,4 +1,5 @@
 // Live cases 4; required groups ["S18.1", "S18.2", "S18.3", "S18.4"]
+// Live shell bash
 import { expect, test } from "bun:test";
 import { mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";

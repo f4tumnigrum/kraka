@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openReceiptReader, readRound } from "@kraka/environment";
 import { finishedCapture } from "../fixtures/first-send-client";
 import { accepted } from "../fixtures/first-send";
-import { codexFixture, buildPeer, peerLedger, type Profile } from "../fixtures/codex-turn";
+import { codexFixture, buildPeer, peerSignals, type Profile } from "../fixtures/codex-turn";
 import { fixture, terminate, withState } from "../fixtures/replay-process";
 import { productRoot } from "../fixtures/first-send";
 export async function startCodexPeer({
@@ -19,19 +19,30 @@ export async function startCodexPeer({
 }) {
   const binary = await buildPeer(cwd),
     ledgerPath = join(cwd, "direct.jsonl");
+  const signals = peerSignals();
   const child = Bun.spawn([binary, "app-server"], {
     cwd,
     env: {
       PEER_RECORDING: recording,
       PEER_LEDGER: ledgerPath,
       PEER_PROFILE: profile.kind ?? "ready",
-      PEER_GATE: profile.gate ?? "",
+      PEER_SIGNALS: signals.url,
     },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "ignore",
   });
-  return { child, ...peerLedger(ledgerPath), close: () => terminate(child) };
+  return {
+    child,
+    wait: signals.wait,
+    async close() {
+      try {
+        await terminate(child);
+      } finally {
+        await signals.close();
+      }
+    },
+  };
 }
 type F = Awaited<ReturnType<typeof codexFixture>>;
 async function scenario(profile: Profile, run: (f: F) => Promise<void>) {
@@ -173,16 +184,23 @@ test("3. paged catalog survives model refusal; replacement discards an in-flight
   });
   await scenario({ gate: "account" }, async (f) => {
     await configure(f);
-    const slow = f.refresh();
-    await f.ledger.wait("gate.account");
-    const next = structuredClone(f.registration);
-    next.driver.variables.PEER_GATE.value = "";
-    next.driver.variables.PEER_VERSION.value = "0.159.0";
-    next.credential.key = "replacement";
-    accepted((await f.configure("1", next)).receipt, "executorConfigured");
-    expect((await refresh(f)).binaryVersion).toBe("0.159.0");
-    f.ledger.release("account");
-    expect((await slow).receipt.kind).toBe("rejected");
+    const signals = f.signals;
+    if (!signals) throw Error("Missing account gate");
+    const replaceRegistration = async () => {
+      try {
+        await signals.wait("gate.account");
+        const next = structuredClone(f.registration);
+        next.driver.variables.PEER_GATE.value = "";
+        next.driver.variables.PEER_VERSION.value = "0.159.0";
+        next.credential.key = "replacement";
+        accepted((await f.configure("1", next)).receipt, "executorConfigured");
+        expect((await refresh(f)).binaryVersion).toBe("0.159.0");
+      } finally {
+        signals.release();
+      }
+    };
+    const [previous] = await Promise.all([f.refresh(), replaceRegistration()]);
+    expect(previous.receipt.kind).toBe("rejected");
     expect(String((await refresh(f)).configurationVersion)).toBe("2");
   });
 }, 60000);
@@ -253,8 +271,9 @@ test("4. effective ask policy, early root, original tool and assistant frames, a
     await configure(f);
     await refresh(f);
     accepted((await f.send()).receipt, "threadStarted");
-    await f.ledger.wait("gate.policy");
-    f.ledger.release("policy");
+    if (!f.signals) throw Error("Missing policy gate");
+    await f.signals.wait("gate.policy");
+    f.signals.release();
     await f.waitTerminal();
     expect(f.updates.at(-1)).toMatchObject({ kind: "executor.failed", reason: "unsupported" });
     const policy = f.ledger.rows().find((r) => r.event === "policy" && r.probe === false);

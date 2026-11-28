@@ -1,4 +1,5 @@
 // Live cases 7; required groups ["1.", "2.", "3.", "4."]
+// Live shell bash
 import { cumulativeRoundRange } from "../../packages/client-runtime/src";
 import { test, expect } from "bun:test";
 import assert from "node:assert/strict";

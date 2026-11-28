@@ -1,4 +1,5 @@
 // Live cases 4; required groups ["1.", "2.", "3.", "4."]
+// Live shell bash
 import { finishedCapture } from "../fixtures/first-send-client";
 import { test, expect } from "bun:test";
 import { readRound, openReceiptReader } from "@kraka/environment";

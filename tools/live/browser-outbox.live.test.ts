@@ -1,4 +1,5 @@
 // Live cases 4; required groups ["outbox 1.", "outbox 2.", "outbox 3.", "outbox 4."]
+// Live shell bash
 import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -139,7 +140,7 @@ async function fixture(mode: "send" | "reject" | "approval") {
       outbox: mode,
     });
     cleanup.push(peer.stop);
-    const ownerKey = await openDeviceCredentials(join(dir, "owner.sqlite"));
+    const ownerKey = await openDeviceCredentials(join(dir, "owner", "credentials.sqlite"));
     cleanup.push(ownerKey.close);
     const ownerRecord = v.parse(
       principalKey,

@@ -1,4 +1,5 @@
 // Live cases 5; required groups ["1.", "2.", "3.", "4.", "5."]
+// Live shell bash
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";

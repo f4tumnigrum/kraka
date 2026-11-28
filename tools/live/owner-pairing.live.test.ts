@@ -1,4 +1,5 @@
 // Live cases 4; required groups []
+// Live env KRAKA_REQUIRED_PAIRING_CASES=1
 import { afterAll, expect, onTestFinished, test } from "bun:test";
 import { connect } from "node:net";
 import { randomBytes } from "node:crypto";

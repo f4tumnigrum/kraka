@@ -1,4 +1,5 @@
 // Live cases 3; required groups []
+// Live env KRAKA_REQUIRED_ROUTE_CASES=1
 import { afterAll, expect, test } from "bun:test";
 import { join } from "node:path";
 import * as v from "valibot";

@@ -1,4 +1,5 @@
 // Live cases 4; required groups ["1.", "2.", "3.", "4."]
+// Live shell bash
 import { test, expect } from "bun:test";
 import { join } from "node:path";
 import * as v from "valibot";

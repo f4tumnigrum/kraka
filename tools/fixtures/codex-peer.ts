@@ -1,6 +1,5 @@
-import { waitFile } from "./file-signal";
 import { controlledTurn } from "./codex-controlled";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import * as v from "valibot";
@@ -121,11 +120,16 @@ log("spawn", null, {
   present: process.env.SYNTHETIC_CODEX === "fake-private-marker",
   cwd: process.cwd(),
 });
+async function signal(event: string) {
+  const url = process.env.PEER_SIGNALS;
+  if (!url) return;
+  const reply = await fetch(new URL(event, url));
+  if (!reply.ok) throw Error("Peer signal failed: " + event);
+}
 async function gate(name: string, id: number | null) {
   if (process.env.PEER_GATE !== name) return;
   log(`gate.${name}`, id);
-  const path = join(`${ledgerPath}.${name}.release`);
-  await waitFile(path, 30_000);
+  await signal("gate." + name);
 }
 const controlled = process.env.PEER_CONTROL
   ? controlledTurn(process.env.PEER_CONTROL, recording, write)
@@ -153,11 +157,13 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     if (handshake || id !== 1) throw new Error("Unexpected initialize");
     write({ id, result: frame(2).result });
     handshake = true;
+    await signal("initialize");
     continue;
   }
   if (method === "initialized") {
     if (!handshake || initialized || id !== null) throw new Error("Invalid initialized");
     initialized = true;
+    await signal("initialized");
     continue;
   }
   if (!initialized || id === null) throw new Error("RPC before initialized");
