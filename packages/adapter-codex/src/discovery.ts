@@ -241,6 +241,10 @@ export async function openThread(
     throw new NativeError("unsupported", "Codex returned incompatible effective session settings");
   return {
     nativeSessionId: v.parse(NativeSessionIdSchema, thread.id),
+    history:
+      historyRoot && typeof thread.path === "string"
+        ? { root: historyRoot, path: thread.path }
+        : null,
     policy: v.parse(CodexEffectivePolicySchema, r),
   };
 }

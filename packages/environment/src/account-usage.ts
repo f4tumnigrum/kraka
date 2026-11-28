@@ -119,6 +119,18 @@ export class AccountUsageStore {
       )
       .get(instance);
   }
+  previousAccount(instance: string, registrationVersion: string, credentialKey: string | null) {
+    const row = this.row(instance);
+    if (!row) return null;
+    const binding = v.parse(
+      v.object({ registrationVersion: v.string(), credentialKey: v.nullable(v.string()) }),
+      JSON.parse(row.binding),
+    );
+    return binding.registrationVersion === registrationVersion &&
+      binding.credentialKey === credentialKey
+      ? v.parse(AccountQuotaSnapshotSchema, JSON.parse(row.data)).source.account
+      : null;
+  }
   bind(binding: AccountBinding) {
     const id = binding.source.instanceId,
       key = canonicalJson(binding);

@@ -405,6 +405,7 @@ async function openDurableWriter<H extends object>(
     return {
       kind: "ready" as const,
       instance,
+      quotaCounts: () => work.accountQuota.refreshes.counts(),
       openThread,
       async close() {
         if (!work.accepting) return;

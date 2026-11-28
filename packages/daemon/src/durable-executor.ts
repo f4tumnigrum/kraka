@@ -1,3 +1,4 @@
+import { recordSessionCost } from "./session-cost";
 import * as v from "valibot";
 
 import type { ActiveSteers } from "./durable-replay";
@@ -11,6 +12,7 @@ import {
   type ExecutorBinding,
   frozenInput,
   recordAdapterActivity,
+  recordUsageEvent,
   readThread,
   readRound,
   readMessage,
@@ -131,6 +133,9 @@ export async function dispatchExecutor(
   stops: OrdinaryStops,
   steers: ActiveSteers,
   prepared?: PreparedSession,
+  now: () => number = Date.now,
+  quota?: import("./account-quota").AccountQuota,
+  usageCommitted?: (thread: Round["threadId"], round: Round["id"]) => void,
 ) {
   const thread = readThread(store.db, initial.threadId),
     message = readMessage(store.db, initial.messageId);
@@ -148,10 +153,10 @@ export async function dispatchExecutor(
     const result = recordInputEvidence(store, binding, event);
     if (result.kind === "rejected") throw Error(result.reason);
   }
-  const failed = (reason: string, message: string | null) => {
+  const failed = (reason: string, message: string | null, resetAt: number | null = null) => {
     const round = readRound(store.db, roundId);
     if (!round || round.attempt.attemptId !== attemptId) return;
-    if (reason === "usageLimited") store.sync.observeQuota(round, { resetAt: null });
+    if (reason === "usageLimited") store.sync.observeQuota(round, { resetAt });
     const current = round.attempt.phase;
     if (current.kind === "armed" && reason !== "unsafeToRetry" && reason !== "unexpectedExit")
       report({ kind: "refused", ...ticket, reason: message ?? reason });
@@ -257,7 +262,8 @@ export async function dispatchExecutor(
       { capabilityVersion: snapshot.version, support },
       { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: claim.value.input },
     );
-    if (written.kind === "rejected") return failed(written.reason, written.message);
+    if (written.kind === "rejected")
+      return failed(written.reason, written.message, written.resetAt);
     if (written.value.kind !== "written" || written.value.deliveryId !== deliveryId)
       throw new Error("Unmatched delivery");
     report({ kind: "written", ...ticket, at: Date.now() });
@@ -289,6 +295,18 @@ export async function dispatchExecutor(
       )
         throw new Error("Foreign executor event");
       switch (p.kind) {
+        case "quotaUpdated": {
+          const target = isCurrent() && quota?.target(reg.instanceId);
+          if (target) quota?.refreshes.observe(target, p.account, p.windows);
+          break;
+        }
+        case "usageUpdated":
+          if (
+            isCurrent() &&
+            recordUsageEvent(store, binding, initial, selection.model.id, event, now())
+          )
+            usageCommitted?.(thread.id, roundId);
+          break;
         case "deliveryReceived":
           if (p.receipt.kind === "input")
             report({
@@ -402,6 +420,15 @@ export async function dispatchExecutor(
             });
           })();
           stops.ended(attemptId);
+          await recordSessionCost(
+            store,
+            session,
+            selection,
+            initial,
+            deliveryId,
+            isCurrent,
+            now,
+          ).catch(() => {});
           if (p.outcome.reason === "failed")
             emit({
               kind: "executor.failed",

@@ -6612,6 +6612,65 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 {
   "anyOf": [
     {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "executor.quotaChanged"
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "instanceId": {
+              "$ref": "#/$defs/ExecutorInstanceId"
+            },
+            "credentialVersion": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "account": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "instanceId",
+            "credentialVersion",
+            "account",
+            "endpoint"
+          ],
+          "additionalProperties": false
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    {
       "$ref": "#/$defs/TerminalGap"
     },
     {

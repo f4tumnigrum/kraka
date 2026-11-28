@@ -82,6 +82,7 @@ export async function threadConnection(
     receipt: CommandReceipt,
     deliver: () => void,
   ) => void,
+  accountQuota?: import("./account-quota").AccountQuota,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -118,6 +119,15 @@ export async function threadConnection(
     epoch,
     beforeSend: () => check(),
     attach(peer, wake) {
+      const quotaViews = new Map<string, () => void>();
+      const allowsEnvironmentView = () =>
+        !!session &&
+        !!usable(session.signer) &&
+        !!host.store.ceiling(
+          session.principal.id,
+          { kind: "environment", environmentId: host.identity.id },
+          "thread.view",
+        );
       const watch = watchSettings(store);
       let seq = 0,
         session: SessionAuthorized | null = null,
@@ -315,6 +325,9 @@ export async function threadConnection(
             store,
             host,
             principal,
+            accountQuota,
+            quotaViews,
+            allowsEnvironmentView,
             deviceId: actor.deviceId,
             session,
             subs,
@@ -379,7 +392,7 @@ export async function threadConnection(
             d.stream === undefined ? peer.send.pending.control === 0 : !peer.send.snapshot(d.stream)
           )
             disclosures.delete(id);
-          else if (next !== last && !d.allowed()) throw Error("Todo read authority expired");
+          else if (!d.allowed()) throw Error("Read authority expired");
         }
         if (next === last && Date.now() < expires && expires !== Infinity) return;
         const device = usable(session.signer);
@@ -387,6 +400,10 @@ export async function threadConnection(
           throw Error("Device registration ended");
         expires = device.deviceKey.state.expiresAt;
         if (next !== last) {
+          if (!allowsEnvironmentView()) {
+            for (const detach of quotaViews.values()) detach();
+            quotaViews.clear();
+          }
           subs?.recheckAccess();
           gitStatus?.recheckAccess();
         }
@@ -412,6 +429,8 @@ export async function threadConnection(
           uploads.drop(id);
         },
         close() {
+          for (const detach of quotaViews.values()) detach();
+          quotaViews.clear();
           watch.close();
           session = null;
           clearInterval(timer);

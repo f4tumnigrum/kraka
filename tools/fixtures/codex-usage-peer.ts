@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as v from "valibot";
 const args = process.argv.slice(2);
@@ -131,7 +132,69 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     });
     if (!reply.ok) throw Error("Case controller unavailable");
     const message = v.parse(controlReply, await reply.json());
+    if (method === "turn/start" && session && process.env.S42_HISTORY === "1") {
+      const path = join(nativeHome, session + ".jsonl");
+      if (!(await Bun.file(path).exists()))
+        await appendFile(
+          path,
+          JSON.stringify({ type: "session_meta", payload: { id: session } }) + "\n",
+        );
+      for (const notice of message.notices ?? []) {
+        if (notice.method !== "thread/tokenUsage/updated") continue;
+        const p = v.parse(
+          v.object({
+            turnId: v.string(),
+            tokenUsage: v.object({
+              last: v.record(v.string(), v.number()),
+              total: v.record(v.string(), v.number()),
+            }),
+          }),
+          notice.params,
+        );
+        const convert = (t: Record<string, number>) => ({
+          input_tokens: t.inputTokens,
+          cached_input_tokens: t.cachedInputTokens,
+          output_tokens: t.outputTokens,
+          reasoning_output_tokens: t.reasoningOutputTokens,
+          total_tokens: t.totalTokens,
+        });
+        await appendFile(
+          path,
+          [
+            { type: "turn_context", payload: { turn_id: p.turnId } },
+            {
+              type: "event_msg",
+              payload: {
+                type: "token_count",
+                info: {
+                  last_token_usage: convert(p.tokenUsage.last),
+                  total_token_usage: convert(p.tokenUsage.total),
+                },
+              },
+            },
+          ]
+            .map((x) => JSON.stringify(x) + "\n")
+            .join(""),
+        );
+      }
+    }
     write(message.error ? { id, error: message.error } : { id, result: message.result });
-    for (const notice of message.notices ?? []) write(notice);
+    let seenUsage = false;
+    for (const notice of message.notices ?? []) {
+      if (
+        seenUsage &&
+        notice.method === "thread/tokenUsage/updated" &&
+        process.env.S42_HISTORY === "1"
+      ) {
+        const gate = await fetch(control, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ account, method: "fixture/repeatUsage", session, params: {} }),
+        });
+        if (!gate.ok) throw Error("Usage barrier failed");
+      }
+      write(notice);
+      seenUsage ||= notice.method === "thread/tokenUsage/updated";
+    }
   }
 }

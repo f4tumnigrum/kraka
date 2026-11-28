@@ -73,7 +73,12 @@ export type AdapterRejectedReason =
 /** Expected operational failures are values. An adapter implementation bug throws as a program error. */
 export type AdapterCallResult<T> =
   | { kind: "ok"; value: T }
-  | { kind: "rejected"; reason: AdapterRejectedReason; message: string | null };
+  | {
+      kind: "rejected";
+      reason: AdapterRejectedReason;
+      message: string | null;
+      resetAt?: number | null;
+    };
 
 export type AdapterInstance<F extends AdapterFamily = AdapterFamily> = {
   family: F;
@@ -361,6 +366,12 @@ export type AdapterEventPayload =
       change: "created" | "modified" | "deleted" | "moved";
       destination: string | null;
       patch: string | null;
+    }
+  | {
+      kind: "quotaUpdated";
+      attemptId: AttemptId;
+      account: string;
+      windows: import("@kraka/protocol").QuotaWindow[];
     }
   | {
       kind: "usageUpdated";

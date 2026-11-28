@@ -39,7 +39,12 @@ export class QuotaRefresh {
   private readonly views = new Set<View>();
   private readonly active = new Map<
     string,
-    { id: number; done: Promise<AccountQuotaSnapshot | null>; abort: AbortController }
+    {
+      id: number;
+      done: Promise<AccountQuotaSnapshot | null>;
+      abort: AbortController;
+      manual: boolean;
+    }
   >();
   private cancelAutomatic: (() => void) | null = null;
   private closed = false;
@@ -72,7 +77,14 @@ export class QuotaRefresh {
       if (!this.views.size) {
         this.cancelAutomatic?.();
         this.cancelAutomatic = null;
-        this.signal({ kind: "detached", counts: this.counts() });
+        const automatic = [...this.active.values()].filter((query) => !query.manual);
+        for (const query of automatic) query.abort.abort();
+        const detached = () => {
+          if (!this.views.size) this.signal({ kind: "detached", counts: this.counts() });
+        };
+        if (automatic.length)
+          void Promise.allSettled(automatic.map((query) => query.done)).then(detached);
+        else detached();
       }
     };
   }
@@ -86,14 +98,38 @@ export class QuotaRefresh {
         if (!this.views.size || this.closed) return;
         this.store.attemptedAutomatically(this.clock.now());
         try {
-          await Promise.all(Array.from(this.views, (view) => this.refresh(view.resolve)));
+          await Promise.all(Array.from(this.views, (view) => this.refresh(view.resolve, false)));
         } finally {
           this.schedule();
         }
       },
     );
   }
-  refresh(resolve: Resolve): Promise<AccountQuotaSnapshot | null> {
+  private publish(key: string, snapshot: AccountQuotaSnapshot) {
+    for (const view of this.views) {
+      const target = view.resolve();
+      if (target && canonicalJson(target.binding) === key) view.publish(snapshot);
+    }
+  }
+  observe(target: QuotaTarget, account: string, windows: QuotaWindow[]) {
+    if (this.closed || target.binding.source.account !== account) return;
+    const now = this.clock.now(),
+      binding = target.binding;
+    this.store.bind(binding);
+    const ticket = this.store.begin(binding, now);
+    if (
+      this.store.applyQuotaObservation({
+        ...ticket,
+        observedAt: now,
+        attemptedAt: now,
+        mode: "partial",
+        outcome: "success",
+        windows,
+      })
+    )
+      this.publish(canonicalJson(binding), this.store.read(binding, now));
+  }
+  refresh(resolve: Resolve, manual = true): Promise<AccountQuotaSnapshot | null> {
     const target = resolve();
     if (!target || this.closed) return Promise.resolve(null);
     const binding = target.binding,
@@ -101,6 +137,7 @@ export class QuotaRefresh {
       account = binding.source.account;
     const flight = this.active.get(key);
     if (flight) {
+      flight.manual ||= manual;
       this.signal({ kind: "refreshJoined", account, refresh: flight.id });
       return flight.done;
     }
@@ -143,12 +180,7 @@ export class QuotaRefresh {
           refresh: ticket.refreshId,
           outcome: committed ? outcome : "discarded",
         });
-        if (committed && snapshot) {
-          for (const view of this.views) {
-            const visible = view.resolve();
-            if (visible && canonicalJson(visible.binding) === key) view.publish(snapshot);
-          }
-        }
+        if (committed && snapshot) this.publish(key, snapshot);
         return snapshot;
       })
       .finally(() => {
@@ -156,7 +188,7 @@ export class QuotaRefresh {
         abort.signal.removeEventListener("abort", onAbort);
         this.active.delete(key);
       });
-    this.active.set(key, { id: ticket.refreshId, done, abort });
+    this.active.set(key, { id: ticket.refreshId, done, abort, manual });
     return done;
   }
   async close() {

@@ -1,3 +1,4 @@
+import { historyUsage } from "./usage-history";
 import * as v from "valibot";
 import { NativeRootTurnIdSchema, type AttemptId, type NativeSessionId } from "@kraka/protocol";
 import type {
@@ -15,7 +16,13 @@ import type {
   SessionInvocationResult,
   SessionSetup,
 } from "@kraka/environment";
-import { QuotaAccountChanged, readCodexQuota, readSessionFee } from "./account-usage";
+import {
+  quotaWindows,
+  verifiedQuotaAccount,
+  QuotaAccountChanged,
+  readCodexQuota,
+  readSessionFee,
+} from "./account-usage";
 import { Callbacks, serverRequest } from "./requests";
 import type { AdapterEventPayload } from "@kraka/environment";
 import { CodexConnection, type Launch } from "./stdio";
@@ -50,8 +57,30 @@ export class CodexSessionHandle {
     readonly secrets: readonly string[],
     readonly policy: import("@kraka/protocol").CodexEffectivePolicy,
     capabilities: CodexProbe["declaration"]["matrix"],
+    quotaAccount?: string | null,
+    readonly history?: { path: string; root: string } | null,
   ) {
     rpc.onNotice = (method, params, ordinal, observedAt) => {
+      if (method === "account/updated") {
+        quotaAccount = null;
+        return;
+      }
+      if (
+        method === "account/rateLimits/updated" &&
+        quotaAccount &&
+        capabilities.reportQuota.kind === "native"
+      ) {
+        let windows: ReturnType<typeof quotaWindows>;
+        try {
+          windows = quotaWindows(params);
+        } catch {
+          return;
+        }
+        this.publish(ordinal, [
+          { kind: "quotaUpdated", attemptId: this.attemptId, account: quotaAccount, windows },
+        ]);
+        return;
+      }
       if (!this.busy) return;
       const frame = notification(method, params, this.secrets);
       if (!frame || frame.threadId !== nativeSessionId) return;
@@ -106,6 +135,10 @@ export class CodexSessionHandle {
       events.push({ kind: "requestClosed", attemptId: this.attemptId, requestId: frame.requestId });
     }
     if (this.state.ended) this.callbacks.clear();
+    this.publish(ordinal, events);
+    if (result.lookup) void this.lookup(this.state.root).catch(() => {});
+  }
+  private publish(ordinal: number, events: AdapterEventPayload[]) {
     for (const [i, payload] of events.entries()) {
       this.events.push({
         ...this.instance,
@@ -119,7 +152,6 @@ export class CodexSessionHandle {
         this.discarded++;
       }
     }
-    if (result.lookup) void this.lookup(this.state.root).catch(() => {});
     this.wake.resolve();
     this.wake = Promise.withResolvers<void>();
   }
@@ -188,7 +220,12 @@ export class CodexSessionHandle {
       return ok({ kind: "written", deliveryId: command.deliveryId } as const);
     } catch (error) {
       if (error instanceof NativeError)
-        return { kind: "rejected" as const, reason: error.reason, message: error.message };
+        return {
+          kind: "rejected" as const,
+          reason: error.reason,
+          message: error.message,
+          ...(error.reason === "usageLimited" ? { resetAt: error.resetAt } : {}),
+        };
       return {
         kind: "rejected" as const,
         reason: "unsafeToRetry" as const,
@@ -210,6 +247,48 @@ export class CodexSessionHandle {
       const entry = this.events[offset - this.discarded];
       if (entry) {
         offset++;
+        if (entry.payload.kind === "roundEnded" && this.history && this.state) {
+          // Fold the independent history stream from its own baseline, then replace the same native records.
+          const clean = { ...this.state, ended: false, terminal: null };
+          delete clean.usage;
+          let scan: CodexTurnState = clean;
+          try {
+            for await (const frame of historyUsage(
+              this.history,
+              this.nativeSessionId,
+              this.state.root,
+            ))
+              scan = translateCodexFrame(frame, scan).state;
+          } catch {
+            /* Native history can disappear while a session is open. */
+          }
+          const historyTotal = scan.usage?.total.total,
+            liveTotal = this.state.usage?.total.total;
+          if (
+            scan.usage &&
+            (!this.state.usage ||
+              (historyTotal != null && liveTotal != null && historyTotal > liveTotal))
+          ) {
+            for (const [scope, counters] of [
+              ["round", scan.usage.round],
+              ["session", scan.usage.total],
+            ] as const)
+              yield {
+                ...entry,
+                eventId: entry.eventId + ".history." + scope,
+                payload: {
+                  kind: "usageUpdated" as const,
+                  attemptId: this.attemptId,
+                  scope,
+                  sourceId: scope === "round" ? this.state.root : this.nativeSessionId,
+                  counters,
+                  cost: null,
+                  currency: null,
+                  priceSource: "unknown" as const,
+                },
+              };
+          }
+        }
         yield entry;
         continue;
       }
@@ -378,12 +457,13 @@ export function createCodexAdapter(
         rpc = new CodexConnection(launch);
         if ((await rpc.initialize()) !== probe.nativeHome)
           throw new NativeError("invalidState", "Codex history location changed");
+        const account = object(await rpc.request("account/read", { refreshToken: false }));
         if (
-          accountFingerprint(object(await rpc.request("account/read", { refreshToken: false }))) !==
-          probe.accountContext
+          accountFingerprint(account) !== probe.accountContext ||
+          (probe.quotaAccount && verifiedQuotaAccount(account) !== probe.quotaAccount)
         )
           throw new NativeError("invalidState", "Codex account changed");
-        const { nativeSessionId, policy } = await openThread(
+        const { nativeSessionId, policy, history } = await openThread(
           rpc,
           launch.cwd,
           model,
@@ -401,6 +481,8 @@ export function createCodexAdapter(
           Object.values(launch.env),
           policy,
           probe.declaration.matrix,
+          probe.quotaAccount,
+          history,
         );
         handles.set(handle, model);
         return ok({ ...i, epoch, nativeSessionId, handle });
