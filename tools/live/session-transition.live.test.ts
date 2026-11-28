@@ -32,6 +32,7 @@ test("1. compatible continuation reuses, changes model or resumes the verified n
         target: { model: payload.model },
         currentBinding: { threadId: tid, nativeSessionId: original.nativeSessionId },
       });
+      await f.waitForInput("alpha");
       const ledger = await f.ledger("alpha");
       expect(ledger.filter((e) => e.kind === "open")).toEqual(
         scenario === "resumeSession"
@@ -62,13 +63,20 @@ test(
         threadId: tid,
         currentBinding: { instanceId: "beta", epoch: 2 },
       });
+      await f.waitForInput("beta");
       const ledger = await f.ledger("beta");
-      expect(ledger.map((e) => e.kind)).toEqual(["open", "subscribe", "invoke", "input"]);
+      expect(ledger.map((e) => e.kind)).toEqual([
+        "open",
+        "subscribe",
+        "invoke",
+        "subscribe",
+        "input",
+      ]);
       expect(ledger[2]?.cmd).toMatchObject({
         deliveryId: op.deliveryId,
         request: { entries: p.entries, transferId: op.transferId },
       });
-      expect(ledger[3]).toMatchObject({ text: input.text });
+      expect(ledger.at(-1)).toMatchObject({ text: input.text });
       await f.revise("alpha", { handoff: false });
       const unsupported = await f.preview({
         ...proposal(),
@@ -132,6 +140,13 @@ test(
           "inputScheduled",
         ).roundId,
       ).toBe(fork.firstRoundId);
+      await f.waitForInput("alpha");
+      expect(
+        accepted(
+          await f.client.rpc("thread.readRelationships", { threadId: child }),
+          "threadRelationships",
+        ).fork?.state,
+      ).toBe("consumed");
       expect(inputHistory(f.store, child).rounds.map((r) => r.id)).toEqual([fork.firstRoundId]);
       expect(readRound(f.store.db, rid)).toEqual(parent);
     }),
@@ -151,11 +166,7 @@ test(
       await Promise.all(f.store.services.transitionJobs);
       const binding = new SessionBindings(f.store, "").get(tid);
       expect(binding?.nativeSessionId).not.toBe(original.nativeSessionId);
-      expect((await f.ledger("alpha")).map((e) => e.kind)).toEqual([
-        "handle",
-        "subscribe",
-        "invoke",
-      ]);
+      expect((await f.ledger("alpha")).map((e) => e.kind)).toEqual(["open", "subscribe", "invoke"]);
       const op = f.store.sync.read(
         {
           threadId: tid,
@@ -181,6 +192,12 @@ test(
         await f.client.rpc("input.send", { threadId: tid, content: input }),
         "inputScheduled",
       );
+      await f.waitForInput("alpha");
+      const sent = await f.ledger("alpha");
+      expect(sent.filter((e) => e.kind === "input")).toEqual([
+        { kind: "input", text: input.text, nativeSessionId: binding?.nativeSessionId },
+      ]);
+      expect(sent.filter((e) => e.kind === "invoke")).toHaveLength(1);
       expect(readRound(f.store.db, scheduled.roundId)?.freshContext).toBe(true);
       expect(readRound(f.store.db, rid)).toEqual(prior);
       expect(readThread(f.store.db, tid)?.directory).toEqual(directory);

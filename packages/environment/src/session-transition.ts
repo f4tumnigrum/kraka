@@ -60,11 +60,18 @@ export type TransitionChannel = {
   context: string;
 };
 export interface TransitionHost {
+  authorized?(actor: LocalActor, payload: PreviewInput): boolean;
+  prepare?(
+    actor: LocalActor,
+    threadId: ThreadId,
+    target: ThreadSessionBinding["instanceId"] | null,
+  ): Promise<void>;
   clearTarget(actor: LocalActor, threadId: ThreadId): import("./session-clear").ClearTarget | null;
   facts(actor: LocalActor, payload: PreviewInput): TransitionFacts;
   open(
     preview: ApprovedPreview,
     attemptId: ThreadSessionBinding["attemptId"],
+    actor: LocalActor,
   ): Promise<TransitionChannel | null>;
   // Ownership of this verified handle passes to the normal first-turn dispatcher at commit.
   ready(channel: TransitionChannel, roundId: ReturnType<typeof fileInputRound>["id"]): void;
@@ -161,7 +168,7 @@ export async function switchThreadSession(
   const authorized = () =>
     actor.allows("thread.send", target) &&
     actor.allows("thread.view", target) &&
-    !!host.facts(actor, saved.payload).target;
+    (host.authorized?.(actor, saved.payload) ?? !!host.facts(actor, saved.payload).target);
   if (!authorized()) return reject(commandId, prior.receipt ? "notFound" : "invalidState");
   if (prior.receipt) return prior.receipt;
   const current = () =>
@@ -198,7 +205,7 @@ export async function switchThreadSession(
   const messageId = v.parse(MessageIdSchema, crypto.randomUUID()),
     input = { ...saved.payload.proposedInput, id: messageId };
   try {
-    channel = await host.open(p, attemptId);
+    channel = await host.open(p, attemptId, actor);
     if (!channel || !current()) return receipt;
     const { session, declaration } = channel;
     const epoch = (p.expectedBinding?.epoch ?? 0) + 1;

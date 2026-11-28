@@ -1,3 +1,5 @@
+import { prepareForkSession } from "./fork-session";
+import { executorTransitions } from "./session-transitions";
 import { registerRecovery, draining } from "./writer-features/lifecycle";
 import { openAccessHost } from "./access";
 import {
@@ -16,6 +18,7 @@ import {
   acceptFirstInput,
   OrdinaryStops,
   savedBinding,
+  pendingFork,
   recordCommand,
   prepareClaim,
   restoreForInput,
@@ -60,6 +63,7 @@ export type ReplayWriter<H extends object> = {
   confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
 } | null;
 export type WriterLifecycle = {
+  families?: readonly import("@kraka/environment").ExecutorFamily[];
   accessHost?: Awaited<ReturnType<typeof openAccessHost>>;
   queueChanged?: (threadId: ThreadId) => void;
   preparation?: PreparationHook;
@@ -144,6 +148,14 @@ export function threadWork<H extends object>(
     return work;
   }
   const prepared = new Map<RoundId, PreparedSession>();
+  transaction.services.transitionDriver.current ??= executorTransitions(
+    transaction,
+    executors,
+    (round, session, thread) => {
+      prepared.set(round, session);
+      schedule(thread, v.parse(CommandIdSchema, round));
+    },
+  );
   function discardPrepared(roundId: RoundId) {
     const session = prepared.get(roundId);
     prepared.delete(roundId);
@@ -366,7 +378,40 @@ export function threadWork<H extends object>(
             recipients.delete(round.id);
             continue;
           }
-          const ready = prepared.get(round.id);
+          let ready = prepared.get(round.id);
+          const fork = pendingFork(transaction, threadId);
+          if (fork?.state === "pending") {
+            const msg = readMessage(transaction.db, round.messageId);
+            const who = msg?.author.kind === "person" ? msg.author.id : null;
+            const current = () =>
+              accepting &&
+              executors.current(selection.reg.instanceId, actor.id, selection.cwd)?.snapshot ===
+                selection.snapshot;
+            const candidate =
+              who &&
+              (await prepareForkSession(
+                transaction,
+                {
+                  id: who,
+                  environmentId: transaction.writer.environmentId,
+                  allows: (right, t) =>
+                    t.kind === "thread" && !!authHost.store.ceiling(who, t, right),
+                },
+                fork,
+                round,
+                selection,
+                current,
+              ));
+            if (!candidate) {
+              transaction.setPhase(round, {
+                kind: "notDelivered",
+                reason: "Fork context unavailable or unconfirmed",
+                lateReceipt: null,
+              });
+              return;
+            }
+            ready = candidate;
+          }
           prepared.delete(round.id);
           await dispatchExecutor(
             transaction,
@@ -384,7 +429,8 @@ export function threadWork<H extends object>(
             steers,
             ready,
           );
-        } else if (replay) {
+        } else if (pendingFork(transaction, threadId)?.state === "pending") return;
+        else if (replay) {
           await dispatchReplay(
             transaction,
             round,

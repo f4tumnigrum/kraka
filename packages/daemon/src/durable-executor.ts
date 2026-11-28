@@ -13,6 +13,7 @@ import {
   recordAdapterActivity,
   readThread,
   readRound,
+  recordAssistantMessage,
   readMessage,
   recoverInputDelivery,
   claimNext,
@@ -41,7 +42,7 @@ export async function resumeBinding(
   });
   return { opened };
 }
-export type PreparedSession = Awaited<ReturnType<typeof resumeBinding>>;
+export type PreparedSession = Awaited<ReturnType<typeof resumeBinding>> & { installed?: true };
 export async function reconcileExecutor(
   store: FirstSendStore,
   initial: Round,
@@ -204,7 +205,8 @@ export async function dispatchExecutor(
     if (
       !sessionId ||
       (saved !== null && saved !== sessionId) ||
-      session.epoch !== (previous?.epoch ?? legacy?.epoch ?? 0) + 1 ||
+      session.epoch !== (previous?.epoch ?? legacy?.epoch ?? 0) + (prepared?.installed ? 0 : 1) ||
+      (prepared?.installed && previous?.attemptId !== attemptId) ||
       !isCurrent() ||
       signal.aborted ||
       store.directory(thread) !== cwd
@@ -241,7 +243,11 @@ export async function dispatchExecutor(
       if (!Bun.deepEquals(savedBinding(store, thread.id), previous))
         return { kind: "rejected" } as const;
       const claim = claimNext(store, thread.id, delivery, selection.probe.declaration.input);
-      if (claim.kind === "ok" && !replaceBinding(store, previous, nextBinding, legacy?.epoch))
+      if (
+        claim.kind === "ok" &&
+        !prepared?.installed &&
+        !replaceBinding(store, previous, nextBinding, legacy?.epoch)
+      )
         throw Error("executor binding changed");
       return claim;
     })();
@@ -373,6 +379,8 @@ export async function dispatchExecutor(
           break;
         }
         case "contentDelta":
+          if (p.role === "assistant" && p.finalText !== null)
+            recordAssistantMessage(store, initial, instance.instanceId, p.itemId, p.finalText);
           emit({
             kind: p.finalText === null ? "assistant.delta" : "assistant.final",
             ...ids,

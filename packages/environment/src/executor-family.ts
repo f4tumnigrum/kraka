@@ -128,6 +128,19 @@ export interface FamilyProbe
   retryAt: number;
   /** Stable identity for a session resumed after a process restart. */
   bindingContext: string;
+  sessionTransition?: {
+    account: string;
+    continuationKey: string;
+    handoff: boolean;
+    modelChange: "now" | "nextTurn" | null;
+    windowTokens?: (model: Model) => number | null;
+    handoffAllowance?: number;
+    hasLive?: (binding: AdapterSessionBinding) => boolean;
+    live?: (
+      binding: AdapterSessionBinding,
+      attemptId: AttemptId,
+    ) => Promise<ExecutorSession | null>;
+  };
   selectModel(selection: Model | null): Model | null;
   driver(previousEpoch: number): ExecutorDriver;
   refresh(): Promise<FamilyProbe>;

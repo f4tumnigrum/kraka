@@ -1,13 +1,15 @@
 import { join } from "node:path";
 import * as v from "valibot";
-import { type FirstSendStore, type LocalActor } from "@kraka/environment";
+import { readThread, type FirstSendStore, type LocalActor } from "@kraka/environment";
 import { startWriter } from "../../packages/daemon/src/first-send";
 import { SqliteThreadCache } from "../../packages/cli-client/src/thread-cache";
 import { startPairedProject } from "./paired-project";
+import { connectFirstSend } from "./first-send-client";
 import { connectReplica } from "./thread-resume";
 import { configureLocalOwner, accepted } from "./first-send";
 import { within, withState } from "./replay-process";
-import { fixtureTransitionHost, stateSchema, proposal, type PeerState } from "./transition-host";
+import { peerFamily } from "./transition-family";
+import { stateSchema, proposal, type PeerState } from "./transition-host";
 import { seedTransition, command, tid } from "./transition-store";
 
 async function launchPeer(dir: string, name: string) {
@@ -110,6 +112,7 @@ async function setup(dir: string) {
     clean.push(async () => cache.close());
     async function open() {
       const w = await startWriter(stateDir, null, {
+        families: [peerFamily(call)],
         opened(s) {
           store = s;
           const actor: LocalActor = {
@@ -118,8 +121,30 @@ async function setup(dir: string) {
             allows: () => true,
           };
           seedTransition(s, dir, actor);
-          const f = fixtureTransitionHost(s, states, call);
-          s.services.transitionDriver.current = f.host;
+          for (const peer of states.values())
+            s.db.run("INSERT OR IGNORE INTO executor_registrations VALUES(?,?)", [
+              peer.instance,
+              JSON.stringify({
+                family: "codex",
+                instanceId: peer.instance,
+                version: String(peer.revision),
+                displayName: peer.instance,
+                enabled: true,
+                driver: {
+                  endpoint: null,
+                  executable: null,
+                  configurationRoot: null,
+                  historyRoot: null,
+                  variables: {},
+                },
+                credential: null,
+                model: { id: peer.model, options: {} },
+                permission: { ceiling: "ask", selected: "ask" },
+              }),
+            ]);
+          s.db.run("INSERT OR IGNORE INTO round_executors VALUES('round-R','alpha','1',?)", [
+            JSON.stringify({ id: "model-alpha", options: {} }),
+          ]);
         },
       });
       if (w.kind !== "ready") throw Error("Missing writer");
@@ -131,7 +156,25 @@ async function setup(dir: string) {
           cache,
           { minor: 2 },
         );
+        const refresh = async (instance: string) => {
+          const client = await connectFirstSend(stateDir, w.instance);
+          try {
+            accepted(
+              (
+                await client.send("executor.refresh", {
+                  projectId: readThread(store.db, tid)?.projectId,
+                  instanceId: instance,
+                })
+              ).receipt,
+              "executorRefreshed",
+            );
+          } finally {
+            client.close();
+          }
+        };
+        for (const name of states.keys()) await refresh(name);
         return {
+          refresh,
           conn,
           async close() {
             await conn.close();
@@ -162,6 +205,14 @@ async function setup(dir: string) {
           instance,
           v.parse(stateSchema, await call(instance, { kind: "revise", ...patch })),
         );
+        store.db.run(
+          "UPDATE executor_registrations SET data=json_set(data,\x27$.version\x27,?) WHERE id=?",
+          [String(states.get(instance)?.revision), instance],
+        );
+        await daemon.refresh(instance);
+      },
+      async waitForInput(instance: string) {
+        await call(instance, { kind: "waitInput" });
       },
       async ledger(instance: string) {
         return v.parse(

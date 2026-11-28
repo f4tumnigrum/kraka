@@ -59,16 +59,26 @@ export const session: Handler<
   }
   if (!c.allows(threadId, "thread.send")) return reject("notFound");
   const jobs = store.services.transitionJobs;
-  if (m.method === "thread.clear")
-    return clearThreadSession(
-      { actor: principal, transaction: store, commandId: m.commandId },
-      threadId,
-      host?.clearTarget(principal, threadId) ?? null,
-      (job) => {
-        jobs.add(job);
-        void job.finally(() => jobs.delete(job)).catch(() => {});
-      },
+  if (m.method === "thread.clear") {
+    const execute = () =>
+      clearThreadSession(
+        { actor: principal, transaction: store, commandId: m.commandId },
+        threadId,
+        host?.clearTarget(principal, threadId) ?? null,
+        (job) => {
+          jobs.add(job);
+          void job.finally(() => jobs.delete(job)).catch(() => {});
+        },
+      );
+    if (!host?.prepare) return execute();
+    const job = host.prepare(principal, threadId, null).then(
+      () => disclose(execute()),
+      () => c.failed(m.commandId),
     );
+    jobs.add(job);
+    void job.finally(() => jobs.delete(job));
+    return;
+  }
   if (!host) return reject("unsupported");
   const work = switchThreadSession(store, host, {
     actor: principal,

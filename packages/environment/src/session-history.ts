@@ -133,9 +133,7 @@ export function selectHandoff(
     tokens = 0;
   for (const entry of order) {
     if (!entry || selected.has(entry)) continue;
-    const cost =
-      Buffer.byteLength(JSON.stringify({ role: entry.role, text: entry.text })) +
-      (selected.size ? 1 : 0);
+    const cost = Buffer.byteLength(JSON.stringify(entry)) + (selected.size ? 1 : 0);
     const tokenCost = Math.ceil(cost / 4);
     if (bytes + cost > budget.historyBytes || tokens + tokenCost > budget.historyTokens) continue;
     selected.add(entry);

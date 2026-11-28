@@ -77,6 +77,10 @@ export function forkAtRound(
         sourceThreadId,
         JSON.stringify(fork),
       ]);
+      store.db.run(
+        "INSERT INTO round_executors(round,instance,version,model) SELECT ?,e.instance,e.version,e.model FROM round_executors e JOIN rounds r ON r.id=e.round WHERE json_extract(r.data,'$.threadId')=? AND r.rowid<=(SELECT rowid FROM rounds WHERE id=?) ORDER BY r.rowid DESC LIMIT 1",
+        [fork.firstRoundId, sourceThreadId, sourceRoundId],
+      );
       store.sync.record([{ objectType: "thread", value: child }]);
       return { kind: "threadForked", fork };
     },

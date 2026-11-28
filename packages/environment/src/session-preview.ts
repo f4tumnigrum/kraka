@@ -3,7 +3,6 @@ import {
   REQUEST_METHODS,
   SessionPreviewIdSchema,
   SessionTransitionPreviewSchema,
-  type HandoffContext,
   type InputContent,
   type SessionTransitionPreview,
   type SignedRequest,
@@ -169,4 +168,3 @@ export function samePreview(
     Bun.deepEquals(saved.preview, planSession(store, actor, saved.payload, facts, saved.preview.id))
   );
 }
-export type HandoffSource = HandoffContext["source"];

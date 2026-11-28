@@ -21,6 +21,20 @@ export const codexFamily: ExecutorFamily = {
       const probe = await probeCodex(reg, launch, previous);
       return {
         ...probe,
+        ...(probe.accountContext
+          ? {
+              sessionTransition: {
+                account: probe.accountContext,
+                continuationKey: canonicalJson([
+                  reg.driver.historyRoot,
+                  probe.nativeHome,
+                  reg.driver.configurationRoot,
+                ]),
+                handoff: false,
+                modelChange: null,
+              },
+            }
+          : {}),
         bindingContext: canonicalJson({
           instance: reg.instanceId,
           credential: reg.credential,

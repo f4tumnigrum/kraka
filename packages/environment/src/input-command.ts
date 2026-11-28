@@ -97,6 +97,14 @@ export function applyInputCommand({
         return change.receipt;
       }
       if (command.method === "input.send" || command.method === "input.steer") {
+        if (
+          transaction.db
+            .query(
+              "SELECT 1 FROM session_switches WHERE thread=? AND busy=1 UNION ALL SELECT 1 FROM session_clear WHERE thread=? AND json_extract(data,'$.state.kind') IN ('accepted','unknown')",
+            )
+            .get(threadId, threadId)
+        )
+          return refuse("invalidState");
         if (!transaction.directory(thread)) return refuse("invalidState");
         const { content } = command.payload;
         if (content.references.length || content.attachments.length) return refuse("unsupported");

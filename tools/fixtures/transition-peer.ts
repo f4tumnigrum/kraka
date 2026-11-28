@@ -14,12 +14,17 @@ const request = v.object({
   id: v.string(),
   call: v.record(v.string(), v.unknown()),
 });
-process.on("message", (raw: unknown) => {
+let inputSeen = Promise.withResolvers<void>();
+process.on("message", async (raw: unknown) => {
   const { id, call } = v.parse(request, raw);
   const save = () => appendFileSync(journal, JSON.stringify(call) + "\n");
   try {
     let value: unknown;
     switch (call.kind) {
+      case "waitInput":
+        await inputSeen.promise;
+        value = true;
+        break;
       case "fence":
         value = existsSync(journal)
           ? readFileSync(journal, "utf8")
@@ -57,6 +62,7 @@ process.on("message", (raw: unknown) => {
       }
       case "subscribe":
       case "input":
+        if (call.kind === "input") inputSeen.resolve();
         if (!native.has(String(call.nativeSessionId))) throw Error("Unknown session");
         save();
         value = true;

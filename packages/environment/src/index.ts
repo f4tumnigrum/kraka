@@ -53,7 +53,7 @@ export * from "./secret-file";
 export { SessionBindings } from "./session-binding";
 export { clearThreadSession } from "./session-clear";
 export { HandoffDeliveries, freezeTextHandoff } from "./session-delivery";
-export { forkAtRound, readForkRelationships } from "./session-fork";
+export { pendingFork, forkAtRound, readForkRelationships } from "./session-fork";
 export {
   previewSessionTransition,
   loadPreview,
@@ -69,6 +69,12 @@ export {
   type TransitionChannel,
   type TransitionHost,
 } from "./session-transition";
+export {
+  readImportedSessionSource,
+  saveImportedSessionSource,
+  recordAssistantMessage,
+} from "./session-source";
+export { historyAt, selectHandoff } from "./session-history";
 export { promoteSessionObservation } from "./session-observations";
 export * from "./setting-store";
 export * from "./settings";
