@@ -1,3 +1,4 @@
+import { registerRecovery, draining } from "./writer-features/lifecycle";
 import { openAccessHost } from "./access";
 import {
   threadConnection,
@@ -47,7 +48,6 @@ import {
   type Round,
   type RoundId,
   type ExecutorTurnUpdate,
-  RoundSchema,
   type SignedRequest,
   type ThreadId,
 } from "@kraka/protocol";
@@ -477,32 +477,13 @@ export function threadWork<H extends object>(
 
   let startupRecovery = Promise.resolve();
   function recover(publish: () => void) {
-    const closing = transaction.db
-      .query<{ data: string }, []>(
-        "SELECT data FROM rounds WHERE json_extract(data,'$.attempt.phase.kind') NOT IN ('finished','endedEarly','notDelivered') AND json_extract(data,'$.attempt.phase.kind')='closing'",
-      )
-      .all()
-      .map(({ data }) => v.parse(RoundSchema, JSON.parse(data)));
-    transaction.captures.registerRecovery(closing);
-    transaction.diffCleanup.registerRecovery(transaction.recovery);
-    const pending = transaction.db
-      .query<{ data: string }, []>(
-        "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE (d.pending=1 OR (json_extract(r.data,'$.attempt.phase.kind')='unobserved' AND json_extract(d.frozen,'$.target.family')='codex' AND d.id=json_extract(r.data,'$.attempt.deliveryId'))) AND d.round NOT IN (SELECT round FROM ready_dispatch)",
-      )
-      .all()
-      .map(({ data }) => v.parse(RoundSchema, JSON.parse(data)));
-    for (const round of pending) {
-      if (
-        replay &&
-        round.attempt.phase.kind === "recovering" &&
-        round.attempt.phase.action === "inspectInput"
-      ) {
-        const rows = inspections.get(round.threadId) ?? [];
-        rows.push(round);
-        inspections.set(round.threadId, rows);
-      }
-    }
-
+    const afterReady = registerRecovery({
+      store: transaction,
+      replay: !!replay,
+      inspections,
+      schedule,
+      resume,
+    });
     publish();
     const dispatched = Bun.sleep(0);
     startupRecovery = dispatched
@@ -514,17 +495,7 @@ export function threadWork<H extends object>(
     // The caller can print readiness before recovery or preparation starts synchronous Git.
     void dispatched
       .then(() => {
-        if (!accepting) return;
-        for (const round of [...closing, ...pending])
-          schedule(round.threadId, v.parse(CommandIdSchema, round.attempt.deliveryId));
-        for (const { id } of transaction.db
-          .query<{ id: string }, []>(
-            "SELECT id FROM managed_worktrees WHERE unfinished=1 UNION SELECT worktree AS id FROM ready_dispatch",
-          )
-          .all()) {
-          const m = readManaged(transaction.db, id);
-          if (m) resume(m);
-        }
+        if (accepting) afterReady();
       })
       .catch((error) => console.error("Writer dispatch recovery failed", error));
   }
@@ -556,7 +527,7 @@ export function threadWork<H extends object>(
         startupRecovery,
         ...turns.values(),
         ...preparing.values(),
-        ...transaction.diffReads,
+        ...draining(transaction),
       ]);
       await Promise.allSettled(opening.values());
       for (const r of prepared.values())

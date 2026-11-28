@@ -1,3 +1,4 @@
+import { waitFile } from "./file-signal";
 import { controlledTurn } from "./codex-controlled";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -124,7 +125,7 @@ async function gate(name: string, id: number | null) {
   if (process.env.PEER_GATE !== name) return;
   log(`gate.${name}`, id);
   const path = join(`${ledgerPath}.${name}.release`);
-  while (!existsSync(path)) await Bun.sleep(3);
+  await waitFile(path, 30_000);
 }
 const controlled = process.env.PEER_CONTROL
   ? controlledTurn(process.env.PEER_CONTROL, recording, write)

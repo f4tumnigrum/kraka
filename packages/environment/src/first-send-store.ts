@@ -1,11 +1,10 @@
+import type { RoundCaptures } from "./capture-store";
+import type { TodoLedger } from "./todo-ledger";
+import type { DiffCleanup } from "./diff-cleanup";
+import type { writerGitPaths } from "./private-git";
+import { schema, createServices, initializers } from "./store-features/composition";
 import { markStartupDetail } from "./capture-timing";
-import { RoundCaptures } from "./capture-store";
 import { WriterRecovery } from "./writer-recovery";
-import { writerGitPaths } from "./private-git";
-import { executorTables } from "./executor-registry";
-import { openCaptureStorage } from "./capture-storage";
-import { DiffCleanup, diffCleanupTables } from "./diff-cleanup";
-import { TodoLedger, todoTables } from "./todo-ledger";
 import { ThreadJournal } from "./thread-journal";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
@@ -27,15 +26,13 @@ import {
 } from "@kraka/protocol";
 import * as v from "valibot";
 import type { FrozenDelivery } from "./executor-records";
-import { type RecoveryScope, recoverQueues } from "./input-store";
+import { type RecoveryScope } from "./input-store";
 import { DatabaseHeaderSchema, type DirectoryWriter, inspectDatabase } from "./migrations";
 import { physicalDirectory } from "./project-directory";
 import { directoryForThread } from "./worktrees";
 
-import { worktreeTables, readManaged } from "./worktree-storage";
-import { settingTables } from "./setting-store";
+import { readManaged } from "./worktree-storage";
 import { managedView } from "./worktree-git";
-const sessionTables = `CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));`;
 const step = v.parse(DatabaseHeaderSchema.entries.ledger.item, {
   id: "input-attempts",
   from: 1,
@@ -123,26 +120,12 @@ export function openStore(writer: DirectoryWriter, recovery?: RecoveryScope) {
           db.run("PRAGMA user_version=2");
         }
         markStartupDetail("db.version");
-        db.exec(worktreeTables);
-        markStartupDetail("db.worktrees");
-        db.exec(settingTables);
-        markStartupDetail("db.settings");
-        db.exec(sessionTables);
-        markStartupDetail("db.sessions");
-        db.exec(diffCleanupTables);
-        markStartupDetail("db.diff");
+        for (const hook of schema) if (!hook.afterJournal) hook.run(db);
         const journal = ThreadJournal.open(db, writer.environmentId);
         markStartupDetail("db.journalSeed");
-        db.exec(todoTables);
+        for (const hook of schema) if (hook.afterJournal) hook.run(db);
         const store = new FirstSendStore(db, writer, journal);
-        store.todos.recover();
-        markStartupDetail("db.todos");
-        openCaptureStorage(db);
-        markStartupDetail("db.captures");
-        db.exec(executorTables);
-        markStartupDetail("db.executors");
-        recoverQueues(store, recovery);
-        markStartupDetail("db.queueRecovery");
+        for (const hook of initializers) hook.run(store, recovery);
         return store;
       })
       .immediate();
@@ -205,11 +188,22 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
 }
 export class FirstSendStore {
   readonly recovery = new WriterRecovery();
-  readonly gitPaths: ReturnType<typeof writerGitPaths>;
-  readonly diffCleanup: DiffCleanup;
-  readonly diffReads = new Set<Promise<void>>();
-  readonly captures: RoundCaptures;
-  readonly todos: TodoLedger;
+  readonly services: ReturnType<typeof createServices>;
+  get captures(): RoundCaptures {
+    return this.services.captures;
+  }
+  get todos(): TodoLedger {
+    return this.services.todos;
+  }
+  get gitPaths(): ReturnType<typeof writerGitPaths> {
+    return this.services.gitPaths;
+  }
+  get diffCleanup(): DiffCleanup {
+    return this.services.diffCleanup;
+  }
+  get diffReads(): Set<Promise<void>> {
+    return this.services.diffReads;
+  }
   onQueueChanged?: (thread: Thread["id"]) => void;
   beforeCommit?: (method: string) => void;
   constructor(
@@ -217,10 +211,7 @@ export class FirstSendStore {
     readonly writer: DirectoryWriter,
     readonly sync: ThreadJournal,
   ) {
-    this.gitPaths = writerGitPaths(writer.stateDirectory, writer.environmentId);
-    this.diffCleanup = new DiffCleanup(db, this.gitPaths);
-    this.todos = new TodoLedger(this);
-    this.captures = new RoundCaptures(this);
+    this.services = createServices(this);
   }
   projectDirectory(id: string) {
     const row = this.db

@@ -52,6 +52,8 @@ jobs:
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           bun run playwright install --with-deps chromium
           echo "KRAKA_BROWSER=chromium" >> "$GITHUB_ENV"
+
+      # Native browser evidence
       - name: Verify four native browser cases
         shell: bash
         env:
@@ -61,12 +63,14 @@ jobs:
           set -euo pipefail
           bun test tools/browser-https.live.test.ts 2>&1 | tee "$RUNNER_TEMP/browser-native.log"
           for group in 1 2 3 4; do grep -F "(pass) native $group. " "$RUNNER_TEMP/browser-native.log"; done
-      - name: Verify four browser outbox cases
-        shell: bash
-        run: |
-          set -euo pipefail
-          NO_COLOR=1 bun test tools/browser-outbox.live.test.ts 2>&1 | tee "$RUNNER_TEMP/browser-outbox.log"
-          for group in 1 2 3 4; do grep -E "\(pass\).*outbox $group\. " "$RUNNER_TEMP/browser-outbox.log"; done
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - name: Run ordinary live suites and verify their groups
+        env:
+          KRAKA_REQUIRED_ROUTE_CASES: "1"
+          KRAKA_REQUIRED_PAIRING_CASES: "1"
+        run: bun tools/run-live.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -74,98 +78,18 @@ jobs:
           path: |
             ${{ runner.temp }}/browser-native.log
             ${{ runner.temp }}/browser-outbox.log
-      - run: bun run format:check
-      - run: bun run lint
-      - run: bun run typecheck
-      - run: bun test ./tools/reference-conformance.live.test.ts
-      - run: bun test ./tools/route-switch.live.test.ts
-        env:
-          KRAKA_REQUIRED_ROUTE_CASES: "1"
-      - run: bun test ./tools/input-recovery.live.test.ts
-      - run: bun test ./tools/codex-turn.live.test.ts
-      - name: Verify four Codex approval, stop and resume scenarios
+
+      - name: Test the rest of the workspace
         shell: bash
         run: |
           set -euo pipefail
-          NO_COLOR=1 bun test ./tools/codex-resume.live.test.ts 2>&1 | tee "$RUNNER_TEMP/codex-resume.log"
-          for group in 1 2 3 4; do grep -F "(pass) $group. " "$RUNNER_TEMP/codex-resume.log"; done
-      - name: Verify recorded tool activity and independent detail streams
-        shell: bash
-        run: |
-          set -euo pipefail
-          NO_COLOR=1 bun test ./tools/tool-activity.live.test.ts 2>&1 | tee "$RUNNER_TEMP/tool-activity.log"
-          for group in 1 2 3 4; do grep -F "(pass) $group. " "$RUNNER_TEMP/tool-activity.log"; done
-      - run: bun test ./tools/owner-pairing.live.test.ts
-        env:
-          KRAKA_REQUIRED_PAIRING_CASES: "1"
-      - name: Verify both devices and interrupted answer delivery
-        shell: bash
-        run: |
-          set -euo pipefail
-          NO_COLOR=1 bun test ./tools/first-answer.live.test.ts 2>&1 | tee "$RUNNER_TEMP/first-answer.log"
-          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/first-answer.log"; done
-      - name: Verify all three sealed attention list cases
-        shell: bash
-        run: |
-          set -euo pipefail
-          NO_COLOR=1 bun test ./tools/thread-attention.live.test.ts 2>&1 | tee "$RUNNER_TEMP/thread-attention.log"
-          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/thread-attention.log"; done
-      - run: bun test ./tools/thread-resume.live.test.ts
-      - run: bun test ./tools/first-send.live.test.ts
-      - name: Verify all four settings readback groups
-        shell: bash
-        env:
-          NO_COLOR: "1"
-        run: |
-          set -euo pipefail
-          bun test ./tools/settings-readback.live.test.ts 2>&1 | tee "$RUNNER_TEMP/settings-tests.log"
-          for group in 1 2 3 4; do grep -F "(pass) S18.$group " "$RUNNER_TEMP/settings-tests.log"; done
-      - run: bun test ./tools/isolated-start.live.test.ts
-      - name: Verify all five local comparison cases
-        env:
-          NO_COLOR: "1"
-        shell: bash
-        run: |
-          set -euo pipefail
-          git --version
-          bun test tools/local-diff.live.test.ts 2>&1 | tee "$RUNNER_TEMP/local-diff.log"
-          for group in 1 2 3 4 5; do grep -F "(pass) $group. " "$RUNNER_TEMP/local-diff.log"; done
-      - name: Verify all four round checkpoint cases
-        env:
-          NO_COLOR: "1"
-        shell: bash
-        run: |
-          set -euo pipefail
-          git --version
-          bun test tools/round-patch.live.test.ts 2>&1 | tee "$RUNNER_TEMP/round-patch.log"
-          for group in 1 2 3 4; do grep -F "(pass) $group. " "$RUNNER_TEMP/round-patch.log"; done
-      - name: Test workspace and require all three short socket cases
-        shell: bash
-        env:
-          NO_COLOR: "1"
-        run: |
-          set -euo pipefail
-          bun test \
-            --path-ignore-patterns "**/reference-conformance.live.test.ts" \
-            --path-ignore-patterns "**/route-switch.live.test.ts" \
-            --path-ignore-patterns "**/input-recovery.live.test.ts" \
-            --path-ignore-patterns "**/codex-resume.live.test.ts" \
-            --path-ignore-patterns "**/tool-activity.live.test.ts" \
-            --path-ignore-patterns "**/codex-turn.live.test.ts" \
-            --path-ignore-patterns "**/owner-pairing.live.test.ts" \
-            --path-ignore-patterns "**/browser-outbox.live.test.ts" \
-            --path-ignore-patterns "**/browser-https.live.test.ts" \
-            --path-ignore-patterns "**/round-patch.live.test.ts" \
-            --path-ignore-patterns "**/local-diff.live.test.ts" \
-            --path-ignore-patterns "**/first-answer.live.test.ts" \
-            --path-ignore-patterns "**/thread-attention.live.test.ts" \
-            --path-ignore-patterns "**/thread-resume.live.test.ts" \
-            --path-ignore-patterns "**/settings-readback.live.test.ts" \
-            --path-ignore-patterns "**/isolated-start.live.test.ts" \
-            --path-ignore-patterns "**/first-send.live.test.ts" 2>&1 | tee "$RUNNER_TEMP/flow-tests.log"
-          for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done
+          cp "$RUNNER_TEMP/stream-flow.log" "$RUNNER_TEMP/flow-tests.log"
+          NO_COLOR=1 bun test --path-ignore-patterns "**/live/*.live.test.ts" --path-ignore-patterns "**/browser-https.live.test.ts" 2>&1 | tee -a "$RUNNER_TEMP/flow-tests.log"
+
       - run: bun run build
       - run: bun run protocol:reference:check
+
+      # Stream flow on shaped Linux sockets
       - name: Verify content and control receipts on delayed and bandwidth-limited sockets
         if: runner.os == 'Linux'
         shell: bash
@@ -176,7 +100,7 @@ jobs:
               read -r kind value <<< "$shape"
               tc qdisc replace dev lo root netem "$kind" "$value"
               echo "Checking loopback with $shape"
-              sudo -u "$SUDO_USER" env NO_COLOR=1 "$1" test tools/stream-flow.live.test.ts \
+              sudo -u "$SUDO_USER" env NO_COLOR=1 "$1" test tools/live/stream-flow.live.test.ts \
                 --test-name-pattern "$2" --timeout 180000 2>&1 | tee "$3/socket-$kind.log"
               grep -F "(pass) $2" "$3/socket-$kind.log"
             done

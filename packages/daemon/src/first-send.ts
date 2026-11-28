@@ -2,11 +2,10 @@ import { openAccessHost } from "./access";
 import { attachFlow, type SocketApplication } from "./flow-socket";
 import { inputReads, inputReadMethods } from "./input-reads";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
-import { CodexInstances } from "./codex-instances";
+import { openWriterServices } from "./writer-features/lifecycle";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  OrdinaryStops,
   selectWorktreeBase,
   retryPreparation,
   readManaged,
@@ -94,10 +93,8 @@ async function openDurableWriter<H extends object>(
     if (lifecycle?.capture) transaction.captures.hook = lifecycle.capture;
     lifecycle?.opened?.(transaction);
     markStartupDetail("owner.openedHook");
-    const codex = new CodexInstances(transaction);
-    markStartupDetail("owner.executors");
-    const stops = new OrdinaryStops(transaction);
-    markStartupDetail("owner.stops");
+    const services = openWriterServices(transaction);
+    const { codex, stops } = services;
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
@@ -416,7 +413,7 @@ async function openDurableWriter<H extends object>(
           const stopping = work.close();
           await server.stop(true);
           await stopping;
-          await codex.close();
+          await services.close();
         } finally {
           try {
             ownedAccess?.close();

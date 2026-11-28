@@ -1,3 +1,4 @@
+import { waitForFileChange } from "./file-signal";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
@@ -53,11 +54,12 @@ export function peerLedger(path: string) {
       writeFileSync(`${path}.${name}.release`, "released");
     },
     async wait(event: string) {
-      const until = performance.now() + 8000;
-      while (!rows().some((r) => r.event === event)) {
-        if (performance.now() > until) throw new Error(`Missing peer event ${event}`);
-        await Bun.sleep(3);
-      }
+      await waitForFileChange(
+        path,
+        () => rows().some((r) => r.event === event),
+        8000,
+        "Missing peer event " + event,
+      );
     },
   };
 }

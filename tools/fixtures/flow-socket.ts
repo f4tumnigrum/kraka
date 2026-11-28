@@ -1,3 +1,4 @@
+import { observation } from "./observation";
 import { join } from "node:path";
 import * as v from "valibot";
 import { SubscriptionSession } from "../../packages/client-runtime/src/subscription-session";
@@ -37,13 +38,6 @@ export function inspect(data: WireMessage) {
   if (!header(fields))
     throw new Error(`Invalid generated TransportFrameHeader: ${JSON.stringify(header.errors)}`);
   return frame;
-}
-export async function until(predicate: () => boolean, label: string, ms = 4000) {
-  const end = performance.now() + ms;
-  while (!predicate()) {
-    if (performance.now() >= end) throw new Error(`Timed out: ${label}`);
-    await Bun.sleep(2);
-  }
 }
 type Listener = (request: SignedRequest, remote: Remote) => void;
 export type Remote = {
@@ -119,6 +113,7 @@ async function connectSocket(
   if (!endpoint) throw new Error(`No fixture endpoint for ${device}`);
   const session = fixtureSession(device, opts.epoch ?? endpoint.connectionId);
   const epoch = session.hello.connectionId;
+  const observed = observation();
   let dispatches = 0,
     creditHeld = opts.holdCredit;
   let remote: Remote | undefined;
@@ -152,6 +147,7 @@ async function connectSocket(
         control(m) {
           if (m.kind !== "signedRequest") return;
           dispatches++;
+          observed.changed();
           if (m.method === "subscription.openThread") {
             const writer = new SubscriptionWriter(peer, m.payload.subscriptionId, wake);
             if (writer.id !== m.payload.streamId) throw new Error("Wrong stream proposal");
@@ -224,6 +220,8 @@ async function connectSocket(
     } catch (e) {
       error = e;
       socket.terminate();
+    } finally {
+      observed.changed();
     }
   };
   socket.onclose = () => {
@@ -245,13 +243,13 @@ async function connectSocket(
     openRequests,
     dispatches: () => dispatches,
     wait: (p: () => boolean, label: string, ms?: number) =>
-      until(
+      observed.until(
         () => {
           if (error) throw error;
           return p();
         },
         label,
-        ms,
+        ms ?? 4000,
       ),
     open(id: number, after?: SyncCursor) {
       const info = endpoint.subscriptions.find((s) => s.streamId === id);
