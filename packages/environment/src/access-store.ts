@@ -105,6 +105,8 @@ export const accessTables = `CREATE TABLE IF NOT EXISTS devices(device TEXT PRIM
       CREATE TABLE IF NOT EXISTS objects(kind TEXT NOT NULL,id TEXT NOT NULL,parent TEXT,PRIMARY KEY(kind,id));
       CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS changes(body TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS changes_recipient ON changes(json_extract(body,'$.change.grant.principalId'));
+      CREATE INDEX IF NOT EXISTS changes_revoked_grant ON changes(json_extract(body,'$.change.grantId'));
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,principal TEXT NOT NULL,intent TEXT NOT NULL,body TEXT NOT NULL);`;
 
 export class AccessStore implements PairingStore {
@@ -117,6 +119,20 @@ export class AccessStore implements PairingStore {
     readonly now = Date.now,
   ) {
     this.target = { kind: "environment", environmentId: identity.id };
+  }
+  visibilityGeneration(principal: PrincipalId) {
+    // Revocations carry the grant ID. The original grant keeps its recipient in the audit log.
+    const change = this.db
+      .query<{ revision: string }, [string, string]>(`
+      SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) AS revision FROM changes
+      WHERE json_extract(body,'$.change.grant.principalId')=?
+         OR json_extract(body,'$.change.grantId') IN (
+           SELECT json_extract(body,'$.change.grant.id') FROM changes
+           WHERE json_extract(body,'$.change.grant.principalId')=?
+         )`)
+      .get(principal, principal);
+    if (!change) throw Error("Cannot read the principal's visibility generation");
+    return JSON.stringify([principal, change.revision]);
   }
   provisionProject(project: ProjectId) {
     this.db.run("INSERT OR IGNORE INTO objects VALUES('project',?,NULL)", [project]);

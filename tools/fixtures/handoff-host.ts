@@ -22,7 +22,7 @@ import { commandId, connectDevice, beginApplication, invite, approve } from "./p
 import { buildPeer } from "./codex-turn";
 import { accepted, productRoot } from "./first-send";
 import { Journal, dispatchObservationMs } from "./route-network";
-import { terminate } from "./replay-process";
+import { captureStderr, terminate } from "./replay-process";
 
 export const installedRecord = v.strictObject({
   kind: v.literal("installed"),
@@ -155,6 +155,7 @@ export async function handoffHost(site: Site, dir: string, publicOrigin?: string
       owner,
       inviteId: pairing.inviteId,
       nextHostRecord: daemon.next,
+      stderrTail: daemon.stderrTail,
       publication,
       initial,
       turn,
@@ -200,7 +201,7 @@ export function installedFollow(site: Site, threadId: InstalledThread["threadId"
   );
   const records = new Journal<InstalledThread>(),
     lines = createInterface({ input: Readable.fromWeb(child.stdout), crlfDelay: Infinity });
-  const errors = new Response(child.stderr).text();
+  const { tail: stderrTail, drained: errors } = captureStderr(child.stderr);
   const done = (async () => {
     for await (const line of lines) records.push(v.parse(installedRecord, JSON.parse(line)));
     throw Error("Follow exited (" + (await child.exited) + "): " + (await errors));
@@ -208,6 +209,7 @@ export function installedFollow(site: Site, threadId: InstalledThread["threadId"
   void done.catch(() => {});
   return {
     records,
+    stderrTail,
     at: (predicate: (r: InstalledThread) => boolean) =>
       Promise.race([records.until(predicate, 0, dispatchObservationMs), done]),
     async close() {

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import * as v from "valibot";
 import {
+  canonicalJson,
   DEFAULT_DEVICE_PERMISSIONS,
   DESKTOP_IPC,
   PairingPendingSchema,
@@ -22,6 +23,7 @@ import {
   type SubscriptionId,
   type SyncPosition,
 } from "@kraka/protocol";
+import { openDesktopProfile } from "../packages/desktop/src/profile";
 import { hostRelease, installedDirectory, runIdentity } from "./fixtures/installed";
 import { installArtifact } from "./package-release";
 import { handoffHost, installedFollow } from "./fixtures/handoff-host";
@@ -124,20 +126,11 @@ test.skipIf(!native)(
   120000,
 );
 
-function handed(rows: v.InferOutput<typeof HistoryPageSchema>["rows"], id: TodoRequestId) {
-  return rows.some(
-    (r) =>
-      r.objectType === "todoRequest" &&
-      r.value.id === id &&
-      r.value.state.kind === "answered" &&
-      (r.value.state.arrival.kind === "handed" || r.value.state.arrival.kind === "received"),
-  );
-}
 type PhoneCondition = {
   message?: MessageId;
   open?: "question" | "approval";
   answered?: TodoRequestId;
-  through?: string;
+  atLeast?: SyncPosition;
 };
 async function phoneHead(page: Page, condition: PhoneCondition = {}) {
   const raw = await within(
@@ -154,7 +147,8 @@ async function phoneHead(page: Page, condition: PhoneCondition = {}) {
             return;
           const cache: ThreadCache = t.cache;
           const rows = Object.values(cache.rows).flatMap((r) => (r.row ? [r.row] : []));
-          if (condition.through && status.acknowledged.through !== condition.through) return;
+          if (condition.atLeast && BigInt(status.acknowledged.through) < BigInt(condition.atLeast))
+            return;
           if (
             condition.message &&
             !rows.some((r) => r.objectType === "message" && r.value.id === condition.message)
@@ -223,7 +217,49 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
   let browser: Awaited<ReturnType<typeof remote.launch>>, phone: Page, phoneDevice: DeviceId;
   const desktopMethods: string[] = [];
   let message: MessageId, question: TodoReplyRecord, approval: TodoReplyRecord;
-  let missedFrom: SyncPosition, firstEpoch: string, cliSub: SubscriptionId;
+  let lastDesktopHead: SyncPosition, firstEpoch: string, cliSub: SubscriptionId;
+  let approvedOffline = false;
+  const phoneReceipts: Partial<Record<"question" | "approval", unknown>> = {};
+  function seals(records: InstalledThread[]) {
+    return records.slice(-3).map((r) => ({
+      event: r.kind,
+      through: r.head.through,
+      connection: r.connectionId,
+      subscription: r.subscriptionId,
+      requests: r.rows.flatMap((row) =>
+        row.objectType === "todoRequest"
+          ? [
+              {
+                id: row.value.id,
+                state: row.value.state.kind,
+                arrival:
+                  row.value.state.kind === "answered" ? row.value.state.arrival.kind : undefined,
+              },
+            ]
+          : [],
+      ),
+      answers: r.answers.map((a) => a.todoRequestId),
+    }));
+  }
+  async function observe<T>(waitingFor: string, work: Promise<T>): Promise<T> {
+    try {
+      return await within(work, 20000, waitingFor);
+    } catch (error) {
+      const evidence = {
+        waitingFor,
+        thread: f.args.threadId,
+        cli: seals(cli.records.items),
+        desktop: seals((desktop ?? f.desktop).records.items),
+        phoneReceipts,
+        native: f.host.events.items.slice(-4),
+        routeEvents: route.inputs.items.slice(-3),
+        daemonStderr: f.host.stderrTail(),
+        routeStderr: route.stderrTail(),
+        cliStderr: cli.stderrTail(),
+      };
+      throw Error(JSON.stringify(evidence, null, 2), { cause: error });
+    }
+  }
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "kraka-handoff-"));
     f = await setup(dir, true);
@@ -348,10 +384,16 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     await f.host.events.untilDispatch((e) => e.event === "turn" && e.text === "question");
   }, 60000);
   test("handoff 3. CLI stays subscribed through the answer and approval", async () => {
-    const turn = await f.host.events.until((e) => e.event === "turn" && e.text === "question");
+    const turn = await observe(
+      "native peer: follow-up turn for phone message " + message,
+      f.host.events.until((e) => e.event === "turn" && e.text === "question"),
+    );
     const submitted = async (kind: "question" | "approval") => {
       f.host.control(turn, kind === "question" ? "callback" : "handoff-approval");
-      const head = await phoneHead(phone, { open: kind });
+      const head = await observe(
+        "phone: installed open " + kind + " for native turn " + turn.root,
+        phoneHead(phone, { open: kind }),
+      );
       const row = head.rows.find(
         (r) =>
           r.objectType === "todoRequest" &&
@@ -360,43 +402,65 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
       );
       if (row?.objectType !== "todoRequest") throw Error("Open native request missing");
       const id = row.value.id;
-      const receipt = await phone.evaluate(
-        async ({ path, id, threadId, kind }) => {
-          const t = (await import(path)).pageThread;
-          return kind === "question"
-            ? t.answer({
-                threadId,
-                todoRequestId: id,
-                answers: [{ questionKey: "color", answer: "blue" }],
-              })
-            : t.decide({
-                threadId,
-                todoRequestId: id,
-                decision: {
-                  kind: "approval",
-                  choiceKey: "accept",
-                  decision: "allow",
-                  scope: "once",
-                },
-              });
-        },
-        { path: modulePath, threadId: f.args.threadId, id, kind },
+      const receipt = await observe(
+        `phone: ${kind} receipt for ${id} after installed position ${head.head.through}`,
+        phone.evaluate(
+          async ({ path, id, threadId, kind }) => {
+            const t = (await import(path)).pageThread;
+            return kind === "question"
+              ? t.answer({
+                  threadId,
+                  todoRequestId: id,
+                  answers: [{ questionKey: "color", answer: "blue" }],
+                })
+              : t.decide({
+                  threadId,
+                  todoRequestId: id,
+                  decision: {
+                    kind: "approval",
+                    choiceKey: "accept",
+                    decision: "allow",
+                    scope: "once",
+                  },
+                });
+          },
+          { path: modulePath, threadId: f.args.threadId, id, kind },
+        ),
       );
+      phoneReceipts[kind] = receipt;
       expect(receipt).toMatchObject({
         kind: "accepted",
         result: { kind: "todoAnswerStored", todoRequestId: id },
       });
-      await phoneHead(phone, { answered: id });
-      const r = await phone.evaluate(
-        async ({ path, id }) => (await import(path)).pageThread.readAnswer(id),
-        { id, path: modulePath },
+      const resolved = await observe(
+        `phone: resolved ${kind} ${id} after ${head.head.through}`,
+        phoneHead(phone, { answered: id }),
+      );
+      const r = await observe(
+        `phone: read winner of ${id} at ${resolved.head.through}`,
+        phone.evaluate(async ({ path, id }) => (await import(path)).pageThread.readAnswer(id), {
+          id,
+          path: modulePath,
+        }),
       );
       const answer = v.parse(TodoReplyRecordSchema, r.result);
       expect(answer.deviceId).toBe(phoneDevice);
       expect(answer.at).toBeGreaterThan(0);
       expect(
-        (await cli.at((r) => r.answers.some((a) => a.todoRequestId === id))).answers,
+        (
+          await observe(
+            `CLI: sealed ${kind} winner ${id}, phone installed ${resolved.head.through}`,
+            cli.at((r) => r.answers.some((a) => a.todoRequestId === id)),
+          )
+        ).answers,
       ).toContainEqual(answer);
+      const nativeId = kind === "question" ? 4001 : 4002;
+      await observe(
+        `native peer: callback ${nativeId} for ${id}, phone installed ${resolved.head.through}`,
+        f.host.events.until(
+          (e) => e.event === "reply-written" && e.handle === turn.handle && e.id === nativeId,
+        ),
+      );
       return answer;
     };
     question = await submitted("question");
@@ -404,36 +468,64 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
       kind: "question",
       answers: [{ questionKey: "color", answer: "blue" }],
     });
-    const last = await f.desktop.at(
-      (r) =>
-        r.answers.some((a) => a.todoRequestId === question.todoRequestId) &&
-        handed(r.rows, question.todoRequestId),
+    const last = await observe(
+      `desktop: sealed question winner ${question.todoRequestId} before close`,
+      f.desktop.at((r) => r.answers.some((a) => a.todoRequestId === question.todoRequestId)),
     );
     expect(last.answers).toContainEqual(question);
     desktopMethods.push(...(await f.desktop.methods()));
-    await f.desktop.closeViewer();
-    await f.desktop.quit();
-    missedFrom = (f.desktop.records.items.at(-1) ?? last).head.through;
+    await observe("desktop: close viewer after " + last.head.through, f.desktop.closeViewer());
+    await observe("desktop: quit after " + last.head.through, f.desktop.quit());
+    lastDesktopHead = (f.desktop.records.items.at(-1) ?? last).head.through;
     desktop = undefined;
     approval = await submitted("approval");
     expect(approval.todoRequestId).not.toBe(question.todoRequestId);
     expect(approval.content).toMatchObject({ kind: "approval", choiceKey: "accept" });
-    await f.host.events.until((e) => e.event === "reply-written" && e.id === 4002);
+    approvedOffline = true;
   }, 60000);
   test("handoff 4. desktop reseals the missed approval with the original phone author", async () => {
+    if (!approvedOffline)
+      throw Error("Handoff 4 requires the completed offline approval from handoff 3");
+    const profile = await openDesktopProfile(
+      f.args.profileDir,
+      f.args.environmentId,
+      f.args.threadId,
+    );
+    const cached =
+      profile.store.read().scopes[canonicalJson({ kind: "thread", threadId: f.args.threadId })]
+        ?.cursor;
+    profile.close();
+    if (!cached) throw Error("Desktop closed without an installed cursor");
+    expect(BigInt(cached.through)).toBeGreaterThanOrEqual(BigInt(lastDesktopHead));
     desktop = await launchInstalledDesktop(f.args);
-    expect(desktop.first.after?.through).toBe(missedFrom);
+    expect(desktop.first.after).toEqual(cached);
     expect(desktop.first.connectionId).not.toBe(firstEpoch);
     expect(desktop.deviceId).toBe(f.registered.deviceId);
-    const check = (r: InstalledThread) =>
-      r.answers.some((a) => a.todoRequestId === approval.todoRequestId) &&
-      handed(r.rows, approval.todoRequestId);
-    const reader = await desktop.at(check);
+    const returned = desktop;
+    let position = cached.through;
+    let reader: InstalledThread,
+      terminal: InstalledThread,
+      p: Awaited<ReturnType<typeof phoneHead>>;
+    for (;;) {
+      const check = (r: InstalledThread) =>
+        BigInt(r.head.through) >= BigInt(position) &&
+        r.answers.some((a) => a.todoRequestId === approval.todoRequestId);
+      [reader, terminal, p] = await observe(
+        `desktop, CLI and phone: sealed approval ${approval.todoRequestId} at or beyond ${position}`,
+        Promise.all([
+          returned.at(check),
+          cli.at(check),
+          phoneHead(phone, { answered: approval.todoRequestId, atLeast: position }),
+        ]),
+      );
+      if (reader.head.through === terminal.head.through && reader.head.through === p.head.through)
+        break;
+      position = [reader.head.through, terminal.head.through, p.head.through].reduce((a, b) =>
+        BigInt(a) > BigInt(b) ? a : b,
+      );
+    }
     const head = reader.head.through;
-    const [terminal, p] = await Promise.all([
-      cli.at((r) => r.head.through === head && check(r)),
-      phoneHead(phone, { through: head }),
-    ]);
+    expect(BigInt(head)).toBeGreaterThan(BigInt(cached.through));
     for (const r of [reader, terminal]) {
       expect(r.answers).toContainEqual(question);
       expect(r.answers).toContainEqual(approval);
@@ -465,6 +557,9 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
         installed: head,
         desktop: reader.connectionId,
         cli: terminal.connectionId,
+        cliSubscription: terminal.subscriptionId,
+        desktopLastObserved: lastDesktopHead,
+        desktopResumeFrom: cached.through,
         phone: p.connectionId,
         desktopSubmissions: phoneCommands.length,
         ordinary: turns.length,

@@ -37,6 +37,17 @@ export async function within<T>(promise: Promise<T>, ms: number, description: st
     clearTimeout(timeout);
   }
 }
+export function captureStderr(stream: ReadableStream<Uint8Array>) {
+  let tail = "";
+  const drained = (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of stream)
+      tail = (tail + decoder.decode(chunk, { stream: true })).slice(-8192);
+    tail = (tail + decoder.decode()).slice(-8192);
+    return tail;
+  })();
+  return { tail: () => tail, drained };
+}
 export async function terminate(child: Bun.Subprocess, requestStop = () => child.kill("SIGTERM")) {
   if (child.exitCode === null && child.signalCode === null) {
     try {

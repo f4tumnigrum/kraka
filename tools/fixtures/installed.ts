@@ -15,7 +15,7 @@ import {
   EnvironmentIdentitySchema,
   DevicePrincipalSchema,
 } from "@kraka/protocol";
-import { terminate, within } from "./replay-process";
+import { captureStderr, terminate, within } from "./replay-process";
 import { buildArtifact, hostTarget, installArtifact, readArtifact } from "../package-release";
 import manifest from "../../packages/daemon/package.json";
 
@@ -97,7 +97,7 @@ export function startInstalled(site: Installation, mode?: string) {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const errors = new Response(child.stderr).text();
+  const { tail: stderrTail, drained: errors } = captureStderr(child.stderr);
   const lines = createInterface({ input: Readable.fromWeb(child.stdout), crlfDelay: Infinity });
   const reader = lines[Symbol.asyncIterator]();
   async function next<S extends v.GenericSchema>(schema: S): Promise<v.InferOutput<S>> {
@@ -169,6 +169,7 @@ export function startInstalled(site: Installation, mode?: string) {
   }
   return {
     child,
+    stderrTail,
     next,
     ready,
     register,

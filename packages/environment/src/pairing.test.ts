@@ -13,6 +13,7 @@ import {
   PairingChallengeSchema,
   PrincipalIdSchema,
   AccessGrantIdSchema,
+  CommandIdSchema,
   PAIRING_LIMITS,
 } from "@kraka/protocol";
 import {
@@ -178,6 +179,7 @@ test("the SQLite writer commits the winning cancellation or exchange once, inclu
     );
     const owner = store.device(ownerId);
     if (!owner) throw Error("Owner not registered");
+    const ownerGeneration = store.visibilityGeneration(owner.principal.id);
     const actor = { kind: "device" as const, deviceId: ownerId, principalId: owner.principal.id };
     store.provisionProject(v.parse(ProjectIdSchema, "project"));
     const { authority: _authority, currentKey: _currentKey, ...intent } = consume;
@@ -233,6 +235,19 @@ test("the SQLite writer commits the winning cancellation or exchange once, inclu
     expect(won?.state.kind).toBe("consumed");
     expect(cancelled).toMatchObject({ kind: "rejected", reason: "alreadyExchanged" });
     expect(counts()).toEqual({ devices: 2, grants: 10, changes: 10 });
+    if (won?.state.kind !== "consumed" || !won.state.grants[0]) throw Error("Missing paired grant");
+    const grant = won.state.grants[0];
+    const beforeRevoke = store.visibilityGeneration(grant.principalId);
+    expect(store.visibilityGeneration(owner.principal.id)).toBe(ownerGeneration);
+    expect(
+      store.command(owner, {
+        method: "access.revoke",
+        commandId: v.parse(CommandIdSchema, crypto.randomUUID()),
+        payload: { grantId: grant.id },
+      }).kind,
+    ).toBe("accepted");
+    expect(store.visibilityGeneration(grant.principalId)).not.toBe(beforeRevoke);
+    expect(store.visibilityGeneration(owner.principal.id)).toBe(ownerGeneration);
   } finally {
     db.close();
   }

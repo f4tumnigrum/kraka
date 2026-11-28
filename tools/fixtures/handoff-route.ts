@@ -18,6 +18,12 @@ export async function handoffRoute(
   const base = new URL(upstream);
   const protocol = new URL(base.origin);
   protocol.protocol = "ws:";
+  let stderr = "";
+  function report(event: string, error?: Error) {
+    const msg = `handoff route: ${event}${error ? " (" + error.message + ")" : ""}\n`;
+    stderr = (stderr + msg).slice(-8192);
+    process.stderr.write(msg);
+  }
   const server = createServer(
     { cert: await readFile(options.cert), key: await readFile(options.key) },
     async (req, res) => {
@@ -32,7 +38,8 @@ export async function handoffRoute(
           "Content-Type": response.headers.get("content-type") ?? "text/plain",
         });
         res.end(await response.text());
-      } catch {
+      } catch (e) {
+        report("HTTP upstream failure", e instanceof Error ? e : undefined);
         res.writeHead(502);
         res.end();
       }
@@ -45,6 +52,7 @@ export async function handoffRoute(
     epoch: string;
     messageId?: string;
   }>();
+  server.on("tlsClientError", (e) => report("TLS client error", e));
   let dropped = false;
   server.on("upgrade", (req, stream, head) => {
     const requested = req.headers["sec-websocket-protocol"];
@@ -53,16 +61,26 @@ export async function handoffRoute(
       !req.url?.startsWith("/ws?nonce=") ||
       (requested !== "kraka.flow.v1" && requested !== "kraka.thread.v1")
     ) {
+      report("WebSocket upgrade rejected");
       stream.destroy();
       return;
     }
     const dest = new WebSocket(protocol.origin + req.url, requested, { origin: options.origin });
-    stream.on("error", () => dest.terminate());
-    dest.on("error", () => stream.destroy());
+    stream.on("error", (e) => {
+      report("upgrade socket error", e);
+      dest.terminate();
+    });
+    dest.on("error", (e) => {
+      report("upstream WebSocket error", e);
+      stream.destroy();
+    });
     dest.once("open", () =>
       sockets.handleUpgrade(req, stream, head, (ws) => {
         const commands = new Set<string>();
-        ws.on("error", () => dest.terminate());
+        ws.on("error", (e) => {
+          report("phone WebSocket error", e);
+          dest.terminate();
+        });
         ws.on("close", () => dest.terminate());
         dest.on("close", () => ws.terminate());
         ws.on("message", (wire, binary) => {
@@ -93,6 +111,7 @@ export async function handoffRoute(
               });
               if (!dropped) {
                 dropped = true;
+                report("injected input receipt loss");
                 ws.terminate();
                 dest.terminate();
                 return;
@@ -108,6 +127,7 @@ export async function handoffRoute(
   await once(server, "listening");
   return {
     inputs,
+    stderrTail: () => stderr,
     async close() {
       for (const ws of sockets.clients) ws.terminate();
       sockets.close();
