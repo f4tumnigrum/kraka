@@ -56,7 +56,6 @@ export class WriterExecutorRegistry implements ExecutorRegistry {
       if (value === null) throw new Error("Missing scoped credential");
       env[name] = value;
     }
-    if (r.driver.configurationRoot) env.CODEX_HOME = r.driver.configurationRoot;
     return env;
   }
   current(id: ExecutorInstanceId) {
@@ -84,6 +83,7 @@ export class WriterExecutorRegistry implements ExecutorRegistry {
   configure(
     ctx: FirstSendContext,
     payload: Extract<SignedRequest, { method: "executor.configure" }>["payload"],
+    supports: (registration: typeof payload.registration) => boolean,
   ): CommandReceipt {
     return recordCommand(
       ctx,
@@ -94,7 +94,7 @@ export class WriterExecutorRegistry implements ExecutorRegistry {
         const { registration: r, expectedVersion } = payload;
         const reject = (kind: "notFound" | "idConflict" | "unsupported") =>
           ({ kind: "rejected", commandId: ctx.commandId, failure: { kind } }) as const;
-        if (r.family !== "codex" || r.driver.endpoint !== null) return reject("unsupported");
+        if (!supports(r)) return reject("unsupported");
         const allowed = (b: CredentialBinding) =>
           b.ownerId === ctx.actor.id && this.secret(r.instanceId, b) !== null;
         if (
