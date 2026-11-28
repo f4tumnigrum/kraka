@@ -14,7 +14,7 @@
   },
   "exports": "./src/index.ts",
   "scripts": {
-    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-codex.js"
+    "build": "bun build --target=bun src/index.ts --outfile ../../.build/packages/adapter-codex.js"
   },
   "dependencies": {
     "valibot": "1.5.0",
