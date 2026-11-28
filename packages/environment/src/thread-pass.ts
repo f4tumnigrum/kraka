@@ -1,3 +1,4 @@
+import { isTerminalRoundPhase } from "@kraka/protocol";
 import {
   comparePositions,
   keyString,
@@ -168,8 +169,7 @@ function threadWindow(threadId: ThreadId, rows: readonly ReadRow[], requested: r
       row.objectType === "thread" ||
       (row.objectType === "todoRequest" &&
         (row.value.state.kind === "open" || requested.includes(row.value.id))) ||
-      (row.objectType === "round" &&
-        !["finished", "endedEarly", "notDelivered"].includes(row.value.attempt.phase.kind))
+      (row.objectType === "round" && !isTerminalRoundPhase(row.value.attempt.phase))
     )
       add(item);
   }

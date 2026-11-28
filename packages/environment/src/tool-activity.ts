@@ -1,3 +1,4 @@
+import { promoteSessionObservation } from "./session-observations";
 import type {
   EnvironmentId,
   ObjectVersion,
@@ -270,6 +271,32 @@ export function recordAdapterActivity(
 ) {
   const p = event.payload;
   if (!matchesAdapterEvent(binding, event)) throw Error("Foreign activity handle");
+  if (p.kind === "sessionObservationLinked") {
+    if (p.attemptId !== binding.attemptId) throw Error("Foreign observation attempt");
+    const source = {
+      instanceId: event.instanceId,
+      nativeSessionId: event.sessionId,
+      epoch: event.epoch,
+      ...p.observation,
+    };
+    let refused: "wrongAttempt" | "idConflict" | undefined;
+    const changed = journal.saveObservation(binding.threadId, source, (prior) => {
+      if (!prior) {
+        refused = "wrongAttempt";
+        return null;
+      }
+      const linked = promoteSessionObservation(prior, {
+        kind: "attempt",
+        source,
+        attemptId: p.attemptId,
+        relationship: p.relationship,
+      });
+      if (linked.kind === "ok") return linked.value;
+      refused = linked.reason === "idConflict" ? "idConflict" : "wrongAttempt";
+      return prior;
+    });
+    return refused ?? changed;
+  }
   if (p.kind === "sessionObservation") {
     const { kind, sourceId, ...payload } = p;
     const source = {

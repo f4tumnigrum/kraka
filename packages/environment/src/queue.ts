@@ -1,3 +1,4 @@
+import { isTerminalRoundPhase } from "@kraka/protocol";
 import * as v from "valibot";
 import {
   QueuePositionSchema,
@@ -48,12 +49,7 @@ export type QueueEvent =
 export function firstPending(rows: readonly QueueRow[]) {
   let head: QueueRow | undefined;
   for (const row of rows) {
-    switch (row.attempt.phase.kind) {
-      case "notDelivered":
-      case "endedEarly":
-      case "finished":
-        continue;
-    }
+    if (isTerminalRoundPhase(row.attempt.phase)) continue;
     if (!head || BigInt(row.place) < BigInt(head.place)) head = row;
   }
   return head;
@@ -233,7 +229,7 @@ export function planQueuedChange(
     const { roundIds, baseVersion } = request.payload;
     if (baseVersion !== queue.version) return conflict(null, queue.version, "changed");
     const pending = queue.rows
-      .filter((row) => !["finished", "endedEarly", "notDelivered"].includes(row.attempt.phase.kind))
+      .filter((row) => !isTerminalRoundPhase(row.attempt.phase))
       .sort((a, b) => (BigInt(a.place) < BigInt(b.place) ? -1 : 1));
     // Only waiting rows in the same uninterrupted group may trade places.
     const groups = new Map<Round["id"], number>();

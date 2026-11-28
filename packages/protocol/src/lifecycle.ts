@@ -1,3 +1,4 @@
+import { PermissionModeSchema } from "./access";
 import * as v from "valibot";
 import {
   AttemptIdSchema,
@@ -25,6 +26,14 @@ export const NativeRootSchema = v.strictObject({
   sessionId: NativeSessionIdSchema,
   id: NativeRootTurnIdSchema,
   beganAt: v.nullable(time),
+  toolPolicy: v.optional(
+    v.strictObject({
+      selectedMode: PermissionModeSchema,
+      effectiveMode: PermissionModeSchema,
+      supportedModes: v.array(PermissionModeSchema),
+      enforcement: v.literal("adapter"),
+    }),
+  ),
 });
 /** These are independently observed UTC Unix milliseconds. Unknown evidence is reserved for older recordings. */
 export const RoundEndTimeEvidenceSchema = v.variant("source", [
@@ -90,7 +99,31 @@ export const RoundPhaseSchema = v.variant("kind", [
     reason: v.string(),
     lateReceipt: v.nullable(ReceiptProofSchema),
   }),
+  v.strictObject({ kind: v.literal("handled"), handledAt: time }),
+  v.strictObject({
+    kind: v.literal("interrupted"),
+    ...executing,
+    observedAt: time,
+    failure: v.variant("kind", [
+      v.strictObject({
+        kind: v.literal("unexpectedExit"),
+        code: v.nullable(v.pipe(v.number(), v.safeInteger())),
+        signal: v.nullable(v.string()),
+      }),
+      v.strictObject({ kind: v.literal("transportError"), message: v.string() }),
+      v.strictObject({ kind: v.literal("protocolError"), message: v.string() }),
+    ]),
+  }),
 ]);
+export function isTerminalRoundPhase(phase: RoundPhase) {
+  return (
+    phase.kind === "finished" ||
+    phase.kind === "endedEarly" ||
+    phase.kind === "notDelivered" ||
+    phase.kind === "handled" ||
+    phase.kind === "interrupted"
+  );
+}
 export const RoundAttemptSchema = v.strictObject({ ...ticket, phase: RoundPhaseSchema });
 const liveTarget = { sessionId: NativeSessionIdSchema, requestId: NativeRequestIdSchema };
 const questions = v.tupleWithRest([MessageIdSchema], MessageIdSchema);

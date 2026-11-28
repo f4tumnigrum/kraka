@@ -427,9 +427,15 @@ export type AdapterEventPayload =
       endTimeEvidence: RoundEndTimeEvidence;
       outcome: RoundEnd;
     }
+  | {
+      kind: "sessionObservationLinked";
+      attemptId: AttemptId;
+      observation: { eventId: string; sourceId: string };
+      relationship: NativeObservationRelationship;
+    }
   | ({ kind: "sessionObservation"; sourceId: string } & ExecutorSessionObservationPayload)
   | { kind: "contextOperation"; result: ContextOperationObservation }
-  | { kind: "sessionLost"; failure: AdapterFailure };
+  | { kind: "sessionLost"; failure: AdapterFailure; observedAt?: number };
 export type AdapterEventEnvelope<F extends AdapterFamily = AdapterFamily> = AdapterInstance<F> & {
   sessionId: NativeSessionId;
   epoch: number;

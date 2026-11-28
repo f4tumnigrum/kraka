@@ -80,6 +80,8 @@ const [
   finished,
   endedEarly,
   notDelivered,
+  handled,
+  interrupted,
 ] = RoundPhaseSchema.options;
 const observation = {
   root: v.strictObject({
@@ -104,6 +106,8 @@ const phase = v.variant("kind", [
   v.strictObject({ ...closing.entries, ...observation }),
   v.strictObject({ ...finished.entries, ...observation }),
   v.strictObject({ ...endedEarly.entries, ...observation }),
+  handled,
+  interrupted,
   v.strictObject({
     ...notDelivered.entries,
     lateReceipt: v.optional(notDelivered.entries.lateReceipt, null),

@@ -135,7 +135,7 @@ export class ThreadJournal {
   saveObservation(
     threadId: ThreadId,
     source: ExecutorSessionObservation["source"],
-    change: (old: ExecutorSessionObservation | null) => ExecutorSessionObservation,
+    change: (old: ExecutorSessionObservation | null) => ExecutorSessionObservation | null,
   ) {
     const updated = this.db
       .transaction(() => {
@@ -155,7 +155,7 @@ export class ThreadJournal {
           ? v.parse(ExecutorSessionObservationSchema, JSON.parse(previous.payload).value)
           : null;
         const next = change(prior);
-        if (prior === next) return false;
+        if (!next || prior === next) return false;
         this.record([{ objectType: "timelineItem", value: next }]);
         return true;
       })

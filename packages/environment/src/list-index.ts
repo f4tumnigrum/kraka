@@ -1,3 +1,4 @@
+import { isTerminalRoundPhase } from "@kraka/protocol";
 import { decodeJournalRow } from "./journal-row";
 import type { Database } from "bun:sqlite";
 import * as v from "valibot";
@@ -73,10 +74,7 @@ export class ListIndex {
         .run(JSON.stringify(row.value), source);
     if (row.objectType !== "round") return;
     const { id, attempt } = row.value;
-    const terminal =
-      attempt.phase.kind === "finished" ||
-      attempt.phase.kind === "endedEarly" ||
-      attempt.phase.kind === "notDelivered";
+    const terminal = isTerminalRoundPhase(attempt.phase);
     const lifecycle = this.db
       .query<{ thread: string | null }, [string]>("SELECT thread FROM list_sources WHERE source=?")
       .get(source)?.thread;

@@ -59,6 +59,9 @@ function roundKind(activity: Activity, unread: boolean, ordinary: boolean): Atte
     case "endedEarly":
       if (phase.reason === "unknown") return "unknown";
       return (phase.reason === "failed" || phase.reason === "lost") && unread ? "failure" : "ready";
+    case "interrupted":
+      return unread ? "failure" : "ready";
+    case "handled":
     case "notDelivered":
       return "ready";
     default:

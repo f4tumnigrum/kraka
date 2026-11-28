@@ -1,3 +1,4 @@
+import { isTerminalRoundPhase } from "@kraka/protocol";
 import type { RoundCaptures } from "./capture-store";
 import type { TodoLedger } from "./todo-ledger";
 import type { DiffCleanup } from "./diff-cleanup";
@@ -275,7 +276,7 @@ export class FirstSendStore {
         { captureThread: round.threadId },
       );
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(saved), round.id]);
-      if (phase.kind === "finished" || phase.kind === "endedEarly" || phase.kind === "notDelivered")
+      if (isTerminalRoundPhase(phase))
         this.db.run("DELETE FROM capture_intents WHERE round=? AND attempt=?", [
           round.id,
           saved.attempt.attemptId,

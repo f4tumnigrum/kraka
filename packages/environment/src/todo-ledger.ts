@@ -1,3 +1,4 @@
+import { isTerminalRoundPhase } from "@kraka/protocol";
 import * as v from "valibot";
 import {
   TodoRequestSchema,
@@ -89,7 +90,8 @@ export class TodoLedger {
       !round ||
       round.threadId !== todo.threadId ||
       round.attempt.attemptId !== native.attemptId ||
-      ["closing", "finished", "endedEarly", "notDelivered"].includes(round.attempt.phase.kind)
+      round.attempt.phase.kind === "closing" ||
+      isTerminalRoundPhase(round.attempt.phase)
     )
       return false;
     const frozen = frozenInput(this.store, round.attempt.deliveryId);

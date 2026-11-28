@@ -141,7 +141,7 @@ export const ExecutorTurnUpdateSchema = v.variant("kind", [
     effectiveMode: PermissionModeSchema,
     effectivePolicy: v.optional(CodexEffectivePolicySchema),
     supportedModes: v.array(PermissionModeSchema),
-    enforcement: v.literal("native"),
+    enforcement: v.picklist(["native", "adapter"]),
   }),
   v.strictObject({
     kind: v.literal("tool.started"),
