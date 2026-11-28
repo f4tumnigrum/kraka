@@ -65,12 +65,25 @@ export async function launchInstalledDesktop(input: {
       processHandle.exitCode !== null
         ? Promise.resolve()
         : once(processHandle, "exit").then(() => {});
-  async function quit() {
-    if (processHandle.exitCode === null && processHandle.signalCode === null)
-      await app.close().catch((e) => {
-        if (processHandle.exitCode === null && processHandle.signalCode === null) throw e;
-      });
-    await within(exit, 10000, "Electron exit");
+  let quitting: Promise<void> | undefined,
+    viewerClosed = false;
+  function quit() {
+    return (quitting ??= (async () => {
+      if (
+        (!viewerClosed || process.platform === "darwin") &&
+        processHandle.exitCode === null &&
+        processHandle.signalCode === null
+      ) {
+        await app.close().catch(async (error: unknown) => {
+          try {
+            await within(exit, 10000, "Electron shutdown");
+          } catch {
+            throw error;
+          }
+        });
+      }
+      await within(exit, 10000, "Electron exit");
+    })());
   }
   try {
     const page = await app.firstWindow(),
@@ -79,13 +92,15 @@ export async function launchInstalledDesktop(input: {
     const read = async () =>
       v.parse(installedRecord, JSON.parse((await output.getAttribute("data-installed")) ?? "null"));
     const first = await read();
-    const main = await app.evaluate(() => ({
+    const main = await app.evaluate(({ app }) => ({
+      browserPid: app.getAppMetrics().find((metric) => metric.type === "Browser")?.pid,
       pid: process.pid,
       electron: process.versions.electron,
       chromium: process.versions.chrome,
     }));
     if (
-      main.pid !== processHandle.pid ||
+      main.pid !== main.browserPid ||
+      (process.platform !== "win32" && main.pid !== processHandle.pid) ||
       first.environmentId !== environmentId ||
       first.threadId !== threadId ||
       main.electron !== "38.0.0" ||
@@ -143,6 +158,7 @@ export async function launchInstalledDesktop(input: {
           setImmediate(() => BrowserWindow.getAllWindows()[0]?.close());
         });
         await closed;
+        viewerClosed = true;
       },
     };
   } catch (e) {

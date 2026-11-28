@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
 import {
   readInstancePublication,
+  inspectInstancePublication,
   runWorktreeWorker,
   worktreeWorkerCommand,
   runReplayTurn,
@@ -237,7 +238,10 @@ if ((typeof KRAKA_DAEMON_ENTRY !== "undefined" && KRAKA_DAEMON_ENTRY) || import.
       });
       if (!values["state-dir"] || !values.json)
         throw Error("Expected instance --state-dir DIR --json");
-      console.log(JSON.stringify(await readInstancePublication(resolve(values["state-dir"]))));
+      const observed = await inspectInstancePublication(resolve(values["state-dir"]));
+      if (observed === "unconfirmed")
+        throw Error("Writer present or inaccessible; ownership unconfirmed");
+      console.log(JSON.stringify(observed === "stopped" ? null : observed));
     } else if (command === "daemon") {
       const { values } = parseArgs({
         args,

@@ -13,7 +13,7 @@ import {
   RouteIdSchema,
   type Route,
 } from "@kraka/protocol";
-import type { ClientPlatformCapabilities } from "@kraka/client-runtime";
+import { readDeviceSetting, type ClientPlatformCapabilities } from "@kraka/client-runtime";
 import { observeNativeThread, type InstalledThread } from "@kraka/client-runtime/native-thread";
 import { dispatchDesktop, type DesktopMethod } from "./bridge";
 import { openDesktopProfile } from "./profile";
@@ -51,6 +51,7 @@ async function launch() {
   const window = new BrowserWindow({
     show: false,
     webPreferences: {
+      defaultFontSize: readDeviceSetting(await profile.deviceSettings.read("fontSize")).value,
       preload: join(appDir, "preload.cjs"),
       sandbox: true,
       contextIsolation: true,

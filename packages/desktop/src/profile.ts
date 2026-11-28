@@ -15,6 +15,8 @@ import { signP256, verifyP256 } from "@kraka/protocol/web-crypto";
 import {
   emptyThreadCache,
   sameEnvironmentIdentity,
+  deviceSettingsStore,
+  sqliteSettingsStorage,
   claimReminder,
   reminderKeyId,
   updateReminder,
@@ -77,6 +79,11 @@ export async function openDesktopProfile(
     }
   })();
   const local = openLocalInputs(join(directory, "state.sqlite"));
+  const settingsDb = new DatabaseSync(join(directory, "settings.sqlite"));
+  const deviceSettings = deviceSettingsStore(
+    sqliteSettingsStorage(settingsDb),
+    registration.deviceId,
+  );
   const namespace = canonicalJson(["thread", environmentId, registration.principal.id, threadId]);
   const parse = (bytes: Uint8Array | null | undefined): ThreadCache =>
     bytes ? JSON.parse(new TextDecoder().decode(bytes)) : emptyThreadCache();
@@ -138,6 +145,7 @@ export async function openDesktopProfile(
   }
   return {
     registration,
+    deviceSettings,
     reminders,
     async saveLocalRoute(route: Route) {
       await local.state.transact([catalogKey], ([data]) => {
@@ -182,6 +190,12 @@ export async function openDesktopProfile(
     store,
     state: local.state,
     outbox: local.outbox,
-    close: local.close,
+    close() {
+      try {
+        local.close();
+      } finally {
+        settingsDb.close();
+      }
+    },
   };
 }
