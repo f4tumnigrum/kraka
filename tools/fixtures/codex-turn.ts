@@ -90,7 +90,7 @@ export async function codexFixture(
     profile.capture,
   );
   try {
-    const { instance } = await launch.ready();
+    const { publication: instance } = await launch.ready();
     const events = new Journal<ExecutorTurnUpdate>();
     const updates = events.items;
     const client = await connectFirstSend(stateDir, instance, (e) => {

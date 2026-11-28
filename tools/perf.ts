@@ -50,6 +50,7 @@ function hostInfo() {
 export interface ReportBase extends ProbeSpec {
   metric: Metric;
   variant?:
+    | "installed"
     | "access.listSessions"
     | "tool.readActivity"
     | "worktree.recovery"
@@ -190,7 +191,12 @@ async function measureSuite(base: ReportBase, root: string) {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      ...(base.role === "baseline" && { KRAKA_TEST_ARCHIVE: undefined }),
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+    },
   });
   const [out, err, ended] = await Promise.all([
     new Response(child.stdout).text(),
@@ -287,6 +293,7 @@ async function checkCommandSurface(root: string) {
         "Unknown command, expected replay or access",
         "Unknown command, expected replay, start or access",
         "Unknown command, expected replay, start, access or daemon",
+        "Unknown command, expected start, identity, access, daemon or replay",
       ].includes(diagnostic)
     )
       throw new Error(`Cannot confirm command surface (exit ${r.exitCode}): ${r.stderr}`);
@@ -329,9 +336,14 @@ export function budgetWorkloads(metrics: readonly Metric[]): Workload[] {
             { metric, variant: "access.listSessions" },
             { metric },
             { metric, variant: "browserTLS" },
+            { metric, variant: "installed" },
           ]
         : metric === "P2" || metric === "P9"
-          ? [{ metric }, { metric, variant: "browserTLS" }]
+          ? [
+              { metric },
+              { metric, variant: "browserTLS" },
+              ...(metric === "P2" ? [{ metric, variant: "installed" } as const] : []),
+            ]
           : metric === "P7"
             ? [
                 { metric },
@@ -390,7 +402,29 @@ export async function prepareBudget(root: string, role: Role) {
     let report: ProbeReport;
     try {
       if (setupError) throw setupError;
-      if (metric === "A1") report = await measureClosure(base, root);
+      if (
+        variant === "installed" ||
+        (metric === "P8" && (await Bun.file(join(root, "tools/package-release.ts")).exists()))
+      ) {
+        base.endpoint =
+          metric === "P8" ? "release archive" : "installed foreground daemon and authenticated CLI";
+        if (metric !== "P8")
+          base.workload =
+            metric === "P2"
+              ? "Original installed daemon idle 60 s after signed access.listSessions acceptance"
+              : "Ten installed fresh/reused pairs from native spawn through signed access.listSessions acceptance";
+        if (!(await Bun.file(join(root, "tools/package-release.ts")).exists())) {
+          if (role === "candidate" && durable) throw Error("Missing installed release packager");
+          report = unavailable(base, "Source-only revision has no comparable release archive");
+        } else {
+          const { measureInstalled } = await import("./measure-installed");
+          report = measured(
+            base,
+            (await measureInstalled(base, root, nextBlock)) as Record<string, number>,
+            metric === "P2" && process.platform !== "darwin",
+          );
+        }
+      } else if (metric === "A1") report = await measureClosure(base, root);
       else if (metric === "A2") report = await measureSuite(base, root);
       else if (variant === "tool.readActivity") {
         base.workload =
@@ -479,7 +513,9 @@ export async function prepareBudget(root: string, role: Role) {
             "Parent foreground listener does not accept TLS certificate options",
           );
         } else {
-          const { measureBrowser } = await import("./measure-browser");
+          const { measureBrowser }: typeof import("./measure-browser") = await import(
+            join(root, "tools/measure-browser.ts")
+          );
           const counts = await measureBrowser(base, root, metric, nextBlock);
           report = measured(base, counts, metric === "P2" && process.platform !== "darwin");
         }
@@ -568,7 +604,9 @@ export async function prepareBudget(root: string, role: Role) {
           metric === "P9" ||
           (metric === "P10" && inputEndpoint))
       ) {
-        const { measureFirstSend } = await import("./measure-first-send");
+        const { measureFirstSend }: typeof import("./measure-first-send") = await import(
+          join(root, "tools/measure-first-send.ts")
+        );
         const series = await measureFirstSend(base, root, metric, nextBlock);
         report = measured(base, series, metric === "P2" && process.platform !== "darwin");
       } else if (metric === "P1" || metric === "P2") {

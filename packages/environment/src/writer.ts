@@ -15,6 +15,7 @@ import type { HostInstanceId } from "@kraka/protocol";
 import * as v from "valibot";
 import { InstancePublicationSchema, observeWriter, type InstancePublication } from "./migrations";
 
+declare const KRAKA_RELEASE_VERSION: string;
 function writeAtomic(path: string, value: string) {
   const temp = `${path}.${crypto.randomUUID()}`;
   try {
@@ -34,7 +35,10 @@ function proof(key: string, nonce: string, instance: InstancePublication) {
     .update(JSON.stringify(instance))
     .digest("hex");
 }
-export async function confirmWriter(stateDirectory: string, deadline: number, idle = false) {
+export function confirmWriter(stateDirectory: string, deadline: number, idle = false) {
+  return verifyPublication(stateDirectory, Math.min(deadline, performance.now() + 250), idle);
+}
+async function verifyPublication(stateDirectory: string, deadline: number, idle = false) {
   try {
     const { instance, proofKey } = v.parse(
       ownerSchema,
@@ -44,7 +48,7 @@ export async function confirmWriter(stateDirectory: string, deadline: number, id
     if (
       url.hostname !== "127.0.0.1" ||
       url.protocol !== "ws:" ||
-      url.pathname !== "/commands" ||
+      !["/commands", "/ws"].includes(url.pathname) ||
       instance.stateDirectory !== stateDirectory
     )
       return null;
@@ -53,7 +57,7 @@ export async function confirmWriter(stateDirectory: string, deadline: number, id
     if (remaining <= 0) return null;
     const response = await fetch(`http://${url.host}/instance/${nonce}${idle ? "?idle" : ""}`, {
       redirect: "error",
-      signal: AbortSignal.timeout(Math.min(remaining, 250)),
+      signal: AbortSignal.timeout(remaining),
     });
     if (!response.ok) return null;
     const answer = await response.text();
@@ -72,6 +76,22 @@ export async function confirmWriter(stateDirectory: string, deadline: number, id
     return Bun.deepEquals(current.instance, instance) ? instance : null;
   } catch {
     return null;
+  }
+}
+export async function readInstancePublication(stateDir: string) {
+  let db: Database | undefined;
+  let directory: string | undefined;
+  try {
+    directory = realpathSync.native(stateDir);
+    if (!existsSync(join(directory, "instance.json"))) return null;
+    db = new Database(join(directory, "writer.lock.sqlite"), { readonly: true });
+    db.query("SELECT count(*) FROM sqlite_master").get();
+    return null;
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "SQLITE_BUSY")) return null;
+    return directory ? verifyPublication(directory, performance.now() + 10_000) : null;
+  } finally {
+    db?.close(true);
   }
 }
 export async function openWriter(stateDir: string, instanceId: HostInstanceId, deadline: number) {
@@ -105,7 +125,12 @@ export async function openWriter(stateDir: string, instanceId: HostInstanceId, d
         continue;
       }
       const environmentId = directoryEnvironmentId(stateDirectory);
-      const identity = { instanceId, environmentId, stateDirectory, version: "0.1.0" };
+      const identity = {
+        instanceId,
+        environmentId,
+        stateDirectory,
+        version: typeof KRAKA_RELEASE_VERSION === "string" ? KRAKA_RELEASE_VERSION : "0.1.0",
+      };
       const decision = observeWriter(identity, { kind: "acquired", owner: identity });
       if (decision.kind !== "writer") throw new Error("Cannot confirm directory writer");
       let published: InstancePublication | null = null;

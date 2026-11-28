@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { openReceiptReader, readRound } from "@kraka/environment";
 import { finishedCapture } from "./fixtures/first-send-client";
@@ -42,6 +43,19 @@ async function scenario(profile: Profile, run: (f: F) => Promise<void>) {
     }
   });
 }
+async function inspectStoppedWriter(
+  f: F,
+  inspect: (db: ReturnType<typeof openReceiptReader>) => void,
+) {
+  await f.close();
+  expect(existsSync(join(f.stateDir, "instance.json"))).toBe(false);
+  const db = openReceiptReader(f.stateDir);
+  try {
+    inspect(db);
+  } finally {
+    db.close(true);
+  }
+}
 async function configure(f: F) {
   const r = accepted((await f.configure()).receipt, "executorConfigured");
   expect(String(r.version)).toBe("1");
@@ -73,16 +87,13 @@ test("1. signed configuration persists scoped references and refresh redacts var
     expect(f.ledger.rows()).toContainEqual(
       expect.objectContaining({ event: "spawn", present: true, cwd: f.cwd }),
     );
-    const db = openReceiptReader(f.stateDir);
-    try {
+    await inspectStoppedWriter(f, (db) => {
       const row = db.query<{ data: string }, []>("SELECT data FROM executor_registrations").get();
       expect(JSON.parse(row?.data ?? "null")).toMatchObject({
         version: "1",
         credential: f.registration.credential,
       });
-    } finally {
-      db.close();
-    }
+    });
   });
 }, 60000);
 test("2. installation, compatibility and existing-login probe; interactive login belongs to S41", async () => {
@@ -214,9 +225,7 @@ test("4. effective ask policy, early root, original tool and assistant frames, a
     ]);
     expect(f.ledger.rows().filter((r) => r.event === "root")).toHaveLength(1);
     const captureId = await finishedCapture(f.client, ids);
-    await f.stop();
-    const db = openReceiptReader(f.stateDir);
-    try {
+    await inspectStoppedWriter(f, (db) => {
       expect(readRound(db, ids.roundId)?.attempt.phase).toMatchObject({
         kind: "finished",
         captureId,
@@ -228,9 +237,7 @@ test("4. effective ask policy, early root, original tool and assistant frames, a
           environmentObservedAt: expect.any(Number),
         },
       });
-    } finally {
-      db.close();
-    }
+    });
   });
   await scenario({ kind: "history" }, async (f) => {
     await configure(f);

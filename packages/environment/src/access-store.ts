@@ -184,6 +184,14 @@ export class AccessStore implements PairingStore {
       this.now() < actor.deviceKey.state.expiresAt
     );
   }
+  registeredOwner(deviceId: DeviceId, keyId: DeviceKeyId, publicKey: string) {
+    const device = this.device(deviceId);
+    return this.usable(device, keyId) &&
+      device.deviceKey.publicKey === publicKey &&
+      this.isOwner(deviceId)
+      ? device
+      : null;
+  }
   private grants(principal?: PrincipalId) {
     const rows = principal
       ? this.db

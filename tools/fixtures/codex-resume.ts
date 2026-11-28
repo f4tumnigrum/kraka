@@ -201,7 +201,7 @@ async function setup(
       else await f.stop();
       const next = launchWriter(state, root, patch ? "codex" : "codex-cli");
       clean.push(next.stop);
-      const { instance } = await next.ready();
+      const { publication: instance } = await next.ready();
       endpoint = instance.endpoint;
       client = await connectFirstSend(state, instance, (e) => updates.push(e));
       clean.push(client.close);
