@@ -7,7 +7,7 @@ import { probeCodex, selectedModel, type CodexProbe } from "./discovery";
 export const codexFamily: ExecutorFamily = {
   family: "codex",
   supports: (reg) => reg.driver.endpoint === null && !reg.driver.args?.length,
-  async probe(reg, cwd, env) {
+  async probe(reg, cwd, env, scope) {
     const executable = reg.driver.executable ?? "codex";
     if (reg.driver.configurationRoot) env.CODEX_HOME = reg.driver.configurationRoot;
     const launch = {
@@ -17,8 +17,16 @@ export const codexFamily: ExecutorFamily = {
       env,
     };
     const instance = { family: "codex" as const, instanceId: reg.instanceId };
-    async function discover(previous?: CodexProbe): Promise<FamilyProbe> {
-      const probe = await probeCodex(reg, launch, previous);
+    async function discover(previous?: CodexProbe, check = scope): Promise<FamilyProbe> {
+      const probe = await probeCodex(
+        reg,
+        launch,
+        previous,
+        check?.now,
+        check?.authorize,
+        check?.expectedAccount,
+        check?.verifiedCatalog,
+      );
       return {
         ...probe,
         bindingContext: canonicalJson({
@@ -32,11 +40,11 @@ export const codexFamily: ExecutorFamily = {
           cwd,
         }),
         selectModel: (model) => selectedModel(probe.models, model),
-        refresh: () => discover(probe),
+        refresh: (next) => discover(probe, next),
         driver: (epoch) =>
           bindExecutorAdapter(
             instance,
-            createCodexAdapter(instance, launch, probe, epoch),
+            createCodexAdapter(instance, launch, probe, epoch, check?.now),
             (handle, setup) => ({
               requestOpen: (id) => !handle.lost && !handle.closed && handle.callbacks.has(id),
               interrupted() {
