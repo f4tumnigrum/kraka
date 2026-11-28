@@ -126,6 +126,8 @@ export interface FamilyProbe
   > {
   declaration: CapabilityDeclaration;
   retryAt: number;
+  /** Redacted metering identity verified by this family. */
+  quotaAccount?: string | null;
   /** Stable identity for a session resumed after a process restart. */
   bindingContext: string;
   selectModel(selection: Model | null): Model | null;

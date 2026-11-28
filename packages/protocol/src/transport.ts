@@ -1,3 +1,4 @@
+import { QuotaSourceSchema } from "./account-usage";
 import { AppNoteReadSchema } from "./executor-tools";
 import { TextReturnedEventSchema } from "./handoffs";
 import { ContextOperationChangeSchema } from "./context-operations";
@@ -152,6 +153,11 @@ export function matchesAuthorizedConfiguration(
 }
 
 export const ControlMessageSchema = v.union([
+  v.strictObject({
+    kind: v.literal("executor.quotaChanged"),
+    source: QuotaSourceSchema,
+    version: safeCounter,
+  }),
   TerminalGapSchema,
   v.strictObject({
     kind: v.literal("terminal.state"),

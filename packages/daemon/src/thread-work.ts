@@ -1,3 +1,4 @@
+import { AccountQuota, type QuotaOptions } from "./account-quota";
 import { registerRecovery, draining } from "./writer-features/lifecycle";
 import { openAccessHost } from "./access";
 import {
@@ -60,6 +61,8 @@ export type ReplayWriter<H extends object> = {
   confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
 } | null;
 export type WriterLifecycle = {
+  quota?: QuotaOptions;
+  usageCommitted?: (thread: ThreadId, round: RoundId) => void;
   accessHost?: Awaited<ReturnType<typeof openAccessHost>>;
   queueChanged?: (threadId: ThreadId) => void;
   preparation?: PreparationHook;
@@ -93,6 +96,7 @@ export function threadWork<H extends object>(
   lifecycle?: WriterLifecycle,
   stops = new OrdinaryStops(transaction),
 ) {
+  const accountQuota = new AccountQuota(transaction, executors, lifecycle?.quota);
   const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
   const turns = new Map<string, Promise<void>>();
   const controller = new AbortController();
@@ -383,6 +387,9 @@ export function threadWork<H extends object>(
             stops,
             steers,
             ready,
+            lifecycle?.quota?.clock.now,
+            accountQuota,
+            lifecycle?.usageCommitted,
           );
         } else if (replay) {
           await dispatchReplay(
@@ -428,6 +435,7 @@ export function threadWork<H extends object>(
       lifecycle?.settingReply,
       reportPermissions,
       lifecycle?.beforeInputReceipt,
+      accountQuota,
     );
 
   async function startThread(
@@ -502,6 +510,7 @@ export function threadWork<H extends object>(
   timer.unref();
   return {
     openThread,
+    accountQuota,
     startThread,
     schedule,
     resume,
@@ -521,6 +530,7 @@ export function threadWork<H extends object>(
       clearInterval(timer);
       gitStatusCache.close();
       controller.abort();
+      await accountQuota.refreshes.close();
 
       await Promise.allSettled([
         startupRecovery,

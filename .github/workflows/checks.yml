@@ -68,6 +68,29 @@ jobs:
       - run: bun run typecheck
       - name: Run ordinary live suites and verify their groups
         uses: ./.github/actions/live-suites
+      - name: Require all six CAP-CONN-054 cases
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib, xml.etree.ElementTree as ET
+          report = ET.parse(pathlib.Path(os.environ["RUNNER_TEMP"]) / "account-usage" / "live.xml")
+          expected = [
+              "1. A full weekly window (S-AUTO-031)",
+              "2. Failure after a dated success (S-AUTO-029)",
+              "3. Failure on the first read (S-AUTO-030)",
+              "4. Price one actual record (S-AUTO-026)",
+              "5. A quota-limited turn (J-5.5)",
+              "6. A late account observation",
+          ]
+          assert sorted(c.get("name") for c in report.findall(".//testcase")) == expected
+          assert all(report.find(".//" + tag) is None for tag in ("failure", "error", "skipped"))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: account-usage-${{ matrix.os }}
+          path: ${{ runner.temp }}/account-usage/live.xml
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

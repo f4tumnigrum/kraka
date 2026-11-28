@@ -1,5 +1,6 @@
 import * as v from "valibot";
 import { NativeSessionIdSchema, NativeRootTurnIdSchema, NativeItemIdSchema } from "@kraka/protocol";
+import { normalizedTokens, unixSeconds } from "./account-usage";
 import { requestKey, type Callback } from "./requests";
 import type { RoundEnd } from "@kraka/environment";
 
@@ -23,6 +24,7 @@ export class NativeError extends Error {
       | "unsupported",
     message: string,
     readonly code: number | null = null,
+    readonly resetAt: number | null = null,
   ) {
     super(message);
   }
@@ -54,6 +56,7 @@ export function failure(raw: unknown, secrets: readonly string[]) {
         : "operationRejected",
     message,
     typeof err.code === "number" ? err.code : null,
+    code === "usageLimitExceeded" ? unixSeconds(data.resetsAt) : null,
   );
 }
 const turnSchema = v.object({
@@ -81,7 +84,7 @@ export function parseTurn(value: unknown, secrets: readonly string[]) {
       err.reason === "notAuthenticated"
         ? ({ kind: "authentication", message: err.message } as const)
         : err.reason === "usageLimited"
-          ? ({ kind: "usageLimit", resetAt: null } as const)
+          ? ({ kind: "usageLimit", resetAt: err.resetAt } as const)
           : ({ kind: "operationRejected", message: err.message } as const);
     outcome = { reason: "failed", failure: detail, nativeReason: err.message };
   }
@@ -123,6 +126,19 @@ const item = v.variant("type", [
   }),
 ]);
 export function notification(method: string, raw: unknown, secrets: readonly string[]) {
+  if (method === "thread/tokenUsage/updated") {
+    const p = v.parse(
+      v.object({ ...address, tokenUsage: v.object({ last: v.unknown(), total: v.unknown() }) }),
+      raw,
+    );
+    return {
+      method,
+      threadId: p.threadId,
+      turnId: p.turnId,
+      last: normalizedTokens(p.tokenUsage.last),
+      total: normalizedTokens(p.tokenUsage.total),
+    } as const;
+  }
   if (method === "serverRequest/resolved") {
     const p = v.parse(
       v.object({

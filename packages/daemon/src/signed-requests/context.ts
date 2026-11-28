@@ -23,6 +23,9 @@ export type Handler<M extends Request["method"]> = (
 ) => CommandReceipt | null | void;
 export interface RequestContext {
   store: FirstSendStore;
+  accountQuota: import("../account-quota").AccountQuota | undefined;
+  quotaViews: Map<string, () => void>;
+  allowsEnvironmentView(): boolean;
   host: Awaited<ReturnType<typeof openAccessHost>>;
   principal: LocalActor;
   deviceId: Extract<SessionAuthorized["signer"], { kind: "device" }>["deviceId"];

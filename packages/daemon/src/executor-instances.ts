@@ -55,6 +55,10 @@ export class ExecutorInstances {
       (reg) => this.families.get(reg.family)?.supports(reg) ?? false,
     );
   }
+  verified(id: ExecutorInstanceId) {
+    const entry = this.entries.get(id);
+    return entry && entry.reg.version === this.registry.current(id)?.version ? entry : null;
+  }
   forThread(threadId: ThreadId) {
     return this.store.db
       .query<{ instance: string; version: string; model: string }, [string]>(

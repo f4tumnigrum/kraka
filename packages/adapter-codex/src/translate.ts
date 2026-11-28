@@ -1,7 +1,17 @@
 import type { AdapterEventPayload, RoundEnd } from "@kraka/environment";
 import type { AttemptId, DeliveryId, NativeRootTurnId, NativeSessionId } from "@kraka/protocol";
 import type { CodexNativeFrame } from "./native";
+type TokenReport = Extract<CodexNativeFrame, { method: "thread/tokenUsage/updated" }>["last"];
+const categories = [
+  "uncachedInput",
+  "cacheRead",
+  "cacheWrite",
+  "output",
+  "reasoning",
+  "total",
+] as const;
 export type CodexTurnState = {
+  usage?: { round: TokenReport; total: TokenReport; last: TokenReport };
   sessionId: NativeSessionId;
   root: NativeRootTurnId;
   attemptId: AttemptId;
@@ -67,7 +77,48 @@ export function translateCodexFrame(
       }
     }
   } else if (frame.turnId === root && !state.terminal) {
-    if ("delta" in frame) {
+    if (frame.method === "thread/tokenUsage/updated") {
+      const before = state.usage;
+      if (
+        before &&
+        categories.every(
+          (key) => frame.total[key] === before.total[key] && frame.last[key] === before.last[key],
+        )
+      )
+        return { state, events, lookup };
+      const round = { ...frame.last };
+      if (before) {
+        for (const key of categories) {
+          const from = before.total[key],
+            through = frame.total[key],
+            prior = before.round[key];
+          round[key] =
+            from !== null &&
+            through !== null &&
+            prior !== null &&
+            through >= from &&
+            Number.isSafeInteger(prior + through - from)
+              ? prior + (through - from)
+              : null;
+        }
+      }
+      next = { ...state, usage: { round, total: frame.total, last: frame.last } };
+      for (const [scope, counters] of [
+        ["round", round],
+        ["session", frame.total],
+      ] as const) {
+        events.push({
+          kind: "usageUpdated",
+          attemptId,
+          scope,
+          counters,
+          sourceId: scope === "session" ? state.sessionId : root,
+          cost: null,
+          currency: null,
+          priceSource: "unknown",
+        });
+      }
+    } else if ("delta" in frame) {
       if (frame.method === "item/agentMessage/delta" && !state.finals.has(frame.itemId))
         events.push({
           kind: "contentDelta",
