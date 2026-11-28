@@ -31645,6 +31645,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "instanceId": {
           "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "force": {
+          "type": "boolean"
         }
       },
       "required": [

@@ -59,7 +59,7 @@ export class InstanceLogins {
     private readonly db: Database,
     private readonly registration: (id: LoginFlow["instanceId"]) => ExecutorRegistration | null,
   ) {}
-  private load(flow: CommandId) {
+  load(flow: CommandId) {
     const row = this.db
       .query<{ data: string }, [string]>("SELECT data FROM instance_logins WHERE flow=?")
       .get(flow);

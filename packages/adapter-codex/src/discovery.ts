@@ -373,6 +373,9 @@ export async function probeCodex(
   launch: Launch,
   previous?: CodexProbe,
   now = Date.now,
+  authorize = () => true,
+  expectedAccount?: string,
+  verifiedCatalog?: Catalog | null,
 ): Promise<CodexProbe> {
   const attemptedAt = now();
   let authenticationReason: string | null = null;
@@ -414,10 +417,10 @@ export async function probeCodex(
       reg.permission.selected,
     ),
   });
-  if (!reg.enabled) return result();
+  if (!reg.enabled || !authorize()) return result();
   try {
     binaryVersion = await version(launch);
-    if (binaryVersion && Bun.semver.order(binaryVersion, "0.149.0") < 0)
+    if (authorize() && binaryVersion && Bun.semver.order(binaryVersion, "0.149.0") < 0)
       binaryVersion = await version(launch);
     readiness.installed = verified("yes");
   } catch {
@@ -435,10 +438,12 @@ export async function probeCodex(
     compatibilityAdvisory = "unsupported";
   let rpc: CodexConnection | undefined;
   try {
-    rpc = new CodexConnection(launch);
+    if (!authorize()) return result();
+    rpc = new CodexConnection(launch, now, authorize);
     nativeHome = await rpc.initialize();
     supported.add("declareTransport");
     supported.add("negotiateProtocol");
+    if (!authorize()) return result();
     const methods = await basicMethods(launch).catch(() => false as const);
     if (
       methods &&
@@ -460,8 +465,17 @@ export async function probeCodex(
       a.account === null ? (a.requiresOpenaiAuth === false ? "yes" : "no") : "yes",
     );
     supported.add("checkAuthentication");
+    if (
+      expectedAccount !== undefined &&
+      (!a.account || object(a.account).email !== expectedAccount)
+    ) {
+      readiness.authenticated = verified("no");
+      authenticationReason = "Unexpected account";
+      return result();
+    }
     if (readiness.authenticated.state !== "yes") return result();
-    models = await listModels(rpc, now);
+    if (verifiedCatalog === null) throw Error("Model catalog unavailable");
+    models = verifiedCatalog ?? (await listModels(rpc, now));
     supported.add("listModels");
     const model = selectedModel(models, reg.model);
     readiness.model = verified(model ? "yes" : "no");

@@ -29924,6 +29924,9 @@
             },
             "instanceId": {
               "$ref": "#/$defs/ExecutorInstanceId"
+            },
+            "force": {
+              "type": "boolean"
             }
           },
           "required": [

@@ -75,7 +75,7 @@ export class CodexLogins {
         !Bun.deepEquals(active.result.credential, flow.credential)
       )
         throw Error("Unknown login");
-      requireAccess(active.observer.authorize);
+      requireAccess(() => active.observer.authorize("cancel"));
       v.parse(
         v.object({ status: v.literal("canceled") }),
         await active.rpc.request("account/login/cancel", { loginId: req.nativeLoginId }),

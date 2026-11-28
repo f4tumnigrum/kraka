@@ -316,7 +316,7 @@ export function createCodexAdapter(
             ? request.authorize
             : request.verifiedAccount?.authorize) ?? (() => true);
         requireAccess(authorize);
-        rpc = new CodexConnection(launch);
+        rpc = new CodexConnection(launch, now, authorize);
         await rpc.initialize();
         requireAccess(authorize);
         const auth = await checkAccount(rpc, now);

@@ -166,7 +166,7 @@ type Service<C extends AdapterCapability, R extends { kind: string }> = {
 };
 export type LoginObserver = {
   signal: AbortSignal;
-  authorize: () => boolean;
+  authorize: (action?: "cancel") => boolean;
   completed: (nativeLoginId: string, success: boolean) => void;
   disconnected: () => void;
   track: (closed: Promise<void>) => void;

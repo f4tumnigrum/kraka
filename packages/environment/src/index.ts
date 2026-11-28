@@ -12,7 +12,7 @@ export * from "./executor-bindings";
 export * from "./executor-family";
 export type { FirstSendContext } from "./command-receipts";
 export type { LocalActor } from "./command-receipts";
-export { recordCommand } from "./command-receipts";
+export { checkCommand, recordCommand } from "./command-receipts";
 export { transitionContextOperation } from "./context-operations";
 export * from "./directory-lease";
 export * from "./environment-identity";

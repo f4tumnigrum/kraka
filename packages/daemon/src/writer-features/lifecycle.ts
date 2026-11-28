@@ -9,9 +9,12 @@ type Parts = Opened["services"];
 type Keys<T> = T extends object ? keyof T : never;
 type Services = { readonly [K in Keys<Parts>]: Extract<Parts, Record<K, unknown>>[K] };
 
-export function openWriterServices(store: FirstSendStore) {
+export function openWriterServices(
+  store: FirstSendStore,
+  clock?: import("../instance-login").LoginClock,
+) {
   const opened: Opened[] = [];
-  for (const feature of features) if ("open" in feature) opened.push(feature.open(store));
+  for (const feature of features) if ("open" in feature) opened.push(feature.open(store, clock));
   const services: Services = Object.assign({}, ...opened.map((part) => part.services));
   return {
     ...services,

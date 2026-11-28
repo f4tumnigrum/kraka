@@ -80,13 +80,13 @@ export async function loginPeer(dir: string) {
       }
     },
   });
-  async function profile(id: Profile) {
+  async function profile(id: Profile, ownerId = "fixture-owner-" + id) {
     const root = join(dir, id),
       history = join(root, "history");
     await mkdir(history, { recursive: true });
     const marker = "fixture-secret-" + id;
     const credential = {
-      ownerId: "fixture-owner-" + id,
+      ownerId,
       namespace: id,
       key: "profile",
       version: "1",

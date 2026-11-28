@@ -781,7 +781,11 @@ export const REQUEST_METHODS = {
     "executor.refresh",
     "thread.view",
     "project",
-    v.strictObject({ projectId: ProjectIdSchema, instanceId: ExecutorInstanceIdSchema }),
+    v.strictObject({
+      projectId: ProjectIdSchema,
+      instanceId: ExecutorInstanceIdSchema,
+      force: v.optional(v.boolean()),
+    }),
   ),
   registerProject: defineRequestMethod(
     "project.register",
