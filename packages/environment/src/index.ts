@@ -54,6 +54,7 @@ export {
 } from "./tool-activity";
 export * from "./access-store";
 export * from "./writer";
+export { measureWriterStartup, type WriterStartupMark } from "./capture-timing";
 export * from "./first-send-store";
 export * from "./first-send";
 export { recordCommand, type FirstSendContext, type LocalActor } from "./command-receipts";

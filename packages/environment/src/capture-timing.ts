@@ -3,6 +3,47 @@ import type { Boundary } from "./checkpoints";
 
 export type GitStep = { step: string; ms: number };
 type CaptureTrace = { steps: GitStep[]; lockWaitMs: number };
+type StartupStep =
+  | "writerLock"
+  | "databaseAndQueues"
+  | "owner"
+  | "access"
+  | "listener"
+  | "registerRecovery"
+  | "publish";
+export type WriterStartupMark = (step: StartupStep) => void;
+const startup = new AsyncLocalStorage<{ active: boolean; gitProcesses: number }>();
+
+export function measureWriterStartup<T>(work: (mark: WriterStartupMark) => Promise<T>) {
+  const start = performance.now(),
+    trace = { active: true, gitProcesses: 0 };
+  const steps: [StartupStep, number][] = [];
+  let previous = start;
+  const rounded = (n: number) => Math.round(n * 100) / 100;
+  const mark = (step: StartupStep) => {
+    const now = performance.now();
+    steps.push([step, rounded(now - previous)]);
+    previous = now;
+    if (step === "publish") {
+      trace.active = false;
+      console.error(
+        "Writer startup timing " +
+          JSON.stringify({
+            totalMs: rounded(now - start),
+            processAgeMs: rounded(now),
+            gitProcesses: trace.gitProcesses,
+            steps,
+          }),
+      );
+    }
+  };
+  return startup
+    .run(trace, () => work(mark))
+    .finally(() => {
+      trace.active = false;
+    });
+}
+
 const traces = new AsyncLocalStorage<CaptureTrace>();
 
 export function observeCaptureGit<T>(steps: GitStep[], work: () => T): T {
@@ -10,6 +51,8 @@ export function observeCaptureGit<T>(steps: GitStep[], work: () => T): T {
 }
 export function recordWorkerGit(steps: GitStep[]) {
   traces.getStore()?.steps.push(...steps);
+  const boot = startup.getStore();
+  if (boot?.active) boot.gitProcesses += steps.length;
 }
 export function recordCaptureWait(ms: number) {
   const trace = traces.getStore();
@@ -41,14 +84,20 @@ export function measureGit<T extends { pid: number }>(
   spawn: () => T,
 ): T {
   const trace = traces.getStore();
-  if (!trace) return spawn();
-  let i = 0;
-  while (args[i]?.startsWith("-")) i += args[i] === "-c" ? 2 : 1;
-  const command = args[i] ?? "";
-  const step = source + "." + (commands.has(command) ? command : "other");
+  const boot = startup.getStore();
+  if (!trace && !boot?.active) return spawn();
   const start = performance.now();
   const child = spawn();
-  if (child.pid > 0) trace.steps.push({ step, ms: performance.now() - start });
+  if (child.pid > 0) {
+    if (boot?.active) boot.gitProcesses++;
+    if (trace) {
+      let i = 0;
+      while (args[i]?.startsWith("-")) i += args[i] === "-c" ? 2 : 1;
+      const command = args[i] ?? "";
+      const step = source + "." + (commands.has(command) ? command : "other");
+      trace.steps.push({ step, ms: performance.now() - start });
+    }
+  }
   return child;
 }
 export async function measureCaptureBoundary<T>(boundary: Boundary, work: () => Promise<T>) {

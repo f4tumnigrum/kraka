@@ -1,11 +1,12 @@
 import { cumulativeRoundRange } from "../packages/client-runtime/src";
 import { test, expect } from "bun:test";
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdirSync, readdirSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
 import { accepted } from "./fixtures/first-send";
 import { within } from "./fixtures/replay-process";
-import { git } from "./fixtures/isolated-start";
+import { git, seedGit } from "./fixtures/isolated-start";
+import { finishedCapture } from "./fixtures/first-send-client";
 import {
   address,
   comparison,
@@ -258,3 +259,79 @@ test("4. a staged edit enters the next baseline and both crash windows settle on
   });
   for (const stage of ["sealed", "published"] as const) await interruptedCapture(stage);
 }, 45000);
+
+for (const boundary of ["before", "after"] as const) {
+  test(
+    `restart admits another directory while the ${boundary} checkpoint recovers`,
+    () =>
+      patchCase(async (s, b) => {
+        const independent = seedGit(dirname(s.f.cwd), "independent");
+        const project = accepted(
+          (await s.client.send("project.register", { realPath: independent.path })).receipt,
+          "projectRegistered",
+        ).project;
+        const send = async (text: string, projectId = s.f.project.id) =>
+          accepted(
+            (
+              await s.client.send("thread.start", {
+                ...s.f.payload,
+                projectId,
+                instanceId: s.f.registration.instanceId,
+                content: { ...s.f.payload.content, text },
+              })
+            ).receipt,
+            "threadStarted",
+          );
+        b.holdBoundary = boundary;
+        b.hold = "sealed";
+        const original = await send("original");
+        if (boundary === "after") {
+          const turn = await s.events.untilDispatch(
+            (e) => e.event === "turn" && e.text === "original",
+          );
+          s.action(turn.handle, "finish");
+        }
+        const sealed = await b.events.until(
+          (e) => e.round === original.roundId && e.stage === "sealed" && e.boundary === boundary,
+        );
+        b.holdId = sealed.id;
+        b.hold = "published";
+        const since = b.events.items.length;
+        await s.restart(true, b);
+        const held = await b.events.until(
+          (e) => e.id === sealed.id && e.stage === "published",
+          since,
+        );
+        const timing = s
+          .stderrTails()
+          .at(-1)
+          ?.split("\n")
+          .find((l) => l.startsWith("Writer startup timing "));
+        assert.ok(timing);
+        expect(JSON.parse(timing.slice("Writer startup timing ".length)).gitProcesses).toBe(0);
+        if (boundary === "after")
+          expect(
+            (await s.client.readInputHistory(original.threadId)).rounds[0]?.attempt.phase,
+          ).toMatchObject({ kind: "closing", captureId: sealed.id });
+        const same = await send("same");
+        const other = await send("independent", project.id);
+        const native = await s.events.untilDispatch(
+          (e) => e.event === "turn" && e.text === "independent",
+        );
+        s.action(native.handle, "finish");
+        await finishedCapture(s.client, other);
+        expect(b.events.items.some((e) => e.round === same.roundId)).toBe(false);
+        b.hold = null;
+        b.release(held.token);
+        const next = await s.events.untilDispatch((e) => e.event === "turn" && e.text === "same");
+        s.action(next.handle, "finish");
+        await finishedCapture(s.client, same);
+        const settled = b.events.items.findIndex(
+          (e) => e.id === sealed.id && e.boundary === boundary && e.stage === "settled",
+        );
+        expect(settled).toBeGreaterThanOrEqual(since);
+        expect(b.events.items.findIndex((e) => e.round === same.roundId)).toBeGreaterThan(settled);
+      }),
+    60000,
+  );
+}

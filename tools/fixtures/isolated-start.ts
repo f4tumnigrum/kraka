@@ -52,7 +52,10 @@ export async function isolatedFixture(dir: string, point: Fault = "peer", root =
     opts,
     f,
     async restart() {
-      return startFirstSendFixture({ ...opts, point: "peer" });
+      const next = await startFirstSendFixture({ ...opts, point: "peer" });
+      for (const line of next.stderrTail().split("\n"))
+        if (line.startsWith("Writer startup timing ")) console.error(line);
+      return next;
     },
   };
 }

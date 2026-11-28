@@ -1,3 +1,4 @@
+import { readManaged } from "./worktree-storage";
 import { measureCaptureBoundary } from "./capture-timing";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, rmSync } from "node:fs";
@@ -126,20 +127,83 @@ export class RoundCaptures {
     }
     this.store.db.run("DELETE FROM capture_cleanup WHERE path=?", [path]);
   }
-  cleanSettled() {
+  private cleanSettled() {
     for (const { path } of this.store.db
       .query<{ path: string }, []>("SELECT path FROM capture_cleanup")
       .all())
       this.clean(path);
   }
-  async recoverBaselines() {
-    for (const row of pendingBaselines(this.store.db)) {
-      const round = readRound(this.store.db, row.round),
-        thread = round && readThread(this.store.db, round.threadId);
-      if (round?.attempt.attemptId === row.attempt && thread)
-        await this.boundary(round, thread, row, "before", true);
-    }
+  private readonly restarting = new Map<string, Promise<void>>();
+
+  // A project can register the same physical checkout as a managed worktree.
+  // Read its saved identity here; validation against disk belongs inside the lease.
+  private recoveryDirectory(thread: Thread) {
+    const identity = thread.worktreeId
+      ? readManaged(this.store.db, thread.worktreeId)?.disk?.identity
+      : this.store.db
+          .query<{ identity: string }, [string]>("SELECT identity FROM projects WHERE id=?")
+          .get(thread.projectId)?.identity;
+    return identity ?? thread.directory?.directoryId ?? thread.id;
   }
+
+  waitForRecovery(threadId: Thread["id"]) {
+    if (!this.restarting.size) return;
+    const thread = readThread(this.store.db, threadId);
+    return thread && this.restarting.get(this.recoveryDirectory(thread));
+  }
+
+  registerRecovery(published: Promise<void>, closing: Round[]) {
+    const start = published.then(() => {
+      if (!this.signal?.aborted) this.cleanSettled();
+    });
+    const enqueue = (thread: Thread, work: () => Promise<void>) => {
+      const key = this.recoveryDirectory(thread);
+      const previous = this.restarting.get(key) ?? start;
+      this.restarting.set(
+        key,
+        previous.then(() => {
+          if (!this.signal?.aborted) return work();
+        }),
+      );
+    };
+    for (const row of pendingBaselines(this.store.db)) {
+      const round = readRound(this.store.db, row.round);
+      const thread = round && readThread(this.store.db, round.threadId);
+      if (round?.attempt.attemptId === row.attempt && thread)
+        enqueue(thread, async () => {
+          const active = readRound(this.store.db, round.id);
+          const current = readIntent(this.store.db, round.id, row.attempt);
+          if (
+            active?.attempt.attemptId === row.attempt &&
+            current &&
+            !current.baseline &&
+            !current.failure
+          )
+            await this.boundary(active, thread, current, "before", true);
+        });
+    }
+    for (const round of closing) {
+      const thread = readThread(this.store.db, round.threadId);
+      if (!thread) throw Error("Unknown capture thread");
+      enqueue(thread, async () => {
+        const current = readRound(this.store.db, round.id);
+        if (current?.attempt.attemptId === round.attempt.attemptId)
+          await this.finish(current, true);
+      });
+    }
+    const jobs = [start];
+    for (const [key, done] of this.restarting)
+      jobs.push(
+        done.then(() => {
+          this.restarting.delete(key);
+        }),
+      );
+    return Promise.allSettled(jobs).then((results) => {
+      for (const result of results)
+        if (result.status === "rejected") console.error("Checkpoint restart failed", result.reason);
+    });
+  }
+
   async before(round: Round) {
     const db = this.store.db,
       thread = readThread(db, round.threadId),
@@ -434,6 +498,8 @@ export class RoundCaptures {
         this.signal,
       );
     } catch (error) {
+      // A closing writer leaves its existing intent and sealed objects for the next restart.
+      if (recover && this.signal?.aborted) return;
       const reason = error instanceof Error ? error.message : "captureFailed";
       if (reason !== "noRepository")
         console.error(

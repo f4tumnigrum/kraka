@@ -39,6 +39,8 @@ import {
   loadQueue,
   openStore,
   openWriter,
+  measureWriterStartup,
+  type WriterStartupMark,
   type ProviderAdapter,
   type RecoveryScope,
   readMessage,
@@ -66,6 +68,7 @@ import {
   PrincipalIdSchema,
   REQUEST_METHODS,
   type ReplayTurnUpdate,
+  type Round,
   type RoundId,
   type ExecutorTurnUpdate,
   RequestSignerSchema,
@@ -99,53 +102,64 @@ export const localOwnerSchema = v.strictObject({
 });
 type Commands = { connectionId: string; challengeId: string; challenge: string; sequence: number };
 type Session = Commands | { app: SocketApplication; flow: ReturnType<typeof attachFlow> | null };
-export async function startWriter<H extends object>(
+type ReplayWriter<H extends object> = {
+  adapter: ProviderAdapter<"replay", H>;
+  expectedText: string;
+  modelId: string;
+  recovery?: RecoveryScope;
+  confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
+} | null;
+type WriterLifecycle = {
+  preparation?: PreparationHook;
+  observeFrame?: (epoch: string, wire: import("@kraka/protocol").WireMessage) => void;
+  inspectPage?: (
+    page: import("@kraka/protocol").SubscriptionPage,
+  ) => import("@kraka/protocol").SubscriptionPage;
+  threadCommand?: FixtureThreadCommand;
+  beforeInputReceipt?: (
+    request: SignedRequest,
+    receipt: CommandReceipt,
+    deliver: () => void,
+  ) => void;
+  beforeTodo?: (id: CommandId, proceed: () => void) => void;
+  settingReply?: FixtureSettingReply;
+  beforeDispatch?: (thread: ThreadId) => Promise<void>;
+  locked?: () => void;
+  capture?: import("@kraka/environment").CaptureHook;
+  opened?: (store: FirstSendStore) => void;
+  committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
+  update?: (event: ReplayTurnUpdate) => void;
+  browserFixture?: (path: string) => Response | null;
+  gitProcess?: (directory: string, granularity: "branch" | "detailed") => void;
+};
+export function startWriter<H extends object>(
   stateDir: string,
-  replay: {
-    adapter: ProviderAdapter<"replay", H>;
-    expectedText: string;
-    modelId: string;
-    recovery?: RecoveryScope;
-    confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
-  } | null,
-  lifecycle?: {
-    preparation?: PreparationHook;
-    observeFrame?: (epoch: string, wire: import("@kraka/protocol").WireMessage) => void;
-    inspectPage?: (
-      page: import("@kraka/protocol").SubscriptionPage,
-    ) => import("@kraka/protocol").SubscriptionPage;
-    threadCommand?: FixtureThreadCommand;
-    beforeInputReceipt?: (
-      request: SignedRequest,
-      receipt: CommandReceipt,
-      deliver: () => void,
-    ) => void;
-    beforeTodo?: (id: CommandId, proceed: () => void) => void;
-    settingReply?: FixtureSettingReply;
-    beforeDispatch?: (thread: ThreadId) => Promise<void>;
-    locked?: () => void;
-    capture?: import("@kraka/environment").CaptureHook;
-    opened?: (store: FirstSendStore) => void;
-    committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
-    update?: (event: ReplayTurnUpdate) => void;
-    browserFixture?: (path: string) => Response | null;
-    gitProcess?: (directory: string, granularity: "branch" | "detailed") => void;
-  },
+  replay: ReplayWriter<H>,
+  lifecycle?: WriterLifecycle,
+) {
+  return measureWriterStartup((mark) => openDurableWriter(stateDir, replay, lifecycle, mark));
+}
+async function openDurableWriter<H extends object>(
+  stateDir: string,
+  replay: ReplayWriter<H>,
+  lifecycle: WriterLifecycle | undefined,
+  mark: WriterStartupMark,
 ) {
   const lock = await openWriter(
     stateDir,
     v.parse(HostInstanceIdSchema, crypto.randomUUID()),
     performance.now() + 10000,
   );
+  mark("writerLock");
   if (lock.kind !== "writer") return lock;
   let store: FirstSendStore | undefined;
   let auth: Awaited<ReturnType<typeof openAccessHost>> | undefined;
   try {
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease, replay?.recovery);
+    mark("databaseAndQueues");
     store = transaction;
     if (lifecycle?.capture) transaction.captures.hook = lifecycle.capture;
-    transaction.captures.cleanSettled();
     lifecycle?.opened?.(transaction);
     const codex = new CodexInstances(transaction);
     const stops = new OrdinaryStops(transaction);
@@ -162,7 +176,9 @@ export async function startWriter<H extends object>(
       environmentId: lock.lease.environmentId,
       allows: (permission: PermissionItem) => granted.has(permission),
     };
+    mark("owner");
     const authHost = await openAccessHost(stateDir);
+    mark("access");
     auth = authHost;
     const reads = inputReads(transaction, actor);
     const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
@@ -359,11 +375,32 @@ export async function startWriter<H extends object>(
       }
       return receipt;
     }
+    const inspections = new Map<ThreadId, Round[]>();
+    let startupRecoveryPending = true;
     const recipients = new Map<RoundId, Bun.ServerWebSocket<Session>>();
     function schedule(threadId: ThreadId, commandId: CommandId) {
       if (turns.has(threadId) || !accepting) return;
       const pump = async () => {
         await lifecycle?.beforeDispatch?.(threadId);
+        await transaction.captures.waitForRecovery(threadId);
+        const pendingInspections = inspections.get(threadId);
+        inspections.delete(threadId);
+        if (replay && pendingInspections)
+          for (const saved of pendingInspections) {
+            if (!accepting) return;
+            const round = readRound(transaction.db, saved.id);
+            if (
+              round?.attempt.attemptId !== saved.attempt.attemptId ||
+              round.attempt.phase.kind !== "recovering" ||
+              round.attempt.phase.action !== "inspectInput"
+            )
+              continue;
+            try {
+              await inspectOriginalInput(transaction, round, replay);
+            } catch {
+              /* A failed lookup leaves the original delivery pending. */
+            }
+          }
         while (accepting) {
           const queue = loadQueue(transaction, threadId);
           const head = firstPending(queue.rows);
@@ -518,7 +555,7 @@ export async function startWriter<H extends object>(
         }
         if (origin !== null) return new Response(null, { status: 403 });
         if (/^\/instance\/[0-9a-f]{48}$/.test(url.pathname)) {
-          if (url.search === "?idle" && (turns.size || preparing.size))
+          if (url.search === "?idle" && (startupRecoveryPending || turns.size || preparing.size))
             return new Response(null, { status: 409 });
           const answer = lock.confirm(url.pathname.slice(10) + url.search);
           return new Response(answer, { status: answer ? 200 : 503 });
@@ -773,52 +810,65 @@ export async function startWriter<H extends object>(
         },
       },
     });
+    mark("listener");
+    const published = Promise.withResolvers<void>();
     let instance: ReturnType<typeof lock.publish>;
+    let captureRecovery: Promise<void>;
     try {
-      await transaction.captures.recoverBaselines();
-      for (const { data } of transaction.db
+      const closing = transaction.db
         .query<{ data: string }, []>(
-          "SELECT data FROM rounds WHERE json_extract(data,'$.attempt.phase.kind')='closing'",
+          "SELECT data FROM rounds WHERE json_extract(data,'$.attempt.phase.kind') NOT IN ('finished','endedEarly','notDelivered') AND json_extract(data,'$.attempt.phase.kind')='closing'",
         )
-        .all()) {
-        const r = v.parse(RoundSchema, JSON.parse(data));
-        schedule(r.threadId, v.parse(CommandIdSchema, r.attempt.deliveryId));
-      }
+        .all()
+        .map(({ data }) => v.parse(RoundSchema, JSON.parse(data)));
+      captureRecovery = transaction.captures
+        .registerRecovery(published.promise, closing)
+        .finally(() => {
+          startupRecoveryPending = false;
+        });
       const pending = transaction.db
         .query<{ data: string }, []>(
           "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE (d.pending=1 OR (json_extract(r.data,'$.attempt.phase.kind')='unobserved' AND json_extract(d.frozen,'$.target.family')='codex' AND d.id=json_extract(r.data,'$.attempt.deliveryId'))) AND d.round NOT IN (SELECT round FROM ready_dispatch)",
         )
-        .all();
-      for (const row of pending) {
-        const round = v.parse(RoundSchema, JSON.parse(row.data));
+        .all()
+        .map(({ data }) => v.parse(RoundSchema, JSON.parse(data)));
+      for (const round of pending) {
         if (
           replay &&
           round.attempt.phase.kind === "recovering" &&
           round.attempt.phase.action === "inspectInput"
         ) {
-          try {
-            await inspectOriginalInput(transaction, round, replay);
-          } catch {
-            /* A failed lookup leaves the old delivery pending. */
-          }
+          const rows = inspections.get(round.threadId) ?? [];
+          rows.push(round);
+          inspections.set(round.threadId, rows);
         }
-        schedule(round.threadId, v.parse(CommandIdSchema, round.attempt.deliveryId));
       }
+      mark("registerRecovery");
       instance = lock.publish(`ws://127.0.0.1:${server.port}/commands`);
+      mark("publish");
+      // The caller can print readiness before recovery or preparation starts synchronous Git.
+      void Bun.sleep(0)
+        .then(() => {
+          published.resolve();
+          if (!accepting) return;
+          for (const round of [...closing, ...pending])
+            schedule(round.threadId, v.parse(CommandIdSchema, round.attempt.deliveryId));
+          for (const { id } of transaction.db
+            .query<{ id: string }, []>(
+              "SELECT id FROM managed_worktrees WHERE unfinished=1 UNION SELECT worktree AS id FROM ready_dispatch",
+            )
+            .all()) {
+            const m = readManaged(transaction.db, id);
+            if (m) resume(m);
+          }
+        })
+        .catch((error) => console.error("Writer dispatch recovery failed", error));
     } catch (e) {
       await server.stop(true);
       throw e;
     }
     const timer = setInterval(sweep, selectionSweepMs);
     timer.unref();
-    for (const { id } of transaction.db
-      .query<{ id: string }, []>(
-        "SELECT id FROM managed_worktrees WHERE unfinished=1 UNION SELECT worktree AS id FROM ready_dispatch",
-      )
-      .all()) {
-      const m = readManaged(transaction.db, id);
-      if (m) resume(m);
-    }
     return {
       kind: "ready" as const,
       instance,
@@ -832,7 +882,7 @@ export async function startWriter<H extends object>(
         controller.abort();
         try {
           await server.stop(true);
-          await Promise.allSettled([...turns.values(), ...preparing.values()]);
+          await Promise.allSettled([captureRecovery, ...turns.values(), ...preparing.values()]);
           await Promise.allSettled(opening.values());
           for (const r of prepared.values())
             if (r.opened.kind === "ok") await r.adapter.close(r.opened.value, "shutdown");

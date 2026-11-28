@@ -36,12 +36,18 @@ const stageSchema = v.object({
 export class CaptureBarriers {
   readonly events = new Journal<v.InferOutput<typeof stageSchema>>();
   hold: v.InferOutput<typeof stageSchema>["stage"] | null = null;
+  holdBoundary: "before" | "after" = "after";
+  holdId: string | null = null;
   failSummary = false;
   writer?: ReturnType<typeof launchWriter>;
   receive = (raw: unknown) => {
     const e = v.parse(stageSchema, raw);
     this.events.push(e);
-    if (e.boundary !== "after" || e.stage !== this.hold)
+    if (
+      e.boundary !== this.holdBoundary ||
+      e.stage !== this.hold ||
+      (this.holdId && e.id !== this.holdId)
+    )
       this.release(e.token, e.stage === "summary" && this.failSummary);
   };
   release(token: string, fail = false) {
@@ -201,11 +207,18 @@ async function setup(
       } while (performance.now() < deadline);
       throw Error(`No committed interrupt acknowledgement for ${stopCommandId}`);
     }
-    async function restart(abrupt = false) {
+    async function restart(abrupt = false, barriers?: CaptureBarriers) {
       client.close();
       if (abrupt) await f.kill();
       else await f.stop();
-      const next = launchWriter(state, root, patch ? "codex" : "codex-cli");
+      const next = launchWriter(
+        state,
+        root,
+        patch ? "codex" : "codex-cli",
+        undefined,
+        barriers?.receive,
+      );
+      if (barriers) barriers.writer = next;
       writers.push(next.stderrTail);
       clean.push(next.stop);
       const { publication: instance } = await next.ready();
