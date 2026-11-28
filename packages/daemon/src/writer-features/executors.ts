@@ -1,10 +1,10 @@
 import type { WriterFeature } from "./types";
-import { CodexInstances } from "../codex-instances";
+import { ExecutorInstances } from "../executor-instances";
 import { markStartupDetail, type FirstSendStore } from "@kraka/environment";
-export const codex = {
+export const executors = {
   open(store: FirstSendStore) {
-    const codex = new CodexInstances(store);
+    const executors = new ExecutorInstances(store);
     markStartupDetail("owner.executors");
-    return { services: { codex }, close: () => codex.close() };
+    return { services: { executors }, close: () => executors.close() };
   },
 } satisfies WriterFeature;
