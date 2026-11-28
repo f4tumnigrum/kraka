@@ -42,6 +42,7 @@ export interface AttentionCause {
   key: ReminderKey;
   position: SyncPosition;
   reminder: AttentionHint | null;
+  answerable?: boolean;
 }
 type ThreadFacts = AttentionFacts["root"];
 type Activity = ThreadFacts["rounds"][number];
@@ -121,7 +122,7 @@ function makeCause(
   };
 }
 
-function compareText(a: string, b: string): number {
+export function compareText(a: string, b: string): number {
   const right = b[Symbol.iterator]();
   for (const ch of a) {
     const next = right.next();
@@ -167,13 +168,14 @@ export function interpretAttention(facts: AttentionFacts) {
       databaseGeneration: facts.databaseGeneration,
       threadId: thread.threadId,
     };
-    for (const { request, openedAt } of thread.requests) {
+    for (const { request, openedAt, answerable } of thread.requests) {
       if (request.state.kind !== "open") continue;
       const key = { ...scope, object: { kind: "request" as const, requestId: request.id } };
       const hint = { kind: request.body.kind, key };
-      causes.push(
-        makeCause(request.body.kind === "approval" ? "approval" : "answer", key, openedAt, hint),
-      );
+      causes.push({
+        ...makeCause(request.body.kind === "approval" ? "approval" : "answer", key, openedAt, hint),
+        answerable: answerable === true,
+      });
     }
     for (const activity of thread.rounds) {
       const key = {

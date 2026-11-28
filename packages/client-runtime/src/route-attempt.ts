@@ -196,16 +196,13 @@ export class RouteAttempt {
     this.timer.clear();
     this.publicReceiver = receive;
   }
-  async authenticate() {
+  async authenticate(supported: ServerHello["features"] = ["strictSchemas", "signedRequests"]) {
     const hello = this.hello;
     if (!hello || this.phase !== "verified" || !this.host.credentials) return;
     if (this.timer.expired()) return this.fail();
     this.phase = "signing";
     const { principal, signer } = this.host.credentials;
-    // S04 supports strict frames and signed requests. Other features are negotiated by their owners.
-    const features = (["strictSchemas", "signedRequests"] as const).filter((f) =>
-      hello.features.includes(f),
-    );
+    const features = supported.filter((f) => hello.features.includes(f));
     this.expected = { principal, signer, protocolVersion: clientVersion, features };
     const auth: Omit<ClientAuthentication, "signature"> = {
       kind: "client.authenticate",

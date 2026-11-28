@@ -8,6 +8,7 @@ import { handoffSchemas } from "./handoffs";
 import { RouteDiagnosticSchema } from "./route-diagnostics";
 import { contextOperationSchemas } from "./context-operations";
 import { timelineSchemas } from "./timeline";
+import { toolActivitySchemas } from "./tool-activity";
 import {
   AppSourceSchema,
   AppActionSchema,
@@ -165,6 +166,7 @@ export const protocolSchemas = {
   ...handoffSchemas,
   ...contextOperationSchemas,
   ...timelineSchemas,
+  ...toolActivitySchemas,
   RouteDiagnostic: RouteDiagnosticSchema,
   RoundEndTimeEvidence: RoundEndTimeEvidenceSchema,
   PrivateSecretRequest: PrivateSecretRequestSchema,

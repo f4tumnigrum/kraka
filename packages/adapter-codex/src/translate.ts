@@ -82,6 +82,7 @@ export function translateCodexFrame(
           kind: "toolActivity",
           attemptId,
           callId: frame.itemId,
+          relationship: { kind: "root", nativeRootTurnId: root },
           phase: "progress",
           input: null,
           output: { text: frame.delta },
@@ -112,6 +113,26 @@ export function translateCodexFrame(
           finalText: item.text,
         });
       }
+      if (item.type === "fileChange" && frame.method === "item/completed") {
+        for (const change of item.changes) {
+          const destination = change.kind.type === "update" ? (change.kind.movePath ?? null) : null;
+          events.push({
+            kind: "fileChanged",
+            attemptId,
+            path: change.path,
+            destination,
+            patch: change.diff,
+            change:
+              change.kind.type === "add"
+                ? "created"
+                : change.kind.type === "delete"
+                  ? "deleted"
+                  : destination
+                    ? "moved"
+                    : "modified",
+          });
+        }
+      }
       if (item.type === "commandExecution") {
         const start = frame.method === "item/started",
           tools = new Set(state.tools);
@@ -123,9 +144,17 @@ export function translateCodexFrame(
             kind: "toolActivity",
             attemptId,
             callId: item.id,
+            relationship: { kind: "root", nativeRootTurnId: root },
             phase: start ? "started" : "ended",
-            input: start ? { command: item.command } : null,
-            output: start ? null : { text: item.aggregatedOutput, exitCode: item.exitCode },
+            input: start ? { command: item.command, ...(item.cwd ? { cwd: item.cwd } : {}) } : null,
+            output: start
+              ? null
+              : {
+                  text: item.aggregatedOutput,
+                  exitCode: item.exitCode,
+                  status: item.status ?? null,
+                  truncated: item.truncated ?? false,
+                },
           });
         }
       }

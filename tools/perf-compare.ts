@@ -22,6 +22,7 @@ const metadata = {
   variant: v.optional(
     v.picklist([
       "access.listSessions",
+      "tool.readActivity",
       "worktree.recovery",
       "browserTLS",
       "installed",

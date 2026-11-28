@@ -1,4 +1,5 @@
-import { scenarioInput, serveSeed } from "./thread-seed";
+import { settingPeer } from "./setting-peer";
+import { scenarioInput, serveSeed, recordFixtureFrame } from "./thread-seed";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
@@ -111,9 +112,23 @@ const writer = await startWriter(
       : {}),
   },
   {
-    ...(point === "resume"
+    ...(point === "resume" || point === "activity-ledger"
       ? {
+          browserFixture(path: string) {
+            if (path !== "/attention" && path !== "/reader.js") return null;
+            const html = path === "/attention";
+            return new Response(
+              Bun.file(join(state, html ? "attention-page.html" : "attention-reader.js")),
+              {
+                headers: {
+                  "Content-Type": html ? "text/html" : "text/javascript",
+                  "Cache-Control": "no-store",
+                },
+              },
+            );
+          },
           threadCommand: scenarioInput,
+          ...(point === "activity-ledger" ? { observeFrame: recordFixtureFrame } : {}),
           inspectPage(page: import("@kraka/protocol").SubscriptionPage) {
             if (!existsSync(join(state, "unknown-change"))) return page;
             return JSON.parse(
@@ -122,10 +137,21 @@ const writer = await startWriter(
           },
         }
       : {}),
+    ...(point === "settings"
+      ? {
+          settingReply: settingPeer(state, () => {
+            if (!openedStore) throw Error("Writer not open");
+            return openedStore;
+          }),
+        }
+      : {}),
     preparation(point, managed) {
       barrier(point, JSON.stringify(managed));
     },
-    async beforeDispatch() {
+    async beforeDispatch(threadId) {
+      if (point === "settings" && openedStore) {
+        process.send?.({ event: "dispatch", threadId });
+      }
       if (waitForClaim) await waitForClaim();
       if (point === "recovery" && openedStore && existsSync(join(state, "seed-handoff"))) {
         const input = JSON.parse(readFileSync(join(state, "seed-handoff"), "utf8"));
@@ -158,7 +184,7 @@ const writer = await startWriter(
       barrier("locked");
     },
     opened(store) {
-      if (point === "resume") serveSeed(store);
+      if (point === "resume" || point === "activity-ledger") serveSeed(store);
       openedStore = store;
       store.beforeCommit = (method) => {
         const marker = join(state, "auto-row");
@@ -202,13 +228,38 @@ const writer = await startWriter(
       if (req.method === "thread.start") barrier("afterCommit");
     },
     update(event) {
+      if (point === "local-diff" && event.kind === "round.ended")
+        process.send?.({
+          event: "completed",
+          roundId: event.roundId,
+          threadId: openedStore && readRound(openedStore.db, event.roundId)?.threadId,
+        });
+      if (point === "settings" && event.kind === "round.ended")
+        process.send?.({ event: "ended", roundId: event.roundId });
       if (point === "peer" && event.kind === "round.started")
         writeFileSync(join(state, `started-${event.roundId}`), JSON.stringify(event));
+    },
+    ...(point === "local-diff" && {
+      browserFixture(path: string) {
+        if (path === "/s15")
+          return new Response('<!doctype html><script src="/s15-client.js"></script>', {
+            headers: { "Content-Type": "text/html" },
+          });
+        if (path === "/s15-client.js")
+          return new Response(Bun.file(join(state, "s15-client.js")), {
+            headers: { "Content-Type": "application/javascript" },
+          });
+        return null;
+      },
+    }),
+    gitProcess(directory, granularity) {
+      process.send?.({ event: "gitProcess", directory, granularity });
     },
   },
 );
 if (writer.kind === "unconfirmed") throw new Error(writer.reason);
 if (writer.kind === "ready") {
+  if (point === "settings" && process.connected) process.once("disconnect", writer.close);
   process.once("SIGTERM", writer.close);
   process.once("SIGINT", writer.close);
 }

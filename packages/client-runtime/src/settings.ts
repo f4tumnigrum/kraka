@@ -18,9 +18,20 @@ import {
 export function readDeviceSetting(row: DeviceSettingRow) {
   const definition = deviceSettings.find((d) => d.name === row.field);
   if (!definition) throw new Error("Missing device setting definition");
-  return row.explicit.kind === "set"
-    ? { value: row.explicit.value, source: row.target, version: row.version }
-    : { value: definition.fallback, source: { kind: "builtin" as const }, version: row.version };
+  const value = row.explicit.kind === "set" ? row.explicit.value : definition.fallback;
+  const source = row.explicit.kind === "set" ? row.target : { kind: "builtin" as const };
+  const sourceVersion = row.explicit.kind === "set" ? row.version : null;
+  return {
+    field: row.field,
+    target: row.target,
+    atLayer: row.explicit,
+    fieldVersion: row.version,
+    readVersion: row.version,
+    effective: { value, source, sourceVersion },
+    value,
+    source,
+    version: row.version,
+  };
 }
 
 /** The device store retains reset versions, including when the field has no explicit choice. */
@@ -62,7 +73,7 @@ export type SettingWriteObservation =
   | { kind: "offlineBeforeSend" | "sending" }
   | { kind: "reply"; environmentId: EnvironmentId; receipt: unknown };
 
-function matchesRead(
+export function matchesSettingRead(
   request: SettingRead,
   readback: Omit<SettingRead, "field"> & { field: string },
 ) {
@@ -102,12 +113,15 @@ export function advanceSettingWrite(
   if (receipt.kind === "programError") return { ...member, kind: "failed", receipt };
   if (receipt.kind === "rejected") {
     const f = receipt.failure;
+    if (f.kind === "settingVersionConflict" && !matchesSettingRead(member.edit, f.readback))
+      return member;
     if (f.kind === "settingLocked")
-      return matchesRead(member.edit, f.request) && f.lockedBy.environmentId === event.environmentId
+      return matchesSettingRead(member.edit, f.request) &&
+        f.lockedBy.environmentId === event.environmentId
         ? finish({ kind: "locked", lockedBy: f.lockedBy })
         : member;
     if (f.kind === "unrecognizedSetting")
-      return matchesRead(member.edit, f) && !f.supportedFields.includes(member.edit.field)
+      return matchesSettingRead(member.edit, f) && !f.supportedFields.includes(member.edit.field)
         ? finish({ kind: "unrecognized", supportedFields: f.supportedFields })
         : member;
     return { ...member, kind: "failed", receipt };
@@ -119,9 +133,16 @@ export function advanceSettingWrite(
       ? finish({ kind: "unrecognized", supportedFields: fields })
       : member;
   }
-  if (result.kind !== "settingSaved" || !matchesRead(member.edit, result.readback)) return member;
+  if (result.kind !== "settingSaved" || !matchesSettingRead(member.edit, result.readback))
+    return member;
   if (!result.supportedFields.includes(member.edit.field))
     return finish({ kind: "unrecognized", supportedFields: result.supportedFields });
+  if (
+    BigInt(result.readback.fieldVersion) > BigInt(result.readback.readVersion) ||
+    BigInt(result.readback.fieldVersion) < BigInt(member.edit.baseVersion) ||
+    (result.readback.atLayer.kind === "set" && result.readback.fieldVersion === "0")
+  )
+    return member;
   return sameSettingChoice(result.readback.atLayer, member.edit.change)
     ? finish({ kind: "saved", readback: result.readback })
     : member;

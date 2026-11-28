@@ -23,6 +23,7 @@ export function generateProtocolReference(
   });
   const definitions = toJsonSchemaDefs(Object.fromEntries(entries), {
     target: "draft-2020-12",
+    typeMode: "input",
     errorMode: "throw",
     ignoreActions: ["brand"],
     overrideSchema({ jsonSchema }) {

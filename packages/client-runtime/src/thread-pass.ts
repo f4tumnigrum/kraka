@@ -11,7 +11,11 @@ import {
   sameRange,
   sameScope,
   type CommandReceipt,
+  type AttentionFacts,
+  type PrincipalId,
+  type ThreadSummary,
   type MessageId,
+  type PermissionItem,
   type ControlMessage,
   type HistoryCoverage,
   type HistoryPage,
@@ -45,6 +49,7 @@ export interface ThreadFrameState {
   request: Open;
   installed: SyncCursor | null;
   bound: boolean;
+  permissions: PermissionItem[];
   status: "empty" | "cached" | "syncing" | "current" | "gap";
   pending: Pending | null;
   abandoned: Set<SyncPassId>;
@@ -58,6 +63,7 @@ export function openThreadFrames(
     request,
     installed,
     bound: false,
+    permissions: [],
     status: installed ? "cached" : "empty",
     pending: null,
     abandoned: new Set(),
@@ -145,6 +151,7 @@ export function stageThreadFrame(
       m.result.streamId !== req.payload.streamId
     )
       return gap(s);
+    s.permissions = m.result.permissions ?? [];
     s.bound = true;
     s.status = "syncing";
     return s.pending?.seal ? ready(s) : { kind: "bound" };
@@ -163,6 +170,8 @@ export function stageThreadFrame(
         : { kind: "list" as const, projectId: req.payload.projectId };
     if (
       m.through.environmentId !== req.environmentId ||
+      (req.method === "subscription.openList" &&
+        req.payload.windowShapeVersion !== m.through.shapeVersion) ||
       !sameScope(scope, m.through.scope) ||
       (m.mode === "replace"
         ? m.base !== null || s.lastSeal !== null || req.payload.after !== null
@@ -204,6 +213,8 @@ type AcceptedInput = { threadId: string; messageId: MessageId; text: string };
 type Membership = {
   cursor: SyncCursor;
   members: Record<string, ObjectKey>;
+  listRows?: Record<string, ThreadSummary>;
+  facts?: Record<string, AttentionFacts>;
   counts: Extract<ObjectChange, { kind: "list.counts" }>["counts"] | null;
 };
 type SavedPage = Pick<HistoryPage, "threadId" | "anchor" | "verifiedAt" | "olderAnchor"> & {
@@ -211,7 +222,9 @@ type SavedPage = Pick<HistoryPage, "threadId" | "anchor" | "verifiedAt" | "older
   timelineItems: boolean;
 };
 export interface ThreadCache {
+  earlier?: Record<string, import("@kraka/protocol").EarlierSettledPage>;
   format: 1;
+  activities?: Record<string, import("./tool-activity").ToolActivityView>;
   rows: Record<string, SavedRow>;
   scopes: Record<string, Membership>;
   history: Record<string, SavedPage>;
@@ -238,21 +251,28 @@ export interface ThreadCacheStore {
   // The host holds one transaction or exclusive namespace lease from reading the value through commit.
   transact<T>(edit: (current: ThreadCache) => { next: ThreadCache; result: T }): Promise<T>;
 }
-export function reflectInputReceipt(
-  store: ThreadCacheStore,
-  command: Extract<SignedRequest, { method: "input.send" }>,
+export function acceptedInput(
+  command: Extract<SignedRequest, { method: "input.send" | "thread.start" }>,
   receipt: CommandReceipt,
 ) {
-  if (
-    receipt.commandId !== command.commandId ||
-    receipt.kind !== "accepted" ||
-    receipt.result.kind !== "inputScheduled"
-  )
-    return;
-  const messageId = receipt.result.messageId;
+  if (receipt.kind !== "accepted" || receipt.commandId !== command.commandId) return null;
+  const result = receipt.result;
+  if (command.method === "input.send" && result.kind === "inputScheduled")
+    return { threadId: command.payload.threadId, messageId: result.messageId };
+  if (command.method === "thread.start" && result.kind === "threadStarted")
+    return { threadId: result.threadId, messageId: result.messageId };
+  return null;
+}
+export function reflectInputReceipt(
+  store: ThreadCacheStore,
+  command: Extract<SignedRequest, { method: "input.send" | "thread.start" }>,
+  receipt: CommandReceipt,
+) {
+  const accepted = acceptedInput(command, receipt);
+  if (!accepted) return;
+  const { messageId } = accepted;
   const local = {
-    messageId,
-    threadId: command.payload.threadId,
+    ...accepted,
     text: command.payload.content.text,
   };
   return store.transact((old) => {
@@ -299,6 +319,7 @@ export async function installThreadPass(
   store: ThreadCacheStore,
   expectedBase: SyncCursor | null,
   sealedPass: SealedPass,
+  owner?: PrincipalId,
 ) {
   const { begin, pages, recheck } = sealedPass;
   return store.transact<"installed" | "staleBase">((old) => {
@@ -322,6 +343,12 @@ export async function installThreadPass(
       members: begin.mode === "replace" ? {} : { ...prior?.members },
       counts: begin.mode === "replace" ? null : (prior?.counts ?? null),
     };
+    const list = begin.through.scope.kind === "list" && begin.through.shapeVersion === 2;
+    if (list) {
+      scope.listRows = begin.mode === "merge" ? { ...prior?.listRows } : {};
+      scope.facts =
+        begin.mode === "merge" && sameHead(begin.base, begin.through) ? { ...prior?.facts } : {};
+    }
     const seen = new Map<string, string>();
     let counts: string | null = null;
     for (const page of pages)
@@ -347,6 +374,12 @@ export async function installThreadPass(
             saveRow(cache, { objectType: "timelineItem", value: change.observation });
             break;
           case "handoff.textReturned": {
+            if (
+              change.result.target.environmentId !== begin.through.environmentId ||
+              begin.through.scope.kind !== "thread" ||
+              change.result.target.threadId !== begin.through.scope.threadId
+            )
+              throw Error("Return outside target input");
             const k = JSON.stringify(change.result.transferId),
               old = cache.returns[k];
             const cmp = old ? comparePositions(change.version, old.version) : 1;
@@ -371,14 +404,32 @@ export async function installThreadPass(
             }
             break;
           }
+          case "attention.facts": {
+            const { facts } = change,
+              head = begin.through;
+            if (
+              !scope.facts ||
+              facts.through !== head.through ||
+              facts.databaseGeneration !== head.databaseGeneration ||
+              facts.environmentId !== head.environmentId ||
+              (owner && facts.ownerId !== owner)
+            )
+              throw Error("Attention facts belong to a different list");
+            const id = JSON.stringify(facts.root.threadId);
+            if (scope.facts[id] && canonicalJson(scope.facts[id]) !== canonicalJson(facts))
+              throw Error("Conflicting attention facts");
+            scope.facts[id] = facts;
+            break;
+          }
           case "thread.summary": {
             if (begin.through.scope.kind !== "list") throw Error("Summary outside list");
             const k = JSON.stringify(change.summary.threadId),
-              old = cache.summaries[k];
+              summaries = scope.listRows ?? cache.summaries,
+              old = summaries[k];
             const cmp = old ? comparePositions(change.summary.version, old.version) : 1;
             if (cmp === 0 && canonicalJson(old) !== canonicalJson(change.summary))
               throw Error("Conflicting summary");
-            if (cmp > 0) cache.summaries[k] = change.summary;
+            if (cmp > 0) summaries[k] = change.summary;
             break;
           }
           case "list.counts": {
@@ -399,10 +450,30 @@ export async function installThreadPass(
     for (const [k, member] of Object.entries(scope.members)) {
       if (
         begin.through.scope.kind === "list" && member.objectType === "thread"
-          ? !cache.summaries[JSON.stringify(member.id)]
+          ? !(scope.listRows ?? cache.summaries)[JSON.stringify(member.id)]
           : !cache.rows[k]?.row
       )
         throw Error("Missing member");
+    }
+    if (list && scope.listRows && scope.facts) {
+      for (const key of Object.keys(scope.listRows))
+        if (!scope.members[keyString({ objectType: "thread", id: scope.listRows[key]!.threadId })])
+          delete scope.listRows[key];
+      for (const key of Object.keys(scope.facts))
+        if (
+          !scope.listRows[key] &&
+          !scope.facts[key]?.root.requests.some(
+            (r) => r.request.state.kind === "open" && r.answerable,
+          )
+        )
+          throw Error("Unexpected attention outside the list window");
+      for (const member of Object.values(scope.members))
+        if (
+          member.objectType !== "thread" ||
+          !scope.listRows[JSON.stringify(member.id)] ||
+          !scope.facts[JSON.stringify(member.id)]
+        )
+          throw Error("Incomplete list facts");
     }
     for (const [command, input] of Object.entries(cache.accepted))
       if (cache.rows[keyString({ objectType: "message", id: input.messageId })])
@@ -465,4 +536,20 @@ export function cachedHistory(cache: ThreadCache, anchor: string, current: SyncC
     verified: sameHead(page.verifiedAt, current),
     rows: page.keys.flatMap((k) => cache.rows[k]?.row ?? []),
   };
+}
+
+export function returnsForInput(
+  cache: ThreadCache,
+  target: TextReturnedEvent["result"]["target"],
+  input: TextReturnedEvent["result"]["input"],
+) {
+  return Object.values(cache.returns).filter(
+    ({ result }) =>
+      result.target.environmentId === target.environmentId &&
+      result.target.threadId === target.threadId &&
+      result.input.messageId === input.messageId &&
+      result.input.roundId === input.roundId &&
+      result.input.attemptId === input.attemptId &&
+      result.input.deliveryId === input.deliveryId,
+  );
 }

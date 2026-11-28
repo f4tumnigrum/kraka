@@ -1,4 +1,10 @@
-import type { ControlMessage, SignedRequest, SubscriptionPage, SyncCursor } from "@kraka/protocol";
+import type {
+  PrincipalId,
+  ControlMessage,
+  SignedRequest,
+  SubscriptionPage,
+  SyncCursor,
+} from "@kraka/protocol";
 import {
   openThreadFrames,
   stageThreadFrame,
@@ -27,8 +33,10 @@ export class ThreadInstallation {
     request: Open,
     private host: {
       store: ThreadCacheStore;
+      owner?: PrincipalId;
       pageStaged?: (page: SubscriptionPage) => Promise<void> | void;
       revoked?: () => void;
+      staleBase?: () => void;
       receipt?: () => void;
       installed?: (head: SyncCursor) => void;
       ack: (ack: Ack) => void;
@@ -128,8 +136,13 @@ export class ThreadInstallation {
               return edit(old);
             }),
         };
-        if ((await installThreadPass(store, expected, event.pass)) !== "installed")
-          throw Error("Installed base changed");
+        if (
+          (await installThreadPass(store, expected, event.pass, this.host.owner)) !== "installed"
+        ) {
+          this.reportGap();
+          this.host.staleBase?.();
+          return;
+        }
         if (this.closed || state.pending !== current) return;
         const cursor = current.begin.through;
         state.installed = cursor;

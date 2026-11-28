@@ -1,13 +1,13 @@
 import { listenBrowserDaemon } from "./browser-daemon";
 import { accessCli } from "./access";
-import { identityCommand } from "@kraka/cli-client";
-import { readInstancePublication } from "@kraka/environment";
+import { identityCommand, threadListCli } from "@kraka/cli-client";
 import { startForeground } from "./foreground";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { parseArgs } from "node:util";
 import { createReplayAdapter, parseReplayRecording } from "@kraka/adapter-replay";
 import {
+  readInstancePublication,
   runWorktreeWorker,
   worktreeWorkerCommand,
   runReplayTurn,
@@ -203,6 +203,7 @@ if ((typeof KRAKA_DAEMON_ENTRY !== "undefined" && KRAKA_DAEMON_ENTRY) || import.
   try {
     const [command, ...args] = process.argv.slice(2);
     if (command === worktreeWorkerCommand) await runWorktreeWorker(args[0]);
+    else if (command === "thread" && args[0] === "list") await threadListCli(args.slice(1));
     else if (command === "daemon") {
       const { values } = parseArgs({
         args,

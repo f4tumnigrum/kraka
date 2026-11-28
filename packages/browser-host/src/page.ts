@@ -4,6 +4,7 @@ import {
   DEFAULT_DEVICE_PERMISSIONS,
   PairingInviteIdSchema,
   ProjectIdSchema,
+  ThreadIdSchema,
   PairingRequestIdSchema,
   RouteIdSchema,
   type PairingPending,
@@ -19,10 +20,13 @@ import {
 } from "./storage";
 import { browserSocketFactory, openBrowserSession } from "./index";
 
+import { browserInputs, openBrowserThread } from "./thread";
+export let pageThread: Awaited<ReturnType<typeof openBrowserThread>> | undefined;
 export let pagePairing: PairingPending | undefined;
 export let pageSession: SessionHandle | undefined;
 export async function startBrowserPage(main: HTMLElement) {
   const status = main.querySelector("output") ?? main.appendChild(document.createElement("output"));
+  let sessionInput: Parameters<typeof openBrowserSession>[0] | undefined;
   let identity: EnvironmentIdentity | undefined;
   function form(title: string, fields: string[], submit: (values: FormData) => Promise<void>) {
     const form = document.createElement("form");
@@ -67,7 +71,9 @@ export async function startBrowserPage(main: HTMLElement) {
     }
     identity = row.pinnedIdentity;
     pageSession?.close();
-    pageSession = openBrowserSession({
+    pageThread?.close();
+    pageThread = undefined;
+    sessionInput = {
       pageOrigin: location.origin,
       expectedIdentity: identity,
       routeCatalog: loaded.catalog,
@@ -88,7 +94,8 @@ export async function startBrowserPage(main: HTMLElement) {
         },
       }),
       socketFactory: browserSocketFactory,
-    });
+    };
+    pageSession = openBrowserSession(sessionInput);
     pageSession.subscribe((s) => {
       status.value = s.phase === "failed" ? JSON.stringify(s.failure) : s.phase;
     });
@@ -174,6 +181,116 @@ export async function startBrowserPage(main: HTMLElement) {
       input.checked = true;
     history.replaceState(null, "", location.pathname);
   }
+  const editor = document.createElement("textarea");
+  editor.setAttribute("aria-label", "Message");
+  const send = document.createElement("button");
+  send.textContent = "Send";
+  const recover = document.createElement("button");
+  recover.textContent = "Recover returned draft";
+  const delivery = document.createElement("p");
+  delivery.setAttribute("role", "status");
+  let revision: string | undefined,
+    editing = Promise.resolve();
+  form("Open thread", ["Thread ID"], async (data) => {
+    if (!sessionInput) throw Error("Confirm host first");
+    const id = v.parse(ThreadIdSchema, data.get("Thread ID"));
+    pageThread?.close();
+    pageSession?.close();
+    await editing;
+    const thread = await openBrowserThread(sessionInput, id);
+    pageThread = thread;
+    const draft = (await thread.inspect()).drafts.current;
+    editor.value = draft?.content.text ?? "";
+    revision = draft?.revision;
+    let changes = 0,
+      saving = false;
+    main.append(editor, send, recover, delivery);
+    async function refresh() {
+      const s = await thread.inspect();
+      if (pageThread !== thread) return;
+      status.value = thread.current
+        ? "Thread up to date"
+        : (thread.status.session?.phase ?? "Offline");
+      const returned = s.drafts.returned[0];
+      recover.hidden = !returned;
+      recover.onclick = async () => {
+        if (!returned) return;
+        try {
+          await editing;
+          const d = await browserInputs.recoverReturned(thread.scope, returned.revision);
+          revision = d.revision;
+          editor.value = d.content.text;
+          await refresh();
+        } catch (e) {
+          delivery.textContent = String(e);
+        }
+      };
+      const head = s.queue.items[0];
+      delivery.textContent =
+        thread.error ??
+        (head
+          ? head.progress.kind === "accepted"
+            ? "Accepted by environment"
+            : "Queued on this device"
+          : s.drafts.current
+            ? "Draft saved on this device"
+            : Object.keys(s.receipts.bindings).length
+              ? "Delivered to thread"
+              : "");
+      if (s.drafts.current && !editor.value && !saving && !revision) {
+        editor.value = s.drafts.current.content.text;
+        revision = s.drafts.current.revision;
+      }
+    }
+    thread.subscribe(() => {
+      void refresh().catch((e) => {
+        delivery.textContent = String(e);
+      });
+    });
+    await refresh();
+    editor.oninput = () => {
+      const text = editor.value,
+        change = ++changes;
+      saving = true;
+      editing = editing
+        .then(async () => {
+          const draft = await thread.saveDraft(text);
+          if (change !== changes) return;
+          revision = draft.revision;
+          saving = false;
+          editor.dispatchEvent(
+            new CustomEvent("kraka-draft-saved", { bubbles: true, detail: { revision } }),
+          );
+          await refresh();
+        })
+        .catch((e) => {
+          revision = undefined;
+          delivery.textContent = "Local save failed: " + String(e);
+        });
+    };
+    send.onclick = async () => {
+      send.disabled = true;
+      try {
+        await editing;
+        if (!revision) return;
+        const sent = revision,
+          change = changes;
+        await thread.queueInput(sent);
+        if (revision === sent && changes === change) {
+          editor.value = "";
+          revision = undefined;
+        }
+        await refresh();
+      } catch (e) {
+        delivery.textContent = "Local save failed: " + String(e);
+      } finally {
+        send.disabled = false;
+      }
+    };
+  });
+  window.addEventListener("online", () => pageThread?.connect());
+  window.addEventListener("offline", () => pageThread?.disconnect());
+  window.addEventListener("pagehide", () => pageThread?.close());
   await connect().catch((error) => {
     status.value = String(error);
   });

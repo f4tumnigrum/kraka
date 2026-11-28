@@ -1,5 +1,9 @@
 import { openAccessHost } from "./access";
-import { threadConnection, type FixtureThreadCommand } from "./thread-connection";
+import {
+  threadConnection,
+  type FixtureThreadCommand,
+  type FixtureSettingReply,
+} from "./thread-connection";
 import { attachFlow, type SocketApplication } from "./flow-socket";
 import { inputReads, inputReadMethods } from "./input-reads";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
@@ -42,12 +46,17 @@ import {
   readReceipt,
   readRound,
   readThread,
+  GitStatusCache,
   recordInputEvidence,
   registerProject,
+  settingCommand,
   renameThread,
 } from "@kraka/environment";
 import {
   checkBusinessUpgrade,
+  InboundSettingWriteSchema,
+  settingReceiptForVersion,
+  SETTING_GENERATION_MINOR,
   CheckpointCaptureSchema,
   type CommandId,
   CommandIdSchema,
@@ -76,6 +85,8 @@ const methods = v.variant("method", [
   REQUEST_METHODS.configureExecutor.schema,
   REQUEST_METHODS.refreshExecutor.schema,
   REQUEST_METHODS.registerProject.schema,
+  REQUEST_METHODS.readSetting.schema,
+  InboundSettingWriteSchema,
   REQUEST_METHODS.startThread.schema,
   REQUEST_METHODS.renameThread.schema,
   REQUEST_METHODS.prepareWorktree.schema,
@@ -102,16 +113,25 @@ export async function startWriter<H extends object>(
   } | null,
   lifecycle?: {
     preparation?: PreparationHook;
+    observeFrame?: (epoch: string, wire: import("@kraka/protocol").WireMessage) => void;
     inspectPage?: (
       page: import("@kraka/protocol").SubscriptionPage,
     ) => import("@kraka/protocol").SubscriptionPage;
     threadCommand?: FixtureThreadCommand;
+    beforeInputReceipt?: (
+      request: SignedRequest,
+      receipt: CommandReceipt,
+      deliver: () => void,
+    ) => void;
     beforeTodo?: (id: CommandId, proceed: () => void) => void;
+    settingReply?: FixtureSettingReply;
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
     opened?: (store: FirstSendStore) => void;
     committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
     update?: (event: ReplayTurnUpdate) => void;
+    browserFixture?: (path: string) => Response | null;
+    gitProcess?: (directory: string, granularity: "branch" | "detailed") => void;
   },
 ) {
   const lock = await openWriter(
@@ -145,6 +165,7 @@ export async function startWriter<H extends object>(
     const authHost = await openAccessHost(stateDir);
     auth = authHost;
     const reads = inputReads(transaction, actor);
+    const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
 
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
@@ -465,32 +486,61 @@ export async function startWriter<H extends object>(
         },
       );
     }
+    const openThread = (nonce: string, reportPermissions = false) =>
+      threadConnection(
+        transaction,
+        authHost,
+        nonce,
+        schedule,
+        sendInput,
+        gitStatusCache,
+        lifecycle?.threadCommand,
+        lifecycle?.inspectPage,
+        lifecycle?.beforeTodo,
+        (actor, cmd) => stops.command({ actor, transaction, commandId: cmd.commandId }, cmd),
+        (actor, cmd) => steerInput(actor, cmd),
+        lifecycle?.settingReply,
+        reportPermissions,
+        lifecycle?.beforeInputReceipt,
+      );
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       async fetch(req, server) {
         const url = new URL(req.url);
-        if (!accepting || req.headers.has("Origin") || url.hostname !== "127.0.0.1")
-          return new Response(null, { status: 403 });
+        if (!accepting || url.hostname !== "127.0.0.1") return new Response(null, { status: 403 });
+        const origin = req.headers.get("Origin");
+        const fixture = lifecycle?.browserFixture;
         if (url.pathname === "/ws") {
-          const admission = checkBusinessUpgrade(url.pathname + url.search, [], [], URL);
-          if (admission.kind === "reject") return new Response(null, { status: admission.status });
-          const app = await threadConnection(
-            transaction,
-            authHost,
-            admission.nonce,
-            schedule,
-            sendInput,
-            lifecycle?.threadCommand,
-            lifecycle?.inspectPage,
-            lifecycle?.beforeTodo,
-            (actor, cmd) => stops.command({ actor, transaction, commandId: cmd.commandId }, cmd),
-            (actor, cmd) => steerInput(actor, cmd),
+          const admission = checkBusinessUpgrade(
+            url.pathname + url.search,
+            origin !== null ? [origin] : [],
+            fixture ? [server.url.origin] : [],
+            URL,
           );
+          if (admission.kind === "reject") return new Response(null, { status: admission.status });
+          const app = await openThread(admission.nonce);
           if (!app) return new Response(null, { status: 403 });
+          const observe = lifecycle?.observeFrame;
+          if (observe)
+            app.write = (wire, send) => {
+              const result = send(wire);
+              if (result !== 0) observe(app.epoch, wire);
+              return result;
+            };
           if (server.upgrade(req, { data: { app, flow: null } })) return;
           return new Response(null, { status: 400 });
         }
+        if (
+          fixture &&
+          req.method === "GET" &&
+          !url.search &&
+          (origin === null || origin === server.url.origin)
+        ) {
+          const page = fixture(url.pathname);
+          if (page) return page;
+        }
+        if (origin !== null) return new Response(null, { status: 403 });
         if (/^\/instance\/[0-9a-f]{48}$/.test(url.pathname)) {
           if (url.search === "?idle" && (turns.size || preparing.size))
             return new Response(null, { status: 409 });
@@ -547,7 +597,10 @@ export async function startWriter<H extends object>(
             if (
               req.environmentId !== actor.environmentId ||
               req.protocolVersion.major !== 1 ||
-              req.protocolVersion.minor > 1 ||
+              req.protocolVersion.minor >
+                (req.method === "settings.read" || req.method === "settings.write"
+                  ? SETTING_GENERATION_MINOR
+                  : 1) ||
               req.connectionId !== session.connectionId ||
               req.challengeId !== session.challengeId ||
               req.challenge !== session.challenge ||
@@ -573,6 +626,17 @@ export async function startWriter<H extends object>(
               req.method === "subscription.close"
             ) {
               reads.request(ws, req);
+              return;
+            }
+            if (req.method === "settings.read" || req.method === "settings.write") {
+              ws.send(
+                JSON.stringify(
+                  settingReceiptForVersion(
+                    settingCommand(context, req.method, req.payload),
+                    req.protocolVersion.minor,
+                  ),
+                ),
+              );
               return;
             }
             const priorRetry =
@@ -621,7 +685,7 @@ export async function startWriter<H extends object>(
                 receipt = renameThread({ ...context, ...req.payload });
                 break;
               case "thread.start": {
-                const { projectId, model } = req.payload;
+                const { projectId } = req.payload;
                 const id = req.payload.instanceId ?? codex.registry.defaultFor(projectId);
                 const cwd = id ? transaction.projectDirectory(projectId) : null;
                 let entry = id && cwd ? codex.current(id, actor.id, cwd) : null;
@@ -633,6 +697,7 @@ export async function startWriter<H extends object>(
                 )
                   entry = await codex.lookup(id, actor.id, projectId);
                 if (!accepting) return;
+                const model = req.payload.model;
                 const chosen = codex.select(entry, model);
                 receipt = acceptFirstInput({
                   verifiedActor: actor,
@@ -772,10 +837,12 @@ export async function startWriter<H extends object>(
     return {
       kind: "ready" as const,
       instance,
+      openThread,
       async close() {
         if (!accepting) return;
         accepting = false;
         clearInterval(timer);
+        gitStatusCache.close();
         for (const ws of sockets) ws.close(1001);
         controller.abort();
         try {

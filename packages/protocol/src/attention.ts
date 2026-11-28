@@ -58,6 +58,7 @@ export const AttentionHintSchema = v.union([
 export type AttentionHint = v.InferOutput<typeof AttentionHintSchema>;
 
 const requestFact = v.strictObject({
+  answerable: v.optional(v.boolean()),
   request: v.pick(TodoRequestSchema, ["id", "body", "state"]),
   openedAt: SyncPositionSchema,
 });

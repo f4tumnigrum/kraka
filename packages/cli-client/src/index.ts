@@ -5,3 +5,8 @@ export { ownedDirectory } from "./private-directory";
 
 export * from "./thread-cache";
 export * from "./identity";
+export * from "./git-client";
+export * from "./settings";
+export * from "./thread-list";
+
+export { openLocalInputs } from "@kraka/client-runtime/sqlite";

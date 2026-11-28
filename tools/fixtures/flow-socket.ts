@@ -5,6 +5,7 @@ import { listenFlow, utf8, type SocketApplication } from "../../packages/daemon/
 import { SubscriptionWriter } from "../../packages/daemon/src/subscription-writer";
 import {
   ControlMessageSchema,
+  SignedRequestSchema,
   decodeFrame,
   type CommandReceipt,
   type ControlMessage,
@@ -162,8 +163,11 @@ async function connectSocket(
                 streamId: writer.id,
                 subscriptionId: m.payload.subscriptionId,
               });
-          } else if (opts.dispatch) opts.dispatch(m, connection);
-          else connection.respond(m, { kind: "actionAccepted" });
+          } else {
+            const request = v.parse(SignedRequestSchema, m);
+            if (opts.dispatch) opts.dispatch(request, connection);
+            else connection.respond(request, { kind: "actionAccepted" });
+          }
         },
         data() {
           throw new Error("Unexpected upload");

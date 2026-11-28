@@ -94,8 +94,26 @@ const item = v.variant("type", [
     type: v.literal("commandExecution"),
     id: NativeItemIdSchema,
     command: v.string(),
+    cwd: v.optional(v.string()),
+    status: v.optional(v.string()),
+    truncated: v.optional(v.boolean()),
     aggregatedOutput: v.nullable(v.string()),
     exitCode: v.nullable(v.pipe(v.number(), v.integer())),
+  }),
+  v.object({
+    type: v.literal("fileChange"),
+    id: NativeItemIdSchema,
+    changes: v.array(
+      v.object({
+        path: v.string(),
+        kind: v.variant("type", [
+          v.object({ type: v.literal("add") }),
+          v.object({ type: v.literal("delete") }),
+          v.object({ type: v.literal("update"), movePath: v.optional(v.nullable(v.string())) }),
+        ]),
+        diff: v.string(),
+      }),
+    ),
   }),
   v.object({ type: v.literal("agentMessage"), id: NativeItemIdSchema, text: v.string() }),
   v.object({
@@ -129,7 +147,11 @@ export function notification(method: string, raw: unknown, secrets: readonly str
   }
   if (method === "item/started" || method === "item/completed") {
     const p = object(raw);
-    if (!["userMessage", "agentMessage", "commandExecution"].includes(string(object(p.item).type)))
+    if (
+      !["userMessage", "agentMessage", "commandExecution", "fileChange"].includes(
+        string(object(p.item).type),
+      )
+    )
       return null;
     return { method, ...v.parse(targeted, p), item: v.parse(item, p.item) } as const;
   }

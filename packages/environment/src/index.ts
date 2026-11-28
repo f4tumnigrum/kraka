@@ -21,9 +21,13 @@ export {
 export { transitionTodo, type TodoEvent, type AnswerEvent } from "./todo";
 export * from "./adapter-contract";
 export * from "./settings";
+export * from "./setting-store";
 export * from "./checkpoints";
 export * from "./terminal";
 export * from "./worktrees";
+export * from "./git-status";
+export * from "./git-workspace";
+export * from "./local-diff";
 export * from "./forge";
 export * from "./forge-history";
 export * from "./migrations";
@@ -38,6 +42,14 @@ export * from "./listener";
 
 export * from "./forge-recovery";
 export { runReplayTurn } from "./replay-turn";
+export {
+  readActivity,
+  recordAdapterActivity,
+  type ActivityRead,
+  type StoredToolActivityVersion,
+  type ToolActivityActor,
+  type ToolActivityEvent,
+} from "./tool-activity";
 export * from "./access-store";
 export * from "./writer";
 export * from "./first-send-store";
@@ -60,3 +72,4 @@ export * from "./todo-command";
 export * from "./todo-session";
 export * from "./codex-bindings";
 export * from "./ordinary-stop";
+export * from "./list-pass";

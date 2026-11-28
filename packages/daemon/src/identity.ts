@@ -1,3 +1,4 @@
+import { attachFlow, type SocketApplication } from "./flow-socket";
 import { createServer as createTLS } from "node:https";
 import { browserPage, type preflight } from "./browser-listener";
 import { createServer, type IncomingMessage, type RequestListener } from "node:http";
@@ -77,6 +78,7 @@ export interface IdentityPort {
   }) => void;
   pairingPending?: (pending: PairingPending) => void;
   confirmInstance?: (nonce: string) => string | null;
+  openThread?: (nonce: string) => Promise<SocketApplication | null>;
   beforeConfiguration?: (session: SessionAuthorized) => Promise<void>;
   beforePairingReply?: (result: DevicePairingResult) => Promise<void>;
 }
@@ -476,6 +478,38 @@ export function listenIdentity(
       return;
     }
     seen.set(d.nonce, now() + PAIRING_LIMITS.challengeMs);
+    if (browser && req.headers["sec-websocket-protocol"] === "kraka.thread.v1") {
+      void host
+        .openThread?.(d.nonce)
+        .then((app) => {
+          if (!app || socket.destroyed) return socket.destroy();
+          sockets.handleUpgrade(req, socket, head, (ws) => {
+            const session = attachFlow(app, {
+              send(data) {
+                ws.send(data);
+                return 1;
+              },
+              close(code) {
+                ws.close(code);
+              },
+            });
+            ws.on("message", (data, binary) => {
+              try {
+                if (!Buffer.isBuffer(data)) throw Error("Invalid frame");
+                session.peer.input(binary ? data : data.toString());
+                session.wake();
+              } catch {
+                ws.close(1002);
+              }
+            });
+            ws.on("close", () => session.dispose());
+            ws.on("error", () => ws.terminate());
+          });
+        })
+        .catch(() => socket.destroy());
+      if (!host.openThread) socket.destroy();
+      return;
+    }
     sockets.handleUpgrade(req, socket, head, (ws) => {
       const hello: Peer["hello"] = {
         kind: "server.hello",
@@ -619,6 +653,7 @@ export function listenIdentity(
         return p.work;
       });
       peers.clear();
+      for (const ws of sockets.clients) ws.terminate();
       sockets.close();
       await new Promise<void>((resolve, reject) =>
         server.close((e) => (e ? reject(e) : resolve())),

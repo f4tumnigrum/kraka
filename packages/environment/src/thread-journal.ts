@@ -1,13 +1,24 @@
+import { decodeJournalRow, encodeJournalRow } from "./journal-row";
+import { ListIndex } from "./list-index";
+import type { ListScope } from "./list-pass";
+import type { PrincipalId, TodoRequest, Round, SyncPosition } from "@kraka/protocol";
 import type { Database } from "bun:sqlite";
+import { promoteSessionObservation } from "./session-observations";
+import { AttemptIdSchema, ExecutorInstanceIdSchema, NativeSessionIdSchema } from "@kraka/protocol";
+import { ToolActivityStorage } from "./tool-activity-storage";
 import * as v from "valibot";
 import {
   HistoryPageSchema,
+  ExecutorSessionObservationSchema,
+  type ExecutorSessionObservation,
   HistoryAnchorIdSchema,
   ObjectKeySchema,
   ObjectVersionSchema,
   SyncCursorSchema,
   SyncPositionSchema,
   ThreadIdSchema,
+  TimelineItemIdSchema,
+  ToolActivityBodySchema,
   TextReturnedEventSchema,
   keyString,
   rowKey,
@@ -18,6 +29,8 @@ import {
   type ThreadId,
   type EnvironmentId,
   type TextReturnedEvent,
+  type TimelineItemId,
+  type ToolActivityHistoryItem,
 } from "@kraka/protocol";
 import {
   boundedEntries,
@@ -27,6 +40,11 @@ import {
   type AuthorizedScope,
   type ReadRow,
 } from "./thread-pass";
+import {
+  evolveToolActivity,
+  type StoredToolActivityVersion,
+  type ToolActivityEvent,
+} from "./tool-activity";
 
 const rowSchema = HistoryPageSchema.entries.rows.item;
 type Meta = { generation: string; head: string; floor: string };
@@ -66,16 +84,22 @@ function orderBounded(item: ReadRow, edge: Bound) {
   return 0;
 }
 export class ThreadJournal {
+  private readonly activities: ToolActivityStorage;
+  readonly list: ListIndex;
   private readonly listeners = new Set<() => void>();
   constructor(
     readonly db: Database,
     readonly environmentId: EnvironmentId,
   ) {
-    db.transaction(() => {
+    ({ activities: this.activities, list: this.list } = db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1),generation TEXT NOT NULL,head TEXT NOT NULL,floor TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
-     CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);`);
+     CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
+     CREATE TABLE IF NOT EXISTS tool_activity_scoped_changes(thread_id TEXT NOT NULL,event_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread_id,event_id));`);
+      return { activities: new ToolActivityStorage(db), list: new ListIndex(db) };
+    })());
+    db.transaction(() => {
       if (this.meta()) return;
       db.run("INSERT INTO sync_meta VALUES(1,?,'0','0')", [crypto.randomUUID()]);
       const rows: HistoryRow[] = [];
@@ -95,6 +119,42 @@ export class ThreadJournal {
   private meta() {
     return this.db.query<Meta, []>("SELECT generation,head,floor FROM sync_meta WHERE id=1").get();
   }
+  nextPosition() {
+    const meta = this.meta();
+    if (!meta) throw Error("Missing sync clock");
+    return v.parse(SyncPositionSchema, String(BigInt(meta.head) + 1n));
+  }
+  saveObservation(
+    threadId: ThreadId,
+    source: ExecutorSessionObservation["source"],
+    change: (old: ExecutorSessionObservation | null) => ExecutorSessionObservation,
+  ) {
+    const updated = this.db
+      .transaction(() => {
+        const previous = this.db
+          .query<{ payload: string }, [string, string, string, number, string, string]>(
+            "SELECT payload FROM sync_rows WHERE source=? AND json_extract(payload,'$.value.kind')='executorObservation' AND json_extract(payload,'$.value.source.instanceId')=? AND json_extract(payload,'$.value.source.nativeSessionId')=? AND json_extract(payload,'$.value.source.epoch')=? AND json_extract(payload,'$.value.source.eventId')=? AND json_extract(payload,'$.value.source.sourceId')=?",
+          )
+          .get(
+            threadId,
+            source.instanceId,
+            source.nativeSessionId,
+            source.epoch,
+            source.eventId,
+            source.sourceId,
+          );
+        const prior = previous
+          ? v.parse(ExecutorSessionObservationSchema, JSON.parse(previous.payload).value)
+          : null;
+        const next = change(prior);
+        if (prior === next) return false;
+        this.record([{ objectType: "timelineItem", value: next }]);
+        return true;
+      })
+      .immediate();
+    if (updated && !this.db.inTransaction) this.notify();
+    return updated;
+  }
   subscribe(wake: () => void) {
     this.listeners.add(wake);
     return () => {
@@ -104,23 +164,64 @@ export class ThreadJournal {
   notify() {
     for (const wake of this.listeners) wake();
   }
+  private advanceClock() {
+    const meta = this.meta();
+    if (!meta) throw Error("Missing sync clock");
+    const position = String(BigInt(meta.head) + 1n);
+    this.db.run("UPDATE sync_meta SET head=? WHERE id=1", [position]);
+    return position;
+  }
+  markRead(actor: PrincipalId, thread: ThreadId, through: SyncPosition) {
+    const changed = this.db.transaction(() => {
+      const current = this.db
+        .query<{ position: string }, [string, string]>(
+          "SELECT position FROM list_watermarks WHERE owner=? AND source=?",
+        )
+        .get(actor, thread);
+      if (current && BigInt(current.position) >= BigInt(through)) return false;
+      this.db
+        .query(
+          "INSERT INTO list_watermarks VALUES(?,?,?) ON CONFLICT(owner,source) DO UPDATE SET position=excluded.position",
+        )
+        .run(actor, thread, through);
+      this.advanceClock();
+      return true;
+    })();
+    if (changed) this.notify();
+  }
+  observeQuota(
+    round: Pick<Round, "id" | "threadId" | "attempt">,
+    quota: { resetAt: number | null } | null,
+  ) {
+    const changed = this.db.transaction(() => {
+      const sql = this.db.query(`UPDATE list_attempts SET data=json_set(data,'$.quota',json(?))
+        WHERE source=? AND round=? AND attempt=? AND terminal=0 AND json_extract(data,'$.quota') IS NOT json_extract(?,'$')`);
+      const value = JSON.stringify(quota);
+      if (!sql.run(value, round.threadId, round.id, round.attempt.attemptId, value).changes)
+        return false;
+      this.advanceClock();
+      return true;
+    })();
+    if (changed) this.notify();
+  }
   record(
     rows: readonly HistoryRow[],
     extras: {
       removed?: readonly { source: ThreadId; key: ObjectKey; version: string }[];
       returns?: readonly TextReturnedEvent[];
+      activity?: { item: ToolActivityHistoryItem; round: string | null };
     } = {},
   ) {
     if (!this.db.inTransaction) throw Error("Sync index must share the object write transaction");
-    if (!rows.length && !extras.removed?.length && !extras.returns?.length) return;
-    const meta = this.meta();
-    if (!meta) throw Error("Missing sync clock");
-    const position = String(BigInt(meta.head) + 1n);
-    this.db.run("UPDATE sync_meta SET head=? WHERE id=1", [position]);
+    if (!extras.activity && !rows.length && !extras.removed?.length && !extras.returns?.length)
+      return;
+    const position = this.advanceClock();
     const put =
       this.db.query(`INSERT INTO sync_rows(source,key,round,created,changed,version,payload) VALUES(?,?,?,?,?,?,?)
    ON CONFLICT(source,key) DO UPDATE SET changed=excluded.changed,version=excluded.version,payload=excluded.payload,round=excluded.round`);
+    const now = Date.now();
     for (const row of rows) {
+      this.list.record(row, position, now);
       const source =
         row.objectType === "thread"
           ? row.value.id
@@ -141,10 +242,24 @@ export class ThreadJournal {
         row.objectType === "timelineItem" ? row.value.createdPosition : position,
         position,
         row.value.version,
-        JSON.stringify(row),
+        encodeJournalRow(row),
+      );
+    }
+    if (extras.activity) {
+      const { item, round } = extras.activity;
+      this.list.touch(item.threadId, position, now);
+      put.run(
+        item.threadId,
+        keyString(rowKey({ objectType: "timelineItem", value: item })),
+        round,
+        item.createdPosition,
+        position,
+        item.version,
+        JSON.stringify(item.id),
       );
     }
     for (const item of extras.removed ?? []) {
+      this.list.remove(item.source, item.key.objectType, item.key.id, position, now);
       const prior = this.db
         .query<{ version: string }, [string, string]>(
           "SELECT version FROM sync_rows WHERE source=? AND key=?",
@@ -162,6 +277,138 @@ export class ThreadJournal {
         "INSERT INTO sync_returns VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET changed=excluded.changed,data=excluded.data",
         [event.result.target.threadId, event.result.transferId, position, JSON.stringify(event)],
       );
+  }
+  recordToolActivity(event: ToolActivityEvent): "stored" | "unchanged" | "conflict" {
+    let changed = false;
+    const result = this.db
+      .transaction(() => {
+        const seen = this.activities.recordEvent(event);
+        if (seen !== "new") return seen;
+        if (event.observation) {
+          const source = {
+            instanceId: v.parse(ExecutorInstanceIdSchema, event.instanceId),
+            nativeSessionId: v.parse(NativeSessionIdSchema, event.nativeSessionId),
+            epoch: event.epoch,
+            ...event.observation,
+          };
+          const relationship = event.relationship;
+          if (!relationship) throw Error("Missing native observation relationship");
+          changed = this.saveObservation(event.threadId, source, (prior) => {
+            if (!prior) throw Error("Unknown observation source");
+            const linked = promoteSessionObservation(prior, {
+              kind: "attempt",
+              source,
+              relationship,
+              attemptId: v.parse(AttemptIdSchema, event.attemptId),
+            });
+            if (linked.kind !== "ok") throw Error(linked.reason);
+            return linked.value;
+          });
+        }
+        const source = this.db
+          .query<{ id: number; item_id: string }, [string, string, string, number, string, string]>(
+            "SELECT id,item_id FROM tool_activity_sources WHERE thread_id=? AND instance_id=? AND session_id=? AND epoch=? AND call_id=? AND attempt_id=?",
+          )
+          .get(
+            event.threadId,
+            event.instanceId,
+            event.nativeSessionId,
+            event.epoch,
+            event.callId,
+            event.attemptId,
+          );
+        const id = source
+          ? v.parse(TimelineItemIdSchema, source.item_id)
+          : v.parse(TimelineItemIdSchema, crypto.randomUUID());
+        const latest =
+          source &&
+          this.db
+            .query<{ version: string }, [number]>(
+              "SELECT version FROM tool_activity_versions WHERE source=? ORDER BY length(version) DESC,version DESC LIMIT 1",
+            )
+            .get(source.id);
+        const stored = latest && this.activityTransfer(event.threadId, id, latest.version);
+        const previous = stored ? { item: stored.item, body: this.activityBody(stored) } : null;
+        const next = evolveToolActivity(previous, event, {
+          id,
+          createdPosition: this.nextPosition(),
+        });
+
+        if (!next.changed) return "unchanged";
+        const call =
+          source?.id ??
+          Number(
+            this.db.run(
+              "INSERT INTO tool_activity_sources(thread_id,instance_id,session_id,epoch,call_id,attempt_id,item_id) VALUES(?,?,?,?,?,?,?)",
+              [
+                event.threadId,
+                event.instanceId,
+                event.nativeSessionId,
+                event.epoch,
+                event.callId,
+                event.attemptId,
+                next.item.id,
+              ],
+            ).lastInsertRowid,
+          );
+        this.activities.save(call, next.item, next.body);
+        this.record([], { activity: { item: next.item, round: event.roundId ?? null } });
+        changed = true;
+        return "stored";
+      })
+      .immediate();
+    if (changed) this.notify();
+    return result;
+  }
+  recordUnattributedToolChange(event: {
+    threadId: ThreadId;
+    attemptId: string;
+    eventId: string;
+    path: string;
+    change: "created" | "modified" | "deleted" | "moved";
+    destination: string | null;
+    patch: string | null;
+  }) {
+    this.db.run("INSERT OR IGNORE INTO tool_activity_scoped_changes VALUES(?,?,?)", [
+      event.threadId,
+      event.eventId,
+      JSON.stringify(event),
+    ]);
+  }
+  activityTransfer(threadId: ThreadId, itemId: TimelineItemId, version: string) {
+    return this.activities.transfer(threadId, itemId, version);
+  }
+  activityBody(stored: StoredToolActivityVersion) {
+    const bytes = stored.read(0, stored.reference.byteLength);
+    return v.parse(ToolActivityBodySchema, JSON.parse(Buffer.from(bytes).toString("utf8")).body);
+  }
+  readList(
+    scope: ListScope,
+    visibility: string,
+    actor: PrincipalId,
+    canRead: (id: ThreadId) => boolean,
+    canAnswer: (todo: TodoRequest) => boolean,
+  ) {
+    return this.db.transaction(() => {
+      const meta = this.meta();
+      if (!meta) throw Error("Missing sync clock");
+      const head = v.parse(SyncCursorSchema, {
+        environmentId: this.environmentId,
+        databaseGeneration: meta.generation,
+        visibilityGeneration: visibility,
+        scope,
+        shapeVersion: 2,
+        through: meta.head,
+      });
+      return this.list.read(
+        head,
+        v.parse(SyncPositionSchema, meta.floor),
+        scope,
+        actor,
+        canRead,
+        canAnswer,
+      );
+    })();
   }
   read(scope: AuthorizedScope, visibility: string): ThreadReadView {
     return this.db.transaction((): ThreadReadView => {
@@ -211,7 +458,14 @@ export class ThreadJournal {
               version: v.parse(ObjectVersionSchema, data.version),
             });
           } else {
-            const row = v.parse(rowSchema, JSON.parse(data.payload));
+            const payload: unknown = JSON.parse(data.payload);
+            const row =
+              typeof payload === "string"
+                ? {
+                    objectType: "timelineItem" as const,
+                    value: this.activities.summary(source, payload, data.version),
+                  }
+                : decodeJournalRow(payload);
             if (row.objectType === "round")
               row.value = roundForProtocol(row.value, scope.protocolMinor);
             rows.push({ row, source, created, changed, round: data.round });

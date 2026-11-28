@@ -26,7 +26,14 @@ import { within, withState } from "./replay-process";
 
 type Observation = { kind: string; message: unknown; at: number };
 type Options = {
-  minor?: 0 | 1;
+  minor?: 0 | 1 | 2;
+  wire?: (data: import("@kraka/protocol").WireMessage) => void;
+  write?: (
+    data: import("@kraka/protocol").WireMessage,
+    send: (data: import("@kraka/protocol").WireMessage) => void,
+  ) => void;
+  holdSeal?: (head: SyncCursor) => Promise<void>;
+  captureReply?: (wire: import("@kraka/protocol").WireMessage) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
@@ -39,7 +46,7 @@ type Options = {
 export async function connectReplica(
   url: string,
   identity: EnvironmentIdentity,
-  device: Client,
+  device: Pick<Client, "device" | "principal">,
   cache: SqliteThreadCache,
   opts: Options = {},
 ) {
@@ -54,6 +61,7 @@ export async function connectReplica(
   let replica: ThreadReplica | undefined,
     seq = 0,
     bytes = 0,
+    replyBytes = 0,
     arrival = 0;
   const messages: Observation[] = [],
     heads: SyncCursor[] = [];
@@ -72,12 +80,25 @@ export async function connectReplica(
     ready.reject(Error("Replica socket closed"));
     closed.resolve();
   };
+  let held: Promise<void> | null = null;
   socket.onmessage = async (e) => {
     arrival = performance.now();
     try {
       const wire = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
       bytes += wireBytes(wire, utf8);
+      replyBytes += wireBytes(wire, utf8);
+      opts.captureReply?.(wire);
       if (replica) {
+        opts.wire?.(wire);
+        if (held) await held;
+        if (opts.holdSeal && typeof wire === "string") {
+          const frame = decodeFrame(wire, utf8);
+          if (frame.lane === "control" && frame.message.kind === "subscription.seal") {
+            held = opts.holdSeal(frame.message.cursor);
+            await held;
+            held = null;
+          }
+        }
         replica.peer.input(wire);
         replica.peer.pump();
         return;
@@ -138,7 +159,8 @@ export async function connectReplica(
           now: () => performance.now(),
           write(w) {
             bytes += wireBytes(w, utf8);
-            socket.send(w);
+            if (opts.write) opts.write(w, (data) => socket.send(data));
+            else socket.send(w);
             return 1;
           },
         },
@@ -163,13 +185,13 @@ export async function connectReplica(
               : cache),
           read: () => cache.read(),
           id: () => v.parse(SubscriptionIdSchema, crypto.randomUUID()),
-          async sign(method, payload) {
+          async sign(method, payload, commandId) {
             const request = {
               ...envelope,
               method,
               payload,
               kind: "signedRequest",
-              commandId: opts.commandId?.(method) ?? crypto.randomUUID(),
+              commandId: commandId ?? opts.commandId?.(method) ?? crypto.randomUUID(),
               sequence: ++seq,
             };
             return v.parse(SignedRequestSchema, {
@@ -217,6 +239,7 @@ export async function connectReplica(
       messages,
       cache,
       bytes: () => bytes,
+      replyBytes: () => replyBytes,
       async at(position: string) {
         await until(() => heads.some((h) => h.through === position), "installed " + position);
         return heads.find((h) => h.through === position)!;
@@ -242,9 +265,10 @@ export async function threadFixture<T>(
   body: (f: Awaited<ReturnType<typeof setup>>) => Promise<T>,
   root = productRoot,
   onStage?: (name: string) => void,
+  recordSentBytes = false,
 ) {
   return withState(async (dir) => {
-    const f = await setup(dir, root, onStage);
+    const f = await setup(dir, root, recordSentBytes, onStage);
     try {
       return await body(f);
     } finally {
@@ -253,32 +277,39 @@ export async function threadFixture<T>(
     }
   });
 }
-async function setup(dir: string, root: string, onStage?: (name: string) => void) {
+async function setup(
+  dir: string,
+  root: string,
+  recordSentBytes: boolean,
+  onStage?: (name: string) => void,
+) {
   onStage?.("pairing devices");
   const pairing = await startPairedProject({
     stateDir: dir,
     projectId: "project-notes",
-    requests: [["thread.view", "thread.send"]],
+    requests: [["thread.view", "thread.send", "thread.reply", "owner.decide", "term.input"]],
   });
   const stateDir = join(pairing.stateDir, "host");
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
-  const f = await startFirstSendFixture({
-    stateDir,
-    projectDirectory: join(dir, "work"),
-    adapter: "replay",
-    root,
-    point: "resume",
-    ...(onStage && { onStage }),
-    ipc(message) {
-      const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
-      const waiter = pending.get(reply.id);
-      if (reply.error === null) waiter?.resolve();
-      else waiter?.reject(Error(reply.error));
-    },
-  }).catch(async (e) => {
-    await pairing.close();
-    throw e;
-  });
+  const launch = () =>
+    startFirstSendFixture({
+      stateDir,
+      projectDirectory: join(dir, "work"),
+      adapter: "replay",
+      root,
+      point: recordSentBytes ? "activity-ledger" : "resume",
+      ...(onStage && { onStage }),
+      ipc(message) {
+        const reply = v.parse(v.object({ id: v.string(), error: v.nullable(v.string()) }), message);
+        const waiter = pending.get(reply.id);
+        if (reply.error === null) waiter?.resolve();
+        else waiter?.reject(Error(reply.error));
+      },
+    }).catch(async (e) => {
+      await pairing.close();
+      throw e;
+    });
+  let f = await launch();
   const tablet = pairing.clients[0];
   if (!tablet) throw Error("Missing paired device");
   const caches = new Map<string, SqliteThreadCache>();
@@ -302,10 +333,29 @@ async function setup(dir: string, root: string, onStage?: (name: string) => void
   }
   const threadId = v.parse(ThreadIdSchema, "thread-notes");
   return {
-    f,
+    get f() {
+      return f;
+    },
+    async restart() {
+      await Promise.all([...live].map((r) => r.close()));
+      live.clear();
+      await f.close();
+      f = await launch();
+      exit = undefined;
+    },
+    pairing,
     dir,
     stateDir,
     threadId,
+    ownerScope: {
+      principalId: pairing.owner.principal.id,
+      environmentId: pairing.identity.id,
+      threadId,
+    },
+    closeCache(name: string) {
+      caches.get(name)?.close();
+      caches.delete(name);
+    },
     control,
     async seed(rows: unknown[]) {
       await control({ rows });

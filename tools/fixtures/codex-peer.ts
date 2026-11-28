@@ -276,6 +276,10 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         ? [9, 10, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19]
         : Array.from({ length: 12 }, (_, i) => i + 8);
     for (const seq of order) {
+      if (process.env.PEER_FRAME_GATE && [12, 13, 14, 16, 19].includes(seq)) {
+        const reply = await fetch(new URL(String(seq), process.env.PEER_FRAME_GATE));
+        if (!reply.ok) throw Error("Recorded frame gate closed");
+      }
       await gate(String(seq), id);
       if (seq === 9) log("root", id, { session });
       if (seq === 19 && profile === "history") {

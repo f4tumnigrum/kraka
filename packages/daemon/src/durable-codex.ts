@@ -17,6 +17,7 @@ import {
   type CodexBinding,
   frozenInput,
   bindTodoSession,
+  recordAdapterActivity,
   readThread,
   readRound,
   readMessage,
@@ -180,6 +181,7 @@ export async function dispatchCodex(
   const failed = (reason: string, message: string | null) => {
     const round = readRound(store.db, roundId);
     if (!round || round.attempt.attemptId !== attemptId) return;
+    if (reason === "usageLimited") store.sync.observeQuota(round, { resetAt: null });
     const current = round.attempt.phase;
     if (current.kind === "armed" && reason !== "unsafeToRetry" && reason !== "unexpectedExit")
       report({ kind: "refused", ...ticket, reason: message ?? reason });
@@ -290,11 +292,23 @@ export async function dispatchCodex(
     if (written.value.kind !== "written" || written.value.deliveryId !== deliveryId)
       throw new Error("Unmatched delivery");
     report({ kind: "written", ...ticket, at: Date.now() });
+    let root: import("@kraka/protocol").NativeRootTurnId | null = null;
     let next = await first;
     while (!next.done) {
       const event = next.value,
         p = event.payload;
+      if (
+        p.kind === "sessionLost" &&
+        p.failure.kind === "usageLimit" &&
+        matchesAdapterEvent(binding, event)
+      )
+        store.sync.observeQuota(initial, { resetAt: p.failure.resetAt });
       if (todos.event(event)) {
+        next = await events.next();
+        continue;
+      }
+      if (p.kind === "sessionObservation" || p.kind === "fileChanged") {
+        recordAdapterActivity(store.sync, binding, roundId, event, root);
         next = await events.next();
         continue;
       }
@@ -315,6 +329,7 @@ export async function dispatchCodex(
             });
           break;
         case "roundStarted": {
+          root = p.nativeRootTurnId;
           report({
             kind: "rootStarted",
             ...ticket,
@@ -410,6 +425,9 @@ export async function dispatchCodex(
         }
         case "toolActivity": {
           const callId = p.callId;
+          const activity = recordAdapterActivity(store.sync, binding, roundId, event, root);
+          if (activity === "conflict") throw Error("Conflicting tool event");
+          if (activity === "unchanged") break;
           if (p.phase === "started")
             emit({
               kind: "tool.started",
@@ -441,6 +459,7 @@ export async function dispatchCodex(
             text: p.finalText ?? p.text,
           });
           break;
+
         case "roundEnded": {
           if (
             p.endTimeEvidence.source !== "executorReported" ||
@@ -448,20 +467,24 @@ export async function dispatchCodex(
           )
             throw new Error("Missing Codex end boundary");
           const root = { id: p.nativeRootTurnId, sessionId, beganAt: null };
-          report({
-            kind: "rootEnded",
-            ...ticket,
-            root,
-            endedAt: p.endedAt,
-            endTimeEvidence: p.endTimeEvidence,
-            nativeReason: p.outcome.nativeReason,
-            ...(p.outcome.reason === "completed"
-              ? ({
-                  outcome: "completed",
-                  captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
-                } as const)
-              : { outcome: p.outcome.reason }),
-          });
+          store.db.transaction(() => {
+            if (p.outcome.reason === "failed" && p.outcome.failure.kind === "usageLimit")
+              store.sync.observeQuota(initial, { resetAt: p.outcome.failure.resetAt });
+            report({
+              kind: "rootEnded",
+              ...ticket,
+              root,
+              endedAt: p.endedAt,
+              endTimeEvidence: p.endTimeEvidence,
+              nativeReason: p.outcome.nativeReason,
+              ...(p.outcome.reason === "completed"
+                ? ({
+                    outcome: "completed",
+                    captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
+                  } as const)
+                : { outcome: p.outcome.reason }),
+            });
+          })();
           stops.ended(attemptId);
           if (p.outcome.reason === "failed")
             emit({

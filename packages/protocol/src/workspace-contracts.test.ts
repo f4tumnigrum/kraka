@@ -11,6 +11,8 @@ import {
   DESKTOP_IPC,
   DiffRequestSchema,
   DiffResultSchema,
+  CommandReceiptSchema,
+  PROTOCOL_FEATURES,
   RollbackProgressSchema,
   AppNoteReadSchema,
   WorkspaceFileReadSchema,
@@ -106,6 +108,21 @@ test("keeps cross-round boundaries, patch truncation and file recovery permissio
       toCaptureId: "last",
     }).success,
   ).toBe(true);
+  expect(
+    v.safeParse(DiffRequestSchema, {
+      kind: "workingTree",
+      threadId: "t",
+      directoryId: "dir",
+      generation: "1",
+    }).success,
+  ).toBe(true);
+  expect(
+    v.safeParse(DiffRequestSchema, {
+      kind: "workingTree",
+      threadId: "t",
+      worktreeId: "w",
+    }).success,
+  ).toBe(true);
   const end = { kind: "round", boundary: "after", captureId: "last", commit: "a".repeat(40) };
   expect(
     v.safeParse(DiffResultSchema, {
@@ -123,6 +140,44 @@ test("keeps cross-round boundaries, patch truncation and file recovery permissio
       patch: "prefix",
       truncated: true,
       next: null,
+    }).success,
+  ).toBe(true);
+  expect(
+    v.safeParse(DiffResultSchema, {
+      kind: "changed",
+      from: {
+        kind: "git",
+        threadId: "t",
+        directoryId: "dir",
+        generation: "1",
+        relation: "head",
+        oid: "a".repeat(40),
+      },
+      to: {
+        kind: "workingTree",
+        threadId: "t",
+        directoryId: "dir",
+        generation: "1",
+        tree: "b".repeat(40),
+      },
+      files: [
+        {
+          path: "n",
+          previousPath: null,
+          change: "modified",
+          owner: { kind: "unknown", reason: "sharedWriter" },
+        },
+      ],
+      patch: "complete",
+      next: null,
+    }).success,
+  ).toBe(true);
+  expect(PROTOCOL_FEATURES).toContain("directoryDiff");
+  expect(
+    v.safeParse(CommandReceiptSchema, {
+      kind: "accepted",
+      commandId: "subscribe",
+      result: { kind: "subscriptionOpened", subscriptionId: "status", streamId: 1 },
     }).success,
   ).toBe(true);
   const target = {

@@ -86,7 +86,9 @@ Supply a fresh public nonce in the upgrade query and verify its signed echo with
 | `device.revoke` | `access.give` | environment |
 | `subscription.openThread` | `thread.view` | thread |
 | `subscription.openList` | `thread.view` | environment |
+| `thread.markRead` | `thread.view` | thread |
 | `thread.readHistory` | `thread.view` | thread |
+| `tool.readActivity` | `thread.view` | thread |
 | `history.pageSaved` | `thread.view` | thread |
 | `subscription.close` | `thread.view` | subscription |
 | `subscription.pageSaved` | `thread.view` | subscription |
@@ -893,6 +895,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
           "items": {
             "type": "object",
             "properties": {
+              "answerable": {
+                "type": "boolean"
+              },
               "request": {
                 "type": "object",
                 "properties": {
@@ -1234,6 +1239,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
             "items": {
               "type": "object",
               "properties": {
+                "answerable": {
+                  "type": "boolean"
+                },
                 "request": {
                   "type": "object",
                   "properties": {
@@ -1834,6 +1842,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "threadId": {
           "$ref": "#/$defs/ThreadId"
+        },
+        "answerable": {
+          "type": "boolean"
         },
         "request": {
           "type": "object",
@@ -3894,6 +3905,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
               "additionalProperties": false
             },
             {
+              "$ref": "#/$defs/ToolActivityReadResult"
+            },
+            {
               "type": "object",
               "properties": {
                 "kind": {
@@ -5362,6 +5376,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "kind": {
                   "const": "subscriptionOpened"
                 },
+                "permissions": {
+                  "$ref": "#/$defs/PermissionSet"
+                },
                 "subscriptionId": {
                   "$ref": "#/$defs/SubscriptionId"
                 },
@@ -6272,6 +6289,103 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/SignedRequest"
     },
     {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "settings.write"
+        },
+        "payload": {},
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    {
       "$ref": "#/$defs/CommandReceipt"
     },
     {
@@ -6536,6 +6650,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     },
     {
       "$ref": "#/$defs/HistoryPage"
+    },
+    {
+      "$ref": "#/$defs/ToolActivityDetailFrame"
     },
     {
       "$ref": "#/$defs/ContentChunkHeader"
@@ -7318,7 +7435,7 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 
 ```json
 {
-  "oneOf": [
+  "anyOf": [
     {
       "type": "object",
       "properties": {
@@ -7354,6 +7471,46 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "type": "object",
       "properties": {
         "kind": {
+          "const": "git"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "relation": {
+          "enum": [
+            "mergeBase",
+            "head",
+            "firstParent",
+            "commit",
+            "emptyTree"
+          ],
+          "type": "string"
+        },
+        "oid": {
+          "$ref": "#/$defs/GitObjectId"
+        }
+      },
+      "required": [
+        "kind",
+        "threadId",
+        "directoryId",
+        "generation",
+        "relation",
+        "oid"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
           "const": "workingTree"
         },
         "worktreeId": {
@@ -7366,6 +7523,35 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "required": [
         "kind",
         "worktreeId",
+        "tree"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "workingTree"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "tree": {
+          "$ref": "#/$defs/GitObjectId"
+        }
+      },
+      "required": [
+        "kind",
+        "threadId",
+        "directoryId",
+        "generation",
         "tree"
       ],
       "additionalProperties": false
@@ -7406,7 +7592,7 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 
 ```json
 {
-  "oneOf": [
+  "anyOf": [
     {
       "type": "object",
       "properties": {
@@ -7485,6 +7671,31 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "threadId": {
           "$ref": "#/$defs/ThreadId"
         },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "workingTree"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
         "worktreeId": {
           "$ref": "#/$defs/WorktreeId"
         },
@@ -7510,6 +7721,36 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "threadId": {
           "$ref": "#/$defs/ThreadId"
         },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "branch"
+        },
+        "baseRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "kind",
+        "baseRef"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
         "worktreeId": {
           "$ref": "#/$defs/WorktreeId"
         },
@@ -7523,6 +7764,35 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "required": [
         "threadId",
         "worktreeId",
+        "kind",
+        "commit"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "commit"
+        },
+        "commit": {
+          "$ref": "#/$defs/GitObjectId"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
         "kind",
         "commit"
       ],
@@ -14175,11 +14445,12 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "binaryContentChunks",
       "privateSecretSubmission",
       "queueEditing",
-      "timelineItems"
+      "timelineItems",
+      "directoryDiff"
     ],
     "type": "string"
   },
-  "maxItems": 8
+  "maxItems": 9
 }
 ```
 
@@ -16952,6 +17223,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "generation": {
+                  "$ref": "#/$defs/WorktreeGeneration"
                 }
               },
               "required": [
@@ -17154,6 +17428,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "path": {
                   "type": "string",
                   "minLength": 1
+                },
+                "generation": {
+                  "$ref": "#/$defs/WorktreeGeneration"
                 }
               },
               "required": [
@@ -17992,6 +18269,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                         "path": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "generation": {
+                          "$ref": "#/$defs/WorktreeGeneration"
                         }
                       },
                       "required": [
@@ -19080,6 +19360,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                         "path": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "generation": {
+                          "$ref": "#/$defs/WorktreeGeneration"
                         }
                       },
                       "required": [
@@ -19784,6 +20067,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "path": {
           "type": "string",
           "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
         }
       },
       "required": [
@@ -20955,7 +21241,13 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/subscription.openList"
     },
     {
+      "$ref": "#/$defs/thread.markRead"
+    },
+    {
       "$ref": "#/$defs/thread.readHistory"
+    },
+    {
+      "$ref": "#/$defs/tool.readActivity"
     },
     {
       "$ref": "#/$defs/history.pageSaved"
@@ -21036,47 +21328,2312 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 
 ```json
 {
-  "type": "object",
-  "properties": {
-    "kind": {
-      "const": "subscription.page"
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "subscription.page"
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "passId": {
+          "$ref": "#/$defs/SyncPassId"
+        },
+        "through": {
+          "type": "object",
+          "properties": {
+            "environmentId": {
+              "$ref": "#/$defs/EnvironmentId"
+            },
+            "databaseGeneration": {
+              "type": "string",
+              "minLength": 1
+            },
+            "visibilityGeneration": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scope": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "list"
+                },
+                "projectId": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ProjectId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "projectId"
+              ],
+              "additionalProperties": false
+            },
+            "shapeVersion": {
+              "const": 2
+            },
+            "through": {
+              "$ref": "#/$defs/SyncPosition"
+            }
+          },
+          "required": [
+            "environmentId",
+            "databaseGeneration",
+            "visibilityGeneration",
+            "scope",
+            "shapeVersion",
+            "through"
+          ],
+          "additionalProperties": false
+        },
+        "pageNumber": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "thread.summary"
+                      },
+                      "summary": {
+                        "type": "object",
+                        "properties": {
+                          "threadId": {
+                            "$ref": "#/$defs/ThreadId"
+                          },
+                          "projectId": {
+                            "$ref": "#/$defs/ProjectId"
+                          },
+                          "parentThreadId": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/ThreadId"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "default": null
+                          },
+                          "version": {
+                            "$ref": "#/$defs/ObjectVersion"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "lastActivityAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "description": "When absent, the last activity time equals createdAt in this summary."
+                          },
+                          "lifecycle": {
+                            "type": "object",
+                            "properties": {
+                              "archivedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "default": null
+                              },
+                              "state": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "active"
+                                      },
+                                      "pinnedAt": {
+                                        "anyOf": [
+                                          {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "default": null
+                                      },
+                                      "pinPosition": {
+                                        "anyOf": [
+                                          {
+                                            "$ref": "#/$defs/QueuePosition"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "default": null
+                                      },
+                                      "manualPosition": {
+                                        "anyOf": [
+                                          {
+                                            "$ref": "#/$defs/QueuePosition"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "default": null
+                                      },
+                                      "snoozedUntil": {
+                                        "anyOf": [
+                                          {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "default": null
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "settled"
+                                      },
+                                      "at": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "reason": {
+                                        "enum": [
+                                          "manual",
+                                          "idle",
+                                          "merged",
+                                          "closed"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "at",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ],
+                                "default": {
+                                  "kind": "active",
+                                  "pinnedAt": null,
+                                  "pinPosition": null,
+                                  "manualPosition": null,
+                                  "snoozedUntil": null
+                                }
+                              }
+                            },
+                            "required": [],
+                            "additionalProperties": false
+                          },
+                          "openTodos": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          },
+                          "activeRounds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          }
+                        },
+                        "required": [
+                          "threadId",
+                          "projectId",
+                          "version",
+                          "title",
+                          "createdAt",
+                          "lifecycle"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "summary"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "list.counts"
+                      },
+                      "counts": {
+                        "type": "object",
+                        "properties": {
+                          "active": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          },
+                          "pinned": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          },
+                          "snoozed": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          },
+                          "settled": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          },
+                          "archived": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "default": 0
+                          }
+                        },
+                        "required": [],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "counts"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "window.enter"
+                      },
+                      "key": {
+                        "type": "object",
+                        "properties": {
+                          "objectType": {
+                            "const": "thread",
+                            "default": "thread"
+                          },
+                          "id": {
+                            "$ref": "#/$defs/ThreadId"
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "key"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "window.leave"
+                      },
+                      "key": {
+                        "type": "object",
+                        "properties": {
+                          "objectType": {
+                            "const": "thread",
+                            "default": "thread"
+                          },
+                          "id": {
+                            "$ref": "#/$defs/ThreadId"
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "key"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "attention.facts"
+                      },
+                      "facts": {
+                        "type": "object",
+                        "properties": {
+                          "ownerId": {
+                            "$ref": "#/$defs/PrincipalId"
+                          },
+                          "environmentId": {
+                            "$ref": "#/$defs/EnvironmentId"
+                          },
+                          "databaseGeneration": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "through": {
+                            "$ref": "#/$defs/SyncPosition"
+                          },
+                          "root": {
+                            "type": "object",
+                            "properties": {
+                              "threadId": {
+                                "$ref": "#/$defs/ThreadId"
+                              },
+                              "readThrough": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/SyncPosition"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "default": null
+                              },
+                              "grouping": {
+                                "enum": [
+                                  "ordinary",
+                                  "settled",
+                                  "archived"
+                                ],
+                                "type": "string",
+                                "default": "ordinary"
+                              },
+                              "requests": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "answerable": {
+                                      "type": "boolean"
+                                    },
+                                    "request": {
+                                      "type": "object",
+                                      "properties": {
+                                        "id": {
+                                          "$ref": "#/$defs/TodoRequestId"
+                                        },
+                                        "body": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "const": "approval"
+                                                },
+                                                "tool": {
+                                                  "enum": [
+                                                    "command",
+                                                    "file",
+                                                    "other"
+                                                  ],
+                                                  "type": "string"
+                                                },
+                                                "choices": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "key": {
+                                                        "type": "string"
+                                                      },
+                                                      "scope": {
+                                                        "enum": [
+                                                          "once",
+                                                          "session",
+                                                          "project",
+                                                          "persistent",
+                                                          "unknown"
+                                                        ],
+                                                        "type": "string"
+                                                      },
+                                                      "allowsEdit": {
+                                                        "type": "boolean"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "key",
+                                                      "scope",
+                                                      "allowsEdit"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "tool",
+                                                "choices"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "const": "question"
+                                                },
+                                                "questions": {
+                                                  "type": "array",
+                                                  "prefixItems": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "key": {
+                                                          "type": "string"
+                                                        },
+                                                        "text": {
+                                                          "type": "string",
+                                                          "minLength": 1
+                                                        },
+                                                        "choices": {
+                                                          "type": "array",
+                                                          "items": {
+                                                            "type": "string"
+                                                          }
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "key",
+                                                        "text",
+                                                        "choices"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  ],
+                                                  "minItems": 1,
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "key": {
+                                                        "type": "string"
+                                                      },
+                                                      "text": {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                      },
+                                                      "choices": {
+                                                        "type": "array",
+                                                        "items": {
+                                                          "type": "string"
+                                                        }
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "key",
+                                                      "text",
+                                                      "choices"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "questions"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "const": "secret"
+                                                },
+                                                "slot": {
+                                                  "type": "string"
+                                                },
+                                                "purpose": {
+                                                  "oneOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "const": "toolOnce"
+                                                        },
+                                                        "tool": {
+                                                          "type": "string",
+                                                          "minLength": 1
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "tool"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "const": "commandFile"
+                                                        },
+                                                        "tool": {
+                                                          "type": "string",
+                                                          "minLength": 1
+                                                        },
+                                                        "commandId": {
+                                                          "$ref": "#/$defs/CommandId"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "tool",
+                                                        "commandId"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "slot"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        },
+                                        "state": {
+                                          "$ref": "#/$defs/TodoState"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "body",
+                                        "state"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "openedAt": {
+                                      "$ref": "#/$defs/SyncPosition"
+                                    }
+                                  },
+                                  "required": [
+                                    "request",
+                                    "openedAt"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "default": []
+                              },
+                              "rounds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "round": {
+                                      "type": "object",
+                                      "properties": {
+                                        "id": {
+                                          "$ref": "#/$defs/RoundId"
+                                        },
+                                        "attempt": {
+                                          "type": "object",
+                                          "properties": {
+                                            "attemptId": {
+                                              "$ref": "#/$defs/AttemptId"
+                                            },
+                                            "deliveryId": {
+                                              "$ref": "#/$defs/DeliveryId"
+                                            },
+                                            "phase": {
+                                              "oneOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "filed"
+                                                    },
+                                                    "gate": {
+                                                      "enum": [
+                                                        "eligible",
+                                                        "held"
+                                                      ],
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "gate"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "armed"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "handed"
+                                                    },
+                                                    "wroteAt": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "wroteAt"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "recovering"
+                                                    },
+                                                    "prior": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "armed"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "handed"
+                                                            },
+                                                            "wroteAt": {
+                                                              "type": "integer",
+                                                              "minimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "wroteAt"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      ]
+                                                    },
+                                                    "gate": {
+                                                      "enum": [
+                                                        "eligible",
+                                                        "held"
+                                                      ],
+                                                      "type": "string"
+                                                    },
+                                                    "action": {
+                                                      "enum": [
+                                                        "retrySameDelivery",
+                                                        "inspectInput"
+                                                      ],
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "prior",
+                                                    "gate",
+                                                    "action"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "uncertain"
+                                                    },
+                                                    "next": {
+                                                      "const": "inspectInput"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "next"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "received"
+                                                    },
+                                                    "proof": {
+                                                      "$ref": "#/$defs/ReceiptProof"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "proof"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "working"
+                                                    },
+                                                    "root": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "sessionId": {
+                                                          "$ref": "#/$defs/NativeSessionId"
+                                                        },
+                                                        "id": {
+                                                          "$ref": "#/$defs/NativeRootTurnId"
+                                                        },
+                                                        "beganAt": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "integer",
+                                                              "minimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            {
+                                                              "type": "null"
+                                                            }
+                                                          ],
+                                                          "default": null
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "sessionId",
+                                                        "id"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/ReceiptProof"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "default": null
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "root"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "unobserved"
+                                                    },
+                                                    "seen": {
+                                                      "oneOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "input"
+                                                            },
+                                                            "proof": {
+                                                              "$ref": "#/$defs/ReceiptProof"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "proof"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "root"
+                                                            },
+                                                            "root": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "sessionId": {
+                                                                  "$ref": "#/$defs/NativeSessionId"
+                                                                },
+                                                                "id": {
+                                                                  "$ref": "#/$defs/NativeRootTurnId"
+                                                                },
+                                                                "beganAt": {
+                                                                  "anyOf": [
+                                                                    {
+                                                                      "type": "integer",
+                                                                      "minimum": 0,
+                                                                      "maximum": 9007199254740991
+                                                                    },
+                                                                    {
+                                                                      "type": "null"
+                                                                    }
+                                                                  ],
+                                                                  "default": null
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "sessionId",
+                                                                "id"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            "receipt": {
+                                                              "anyOf": [
+                                                                {
+                                                                  "$ref": "#/$defs/ReceiptProof"
+                                                                },
+                                                                {
+                                                                  "type": "null"
+                                                                }
+                                                              ],
+                                                              "default": null
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "root"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      ]
+                                                    },
+                                                    "next": {
+                                                      "const": "inspectRoot"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "seen",
+                                                    "next"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "closing"
+                                                    },
+                                                    "root": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "sessionId": {
+                                                          "$ref": "#/$defs/NativeSessionId"
+                                                        },
+                                                        "id": {
+                                                          "$ref": "#/$defs/NativeRootTurnId"
+                                                        },
+                                                        "beganAt": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "integer",
+                                                              "minimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            {
+                                                              "type": "null"
+                                                            }
+                                                          ],
+                                                          "default": null
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "sessionId",
+                                                        "id"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/ReceiptProof"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "default": null
+                                                    },
+                                                    "endedAt": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "endTimeEvidence": {
+                                                      "$ref": "#/$defs/RoundEndTimeEvidence"
+                                                    },
+                                                    "nativeReason": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "captureId": {
+                                                      "$ref": "#/$defs/CaptureId"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "root",
+                                                    "endedAt",
+                                                    "captureId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "finished"
+                                                    },
+                                                    "root": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "sessionId": {
+                                                          "$ref": "#/$defs/NativeSessionId"
+                                                        },
+                                                        "id": {
+                                                          "$ref": "#/$defs/NativeRootTurnId"
+                                                        },
+                                                        "beganAt": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "integer",
+                                                              "minimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            {
+                                                              "type": "null"
+                                                            }
+                                                          ],
+                                                          "default": null
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "sessionId",
+                                                        "id"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/ReceiptProof"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "default": null
+                                                    },
+                                                    "endedAt": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "endTimeEvidence": {
+                                                      "$ref": "#/$defs/RoundEndTimeEvidence"
+                                                    },
+                                                    "nativeReason": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "captureId": {
+                                                      "$ref": "#/$defs/CaptureId"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "root",
+                                                    "endedAt",
+                                                    "captureId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "endedEarly"
+                                                    },
+                                                    "root": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "sessionId": {
+                                                          "$ref": "#/$defs/NativeSessionId"
+                                                        },
+                                                        "id": {
+                                                          "$ref": "#/$defs/NativeRootTurnId"
+                                                        },
+                                                        "beganAt": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "integer",
+                                                              "minimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            {
+                                                              "type": "null"
+                                                            }
+                                                          ],
+                                                          "default": null
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "sessionId",
+                                                        "id"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/ReceiptProof"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "default": null
+                                                    },
+                                                    "endedAt": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "endTimeEvidence": {
+                                                      "$ref": "#/$defs/RoundEndTimeEvidence"
+                                                    },
+                                                    "nativeReason": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "reason": {
+                                                      "enum": [
+                                                        "failed",
+                                                        "stopped",
+                                                        "lost",
+                                                        "superseded",
+                                                        "unknown"
+                                                      ],
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "root",
+                                                    "endedAt",
+                                                    "reason"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "notDelivered"
+                                                    },
+                                                    "reason": {
+                                                      "type": "string"
+                                                    },
+                                                    "lateReceipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/ReceiptProof"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "default": null
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "reason"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "attemptId",
+                                            "deliveryId",
+                                            "phase"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "attempt"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "changedAt": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]*)$",
+                                      "description": "Occurrence position. For a terminal attempt this is the original end position, including after later receipt or capture updates."
+                                    },
+                                    "quota": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "resetAt": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "default": null
+                                            }
+                                          },
+                                          "required": [],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "default": null
+                                    },
+                                    "review": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "enum": [
+                                                "plan",
+                                                "work"
+                                              ],
+                                              "type": "string",
+                                              "default": "work"
+                                            },
+                                            "deferredAtEnd": {
+                                              "type": "boolean",
+                                              "default": false
+                                            }
+                                          },
+                                          "required": [],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "default": null
+                                    }
+                                  },
+                                  "required": [
+                                    "round",
+                                    "changedAt"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "default": []
+                              }
+                            },
+                            "required": [
+                              "threadId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "descendants": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "threadId": {
+                                  "$ref": "#/$defs/ThreadId"
+                                },
+                                "readThrough": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/SyncPosition"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "default": null
+                                },
+                                "grouping": {
+                                  "enum": [
+                                    "ordinary",
+                                    "settled",
+                                    "archived"
+                                  ],
+                                  "type": "string",
+                                  "default": "ordinary"
+                                },
+                                "requests": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "answerable": {
+                                        "type": "boolean"
+                                      },
+                                      "request": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "$ref": "#/$defs/TodoRequestId"
+                                          },
+                                          "body": {
+                                            "oneOf": [
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "const": "approval"
+                                                  },
+                                                  "tool": {
+                                                    "enum": [
+                                                      "command",
+                                                      "file",
+                                                      "other"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "choices": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "key": {
+                                                          "type": "string"
+                                                        },
+                                                        "scope": {
+                                                          "enum": [
+                                                            "once",
+                                                            "session",
+                                                            "project",
+                                                            "persistent",
+                                                            "unknown"
+                                                          ],
+                                                          "type": "string"
+                                                        },
+                                                        "allowsEdit": {
+                                                          "type": "boolean"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "key",
+                                                        "scope",
+                                                        "allowsEdit"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "tool",
+                                                  "choices"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "const": "question"
+                                                  },
+                                                  "questions": {
+                                                    "type": "array",
+                                                    "prefixItems": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "key": {
+                                                            "type": "string"
+                                                          },
+                                                          "text": {
+                                                            "type": "string",
+                                                            "minLength": 1
+                                                          },
+                                                          "choices": {
+                                                            "type": "array",
+                                                            "items": {
+                                                              "type": "string"
+                                                            }
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "key",
+                                                          "text",
+                                                          "choices"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      }
+                                                    ],
+                                                    "minItems": 1,
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "key": {
+                                                          "type": "string"
+                                                        },
+                                                        "text": {
+                                                          "type": "string",
+                                                          "minLength": 1
+                                                        },
+                                                        "choices": {
+                                                          "type": "array",
+                                                          "items": {
+                                                            "type": "string"
+                                                          }
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "key",
+                                                        "text",
+                                                        "choices"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "questions"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "const": "secret"
+                                                  },
+                                                  "slot": {
+                                                    "type": "string"
+                                                  },
+                                                  "purpose": {
+                                                    "oneOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "kind": {
+                                                            "const": "toolOnce"
+                                                          },
+                                                          "tool": {
+                                                            "type": "string",
+                                                            "minLength": 1
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "kind",
+                                                          "tool"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "kind": {
+                                                            "const": "commandFile"
+                                                          },
+                                                          "tool": {
+                                                            "type": "string",
+                                                            "minLength": 1
+                                                          },
+                                                          "commandId": {
+                                                            "$ref": "#/$defs/CommandId"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "kind",
+                                                          "tool",
+                                                          "commandId"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "slot"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            ]
+                                          },
+                                          "state": {
+                                            "$ref": "#/$defs/TodoState"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "body",
+                                          "state"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "openedAt": {
+                                        "$ref": "#/$defs/SyncPosition"
+                                      }
+                                    },
+                                    "required": [
+                                      "request",
+                                      "openedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "default": []
+                                },
+                                "rounds": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "round": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "$ref": "#/$defs/RoundId"
+                                          },
+                                          "attempt": {
+                                            "type": "object",
+                                            "properties": {
+                                              "attemptId": {
+                                                "$ref": "#/$defs/AttemptId"
+                                              },
+                                              "deliveryId": {
+                                                "$ref": "#/$defs/DeliveryId"
+                                              },
+                                              "phase": {
+                                                "oneOf": [
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "filed"
+                                                      },
+                                                      "gate": {
+                                                        "enum": [
+                                                          "eligible",
+                                                          "held"
+                                                        ],
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "gate"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "armed"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "handed"
+                                                      },
+                                                      "wroteAt": {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "wroteAt"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "recovering"
+                                                      },
+                                                      "prior": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "armed"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          },
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "handed"
+                                                              },
+                                                              "wroteAt": {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "wroteAt"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          }
+                                                        ]
+                                                      },
+                                                      "gate": {
+                                                        "enum": [
+                                                          "eligible",
+                                                          "held"
+                                                        ],
+                                                        "type": "string"
+                                                      },
+                                                      "action": {
+                                                        "enum": [
+                                                          "retrySameDelivery",
+                                                          "inspectInput"
+                                                        ],
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "prior",
+                                                      "gate",
+                                                      "action"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "uncertain"
+                                                      },
+                                                      "next": {
+                                                        "const": "inspectInput"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "next"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "received"
+                                                      },
+                                                      "proof": {
+                                                        "$ref": "#/$defs/ReceiptProof"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "proof"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "working"
+                                                      },
+                                                      "root": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "sessionId": {
+                                                            "$ref": "#/$defs/NativeSessionId"
+                                                          },
+                                                          "id": {
+                                                            "$ref": "#/$defs/NativeRootTurnId"
+                                                          },
+                                                          "beganAt": {
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              },
+                                                              {
+                                                                "type": "null"
+                                                              }
+                                                            ],
+                                                            "default": null
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "sessionId",
+                                                          "id"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      "receipt": {
+                                                        "anyOf": [
+                                                          {
+                                                            "$ref": "#/$defs/ReceiptProof"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ],
+                                                        "default": null
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "root"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "unobserved"
+                                                      },
+                                                      "seen": {
+                                                        "oneOf": [
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "input"
+                                                              },
+                                                              "proof": {
+                                                                "$ref": "#/$defs/ReceiptProof"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "proof"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          },
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "root"
+                                                              },
+                                                              "root": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "sessionId": {
+                                                                    "$ref": "#/$defs/NativeSessionId"
+                                                                  },
+                                                                  "id": {
+                                                                    "$ref": "#/$defs/NativeRootTurnId"
+                                                                  },
+                                                                  "beganAt": {
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "integer",
+                                                                        "minimum": 0,
+                                                                        "maximum": 9007199254740991
+                                                                      },
+                                                                      {
+                                                                        "type": "null"
+                                                                      }
+                                                                    ],
+                                                                    "default": null
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "sessionId",
+                                                                  "id"
+                                                                ],
+                                                                "additionalProperties": false
+                                                              },
+                                                              "receipt": {
+                                                                "anyOf": [
+                                                                  {
+                                                                    "$ref": "#/$defs/ReceiptProof"
+                                                                  },
+                                                                  {
+                                                                    "type": "null"
+                                                                  }
+                                                                ],
+                                                                "default": null
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "root"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          }
+                                                        ]
+                                                      },
+                                                      "next": {
+                                                        "const": "inspectRoot"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "seen",
+                                                      "next"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "closing"
+                                                      },
+                                                      "root": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "sessionId": {
+                                                            "$ref": "#/$defs/NativeSessionId"
+                                                          },
+                                                          "id": {
+                                                            "$ref": "#/$defs/NativeRootTurnId"
+                                                          },
+                                                          "beganAt": {
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              },
+                                                              {
+                                                                "type": "null"
+                                                              }
+                                                            ],
+                                                            "default": null
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "sessionId",
+                                                          "id"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      "receipt": {
+                                                        "anyOf": [
+                                                          {
+                                                            "$ref": "#/$defs/ReceiptProof"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ],
+                                                        "default": null
+                                                      },
+                                                      "endedAt": {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      "endTimeEvidence": {
+                                                        "$ref": "#/$defs/RoundEndTimeEvidence"
+                                                      },
+                                                      "nativeReason": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "string"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ]
+                                                      },
+                                                      "captureId": {
+                                                        "$ref": "#/$defs/CaptureId"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "root",
+                                                      "endedAt",
+                                                      "captureId"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "finished"
+                                                      },
+                                                      "root": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "sessionId": {
+                                                            "$ref": "#/$defs/NativeSessionId"
+                                                          },
+                                                          "id": {
+                                                            "$ref": "#/$defs/NativeRootTurnId"
+                                                          },
+                                                          "beganAt": {
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              },
+                                                              {
+                                                                "type": "null"
+                                                              }
+                                                            ],
+                                                            "default": null
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "sessionId",
+                                                          "id"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      "receipt": {
+                                                        "anyOf": [
+                                                          {
+                                                            "$ref": "#/$defs/ReceiptProof"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ],
+                                                        "default": null
+                                                      },
+                                                      "endedAt": {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      "endTimeEvidence": {
+                                                        "$ref": "#/$defs/RoundEndTimeEvidence"
+                                                      },
+                                                      "nativeReason": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "string"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ]
+                                                      },
+                                                      "captureId": {
+                                                        "$ref": "#/$defs/CaptureId"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "root",
+                                                      "endedAt",
+                                                      "captureId"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "endedEarly"
+                                                      },
+                                                      "root": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "sessionId": {
+                                                            "$ref": "#/$defs/NativeSessionId"
+                                                          },
+                                                          "id": {
+                                                            "$ref": "#/$defs/NativeRootTurnId"
+                                                          },
+                                                          "beganAt": {
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              },
+                                                              {
+                                                                "type": "null"
+                                                              }
+                                                            ],
+                                                            "default": null
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "sessionId",
+                                                          "id"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      "receipt": {
+                                                        "anyOf": [
+                                                          {
+                                                            "$ref": "#/$defs/ReceiptProof"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ],
+                                                        "default": null
+                                                      },
+                                                      "endedAt": {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      "endTimeEvidence": {
+                                                        "$ref": "#/$defs/RoundEndTimeEvidence"
+                                                      },
+                                                      "nativeReason": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "string"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ]
+                                                      },
+                                                      "reason": {
+                                                        "enum": [
+                                                          "failed",
+                                                          "stopped",
+                                                          "lost",
+                                                          "superseded",
+                                                          "unknown"
+                                                        ],
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "root",
+                                                      "endedAt",
+                                                      "reason"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "notDelivered"
+                                                      },
+                                                      "reason": {
+                                                        "type": "string"
+                                                      },
+                                                      "lateReceipt": {
+                                                        "anyOf": [
+                                                          {
+                                                            "$ref": "#/$defs/ReceiptProof"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ],
+                                                        "default": null
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "reason"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "attemptId",
+                                              "deliveryId",
+                                              "phase"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "attempt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "changedAt": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]*)$",
+                                        "description": "Occurrence position. For a terminal attempt this is the original end position, including after later receipt or capture updates."
+                                      },
+                                      "quota": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "resetAt": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ],
+                                                "default": null
+                                              }
+                                            },
+                                            "required": [],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "default": null
+                                      },
+                                      "review": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "enum": [
+                                                  "plan",
+                                                  "work"
+                                                ],
+                                                "type": "string",
+                                                "default": "work"
+                                              },
+                                              "deferredAtEnd": {
+                                                "type": "boolean",
+                                                "default": false
+                                              }
+                                            },
+                                            "required": [],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ],
+                                        "default": null
+                                      }
+                                    },
+                                    "required": [
+                                      "round",
+                                      "changedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "default": []
+                                }
+                              },
+                              "required": [
+                                "threadId"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "ownerId",
+                          "environmentId",
+                          "databaseGeneration",
+                          "through",
+                          "root"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "facts"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ObjectChange"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "subscriptionId",
+        "passId",
+        "through",
+        "pageNumber",
+        "pageCount",
+        "changes"
+      ],
+      "additionalProperties": false
     },
-    "subscriptionId": {
-      "$ref": "#/$defs/SubscriptionId"
-    },
-    "passId": {
-      "$ref": "#/$defs/SyncPassId"
-    },
-    "through": {
-      "$ref": "#/$defs/SyncCursor"
-    },
-    "pageNumber": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 65535
-    },
-    "pageCount": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 65536
-    },
-    "changes": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ObjectChange"
-      }
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "subscription.page"
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "passId": {
+          "$ref": "#/$defs/SyncPassId"
+        },
+        "through": {
+          "$ref": "#/$defs/SyncCursor"
+        },
+        "pageNumber": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectChange"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "subscriptionId",
+        "passId",
+        "through",
+        "pageNumber",
+        "pageCount",
+        "changes"
+      ],
+      "additionalProperties": false
     }
-  },
-  "required": [
-    "kind",
-    "subscriptionId",
-    "passId",
-    "through",
-    "pageNumber",
-    "pageCount",
-    "changes"
-  ],
-  "additionalProperties": false
+  ]
 }
 ```
 
@@ -23148,6 +25705,251 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## ToolActivityBody
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unobserved"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "captured"
+            },
+            "json": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "json"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unobserved"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "partial"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "text",
+            "truncated"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "complete"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "success": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fileCoverage": {
+      "const": "unknown"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ToolActivityFileChange"
+      }
+    }
+  },
+  "required": [
+    "input",
+    "output",
+    "status",
+    "exitCode",
+    "success",
+    "fileCoverage",
+    "changes"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityContent
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "item": {
+      "$ref": "#/$defs/ToolActivityHistoryItem"
+    },
+    "body": {
+      "$ref": "#/$defs/ToolActivityBody"
+    }
+  },
+  "required": [
+    "item",
+    "body"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityDetailFrame
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "tool.activity.detail"
+    },
+    "subscriptionId": {
+      "$ref": "#/$defs/SubscriptionId"
+    },
+    "reference": {
+      "$ref": "#/$defs/ToolActivityReference"
+    },
+    "transferId": {
+      "$ref": "#/$defs/ContentTransferId"
+    }
+  },
+  "required": [
+    "kind",
+    "subscriptionId",
+    "reference",
+    "transferId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityFileChange
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "change": {
+      "enum": [
+        "created",
+        "modified",
+        "deleted",
+        "moved"
+      ],
+      "type": "string"
+    },
+    "destination": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "patch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "path",
+    "change",
+    "destination",
+    "patch"
+  ],
+  "additionalProperties": false
+}
+```
+
 ## ToolActivityHistoryItem
 
 ```json
@@ -23336,6 +26138,101 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     "createdAt",
     "createdPosition",
     "version"
+  ],
+  "additionalProperties": false
+}
+```
+
+## ToolActivityReadResult
+
+```json
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "activityReadStarted"
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "streamId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "kind",
+        "subscriptionId",
+        "streamId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "activityVersionExpired"
+        },
+        "replacement": {
+          "$ref": "#/$defs/ToolActivityReference"
+        }
+      },
+      "required": [
+        "kind",
+        "replacement"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "activityUnsupported"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
+```
+
+## ToolActivityReference
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "threadId": {
+      "$ref": "#/$defs/ThreadId"
+    },
+    "itemId": {
+      "$ref": "#/$defs/TimelineItemId"
+    },
+    "version": {
+      "$ref": "#/$defs/ObjectVersion"
+    },
+    "byteLength": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "threadId",
+    "itemId",
+    "version",
+    "byteLength",
+    "sha256"
   ],
   "additionalProperties": false
 }
@@ -33488,6 +36385,128 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## thread.markRead
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "thread.markRead"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "cursor": {
+          "$ref": "#/$defs/SyncCursor"
+        }
+      },
+      "required": [
+        "threadId",
+        "subscriptionId",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
 ## thread.readChild
 
 ```json
@@ -34731,6 +37750,145 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
   ],
   "additionalProperties": false,
   "description": "Requires owner.decide on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
+## tool.readActivity
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "tool.readActivity"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "itemId": {
+          "$ref": "#/$defs/TimelineItemId"
+        },
+        "expectedVersion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subscriptionId": {
+          "$ref": "#/$defs/SubscriptionId"
+        },
+        "streamId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "threadId",
+        "itemId",
+        "expectedVersion",
+        "subscriptionId",
+        "streamId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
 }
 ```
 
