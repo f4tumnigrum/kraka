@@ -1,3 +1,4 @@
+import {compact,rollback} from "./context-operations";
 import { checkpoint } from "./checkpoint";
 import { editQueue, input } from "./inputs";
 import { lifecycle, rename, roundControl } from "./threads";
@@ -33,6 +34,7 @@ const routes = new Map<
   (req: Request, c: RequestContext) => CommandReceipt | null | void
 >([
   route("checkpoint.diff", checkpoint),
+  route("checkpoint.rollbackDialogue", rollback),
   route("git.readStatus", git),
   route("git.subscribeStatus", git),
   route("history.pageSaved", subscription),
@@ -52,6 +54,7 @@ const routes = new Map<
   route("subscription.openThread", subscription),
   route("subscription.pageSaved", subscription),
   route("thread.changeLifecycle", lifecycle),
+  route("thread.compact",compact),
   route("thread.markRead", subscription),
   route("thread.readEarlierSettled", subscription),
   route("thread.readHistory", subscription),

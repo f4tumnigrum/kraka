@@ -83,6 +83,7 @@ export const RoundPhaseSchema = v.variant("kind", [
     kind: v.literal("endedEarly"),
     ...closed,
     reason: v.picklist(["failed", "stopped", "lost", "superseded", "unknown"]),
+    failure: v.optional(v.strictObject({kind:v.string(),message:v.string()})),
   }),
   v.strictObject({
     kind: v.literal("notDelivered"),

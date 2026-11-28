@@ -35,6 +35,7 @@ export interface ThreadReadView {
   floor: SyncPosition;
   rows: readonly ReadRow[];
   deletions: readonly ReadDeletion[];
+  operations?: readonly {changed: SyncPosition; operation: import("@kraka/protocol").ContextOperation}[];
   returns: readonly { source: ThreadId; event: TextReturnedEvent; changed: SyncPosition }[];
 }
 export interface AuthorizedScope {
@@ -253,6 +254,7 @@ export function planThreadPass({
     )
       changes.push({ kind: "object.remove", key: item.key, version: item.version });
   for (const [k, key] of old) if (!members.has(k)) changes.push({ kind: "window.leave", key });
+  for(const item of view.operations??[])if(item.operation.threadId===scope.threadId&&changed(item.changed))changes.push({kind:"context.operation",operation:item.operation});
   for (const item of view.returns)
     if (item.source === scope.threadId && changed(item.changed)) changes.push(item.event);
   for (const id of new Set(recheckTodos)) {

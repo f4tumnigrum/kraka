@@ -23,6 +23,7 @@ type RootObservation =
       endedAt: number;
       endTimeEvidence?: RoundEndTimeEvidence;
       nativeReason?: string | null;
+      failure?: {kind:string;message:string};
     } & RootEnd);
 export type RoundReport = { attemptId: AttemptId; deliveryId: DeliveryId } & (
   | { kind: "written"; at: number }
@@ -202,7 +203,7 @@ export function transitionRound(
       };
       return event.outcome === "completed"
         ? ok({ kind: "closing", ...ended, captureId: event.captureId })
-        : ok({ kind: "endedEarly", ...ended, reason: event.outcome });
+        : ok({ kind: "endedEarly", ...ended, reason: event.outcome,...(event.failure ? {failure:event.failure}: {}) });
     }
     case "captureSettled":
       if (phase.kind !== "closing" && phase.kind !== "finished") return reject("invalidState");

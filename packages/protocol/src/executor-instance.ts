@@ -36,6 +36,7 @@ export const RegistrationInputSchema = v.strictObject({
   enabled: v.boolean(),
   driver: v.strictObject({
     executable: v.nullable(text),
+    args: v.optional(v.array(v.string())),
     endpoint: v.nullable(text),
     configurationRoot: v.nullable(text),
     historyRoot: v.nullable(text),
@@ -87,6 +88,7 @@ export const ExecutorRefreshedSchema = v.strictObject({
   readiness: ReadinessSchema,
   models: v.nullable(ModelCatalogSchema),
   binaryVersion: v.nullable(text),
+  sessionPolicy: v.optional(v.strictObject({supportedModes:v.array(PermissionModeSchema),enforcement:v.picklist(["native","adapter","unknown"])})),
   variables: v.array(v.strictObject({ name: text, kind: v.picklist(["secret", "literal"]) })),
   compatibilityAdvisory: v.nullable(v.picklist(["broken", "unsupported"])),
   versionAdvisory: v.nullable(text),
