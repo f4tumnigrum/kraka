@@ -3,6 +3,7 @@ export { children } from "./children";
 export { diff } from "./diff";
 export { executorTools } from "./executor-tools";
 export { executors } from "./executors";
+export { logins } from "./logins";
 export { queues } from "./queues";
 export { sessions } from "./sessions";
 export { settings } from "./settings";
