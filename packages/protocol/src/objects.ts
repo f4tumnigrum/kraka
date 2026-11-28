@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { PermissionModeSchema } from "./access";
 import { CheckpointResultSchema } from "./checkpoints";
 import { HistoryCoverageSchema } from "./handoffs";
 import {
@@ -9,6 +10,7 @@ import {
   EnvironmentIdSchema,
   ExecutorInstanceIdSchema,
   MessageIdSchema,
+  NativeItemIdSchema,
   NativeSessionIdSchema,
   ObjectVersionSchema,
   PrincipalIdSchema,
@@ -61,6 +63,7 @@ export const ThreadLineageSchema = v.variant("kind", [
 ]);
 
 export const ThreadSchema = v.strictObject({
+  requestedMode: v.optional(PermissionModeSchema),
   lifecycle: v.optional(ThreadLifecycleSchema),
   directory: v.optional(DirectoryBindingSchema),
   id: ThreadIdSchema,
@@ -108,6 +111,15 @@ export const MessageSchema = v.strictObject({
 });
 
 export const RoundSchema = v.strictObject({
+  executorPolicy: v.optional(
+    v.strictObject({
+      supported: v.array(PermissionModeSchema),
+      selected: PermissionModeSchema,
+      effective: PermissionModeSchema,
+      enforcement: v.picklist(["native", "adapter", "unknown"]),
+      sessionId: NativeSessionIdSchema,
+    }),
+  ),
   id: RoundIdSchema,
   threadId: ThreadIdSchema,
   messageId: MessageIdSchema,
@@ -159,6 +171,7 @@ export const TodoRequestBodySchema = v.variant("kind", [
   v.strictObject({
     kind: v.literal("approval"),
     tool: v.picklist(["command", "file", "other"]),
+    requestedTool: v.optional(v.strictObject({ id: NativeItemIdSchema, target: v.string() })),
     choices: v.array(
       v.strictObject({
         key: v.string(),

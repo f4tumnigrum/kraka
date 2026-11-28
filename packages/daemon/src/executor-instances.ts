@@ -13,6 +13,8 @@ import {
   type SessionSetup,
 } from "@kraka/environment";
 import {
+  InstancePermissionSchema,
+  type PermissionMode,
   REQUEST_METHODS,
   ChildModelSchema,
   ExecutorInstanceIdSchema,
@@ -85,7 +87,11 @@ export class ExecutorInstances {
       thread.worktreeId ? () => this.store.directory(thread) : undefined,
     );
     if (entry?.reg.version !== saved.version) return null;
-    return this.select(entry, v.parse(ChildModelSchema, JSON.parse(saved.model)));
+    return this.select(
+      entry,
+      v.parse(ChildModelSchema, JSON.parse(saved.model)),
+      thread.requestedMode,
+    );
   }
   async close() {
     this.closed = true;
@@ -114,15 +120,18 @@ export class ExecutorInstances {
     if (!cwd || !reg) return null;
     const cached = this.current(id, actor, cwd);
     if (cached) return cached;
-    const work = this.probe(reg, directory, cwd, actor);
-    this.active.add(work);
-    try {
-      return await work;
-    } finally {
-      this.active.delete(work);
-    }
+    return this.serialize(reg, async () => {
+      if (this.closed || directory() !== cwd || this.registry.current(id)?.version !== reg.version)
+        return null;
+      // Recovery and the first new turn can queue a lookup for the same cold instance.
+      return this.current(id, actor, cwd) ?? this.discover(reg, directory, cwd, actor);
+    });
   }
-  select(entry: InstanceEntry | null, selection: SessionSetup["model"] | undefined) {
+  select(
+    entry: InstanceEntry | null,
+    selection: SessionSetup["model"] | undefined,
+    requestedMode?: PermissionMode,
+  ) {
     if (
       !entry ||
       !entry.probe.declaration.permission.modes.includes(entry.snapshot.permission.selected) ||
@@ -132,7 +141,15 @@ export class ExecutorInstances {
     )
       return null;
     const model = entry.probe.selectModel(selection ?? entry.reg.model);
-    return model ? { ...entry, model } : null;
+    const permission = v.safeParse(InstancePermissionSchema, {
+      ...entry.snapshot.permission,
+      selected: requestedMode ?? entry.snapshot.permission.selected,
+    });
+    return model &&
+      permission.success &&
+      entry.probe.declaration.permission.modes.includes(permission.output.selected)
+      ? { ...entry, model, permission: permission.output }
+      : null;
   }
   track<T>(work: Promise<T>) {
     this.active.add(work);

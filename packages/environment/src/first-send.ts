@@ -129,6 +129,7 @@ export function acceptFirstInput({
         projectId,
         worktreeId,
         title: content.text,
+        ...(threadStart.requestedMode ? { requestedMode: threadStart.requestedMode } : {}),
         version: "1",
         lineage: { kind: "root" },
         lifecycle: {
