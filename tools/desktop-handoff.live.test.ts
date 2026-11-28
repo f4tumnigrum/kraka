@@ -10,6 +10,7 @@ import {
   DEFAULT_DEVICE_PERMISSIONS,
   DESKTOP_IPC,
   PairingPendingSchema,
+  PairingCompletedSchema,
   MessageIdSchema,
   HistoryPageSchema,
   SyncCursorSchema,
@@ -28,7 +29,7 @@ import { installDesktop, launchInstalledDesktop } from "./fixtures/installed-des
 import { handoffOrigin, handoffRoute } from "./fixtures/handoff-route";
 import { pin, phase, modulePath } from "./fixtures/browser";
 import { mobile, routedBrowser } from "./fixtures/browser-routed";
-import { invite, approve } from "./fixtures/paired-project";
+import { approve } from "./fixtures/paired-project";
 import { within } from "./fixtures/replay-process";
 
 const selected = process.env.KRAKA_DESKTOP_CASES;
@@ -256,7 +257,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
   test("handoff 1. private route pairs a distinct phone and opens the original E/T", async () => {
     await pin(phone, f.host.identity);
     await phone.getByLabel("Project ID").fill(f.host.projectId);
-    await phone.getByLabel("Invite ID").fill(await invite(f.host.owner, f.host.projectId));
+    await phone.getByLabel("Invite ID").fill(f.host.inviteId);
     for (const right of DEFAULT_DEVICE_PERMISSIONS)
       await phone.getByLabel(right, { exact: true }).check();
     await phone.getByRole("button", { name: "Request pairing" }).click();
@@ -265,8 +266,12 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
       PairingPendingSchema,
       await phone.evaluate(async (path) => (await import(path)).pagePairing, modulePath),
     );
+    expect(await f.host.nextHostRecord(PairingPendingSchema)).toEqual(pending);
     phoneDevice = pending.deviceId;
     await approve(f.host.owner, pending);
+    const completion = await f.host.nextHostRecord(PairingCompletedSchema);
+    expect(completion.requestId).toBe(pending.requestId);
+    expect(completion.permissions).toEqual([...DEFAULT_DEVICE_PERMISSIONS]);
     const session = await phase(phone, "sendable");
     if (session.phase !== "sendable") throw Error("Phone not configured");
     expect(session.configuration.environment.id).toBe(f.args.environmentId);
@@ -284,7 +289,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
       },
       { id: f.args.environmentId, path: modulePath },
     );
-    expect(observed).toEqual([...DEFAULT_DEVICE_PERMISSIONS]);
+    expect(observed).toEqual(completion.permissions);
     await phone.getByLabel("Thread ID").fill(f.args.threadId);
     await phone.getByRole("button", { name: "Open thread" }).click();
     await phone.getByLabel("Message", { exact: true }).waitFor();
@@ -302,7 +307,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     const cached = await phone.evaluate(
       async (path) =>
         Object.values(((await import(path)).pageThread.cache as ThreadCache).scopes).map(
-          (s: any) => s.cursor.through,
+          (s) => s.cursor.through,
         ),
       modulePath,
     );

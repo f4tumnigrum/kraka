@@ -153,6 +153,8 @@ export async function handoffHost(site: Site, dir: string, publicOrigin?: string
       identity,
       projectId,
       owner,
+      inviteId: pairing.inviteId,
+      nextHostRecord: daemon.next,
       publication,
       initial,
       turn,
