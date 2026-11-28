@@ -12,6 +12,7 @@ import {
 import type {
   AttemptId,
   CommandId,
+  ForgeAccount,
   ForgeBranch,
   ForgeFileKey,
   ForgeFileValue,
@@ -22,7 +23,9 @@ import type {
   ForgePublish,
   ForgeReadMark,
   ForgeReadResult,
+  ForgeRemote,
   ForgeRepository,
+  ForgeUnavailableReason,
   ForgeWatch,
   GitObjectId,
   PrincipalId,
@@ -42,9 +45,20 @@ export type PullLookup = {
   complete: boolean;
   matches: readonly PullMatch[];
 };
-/** Network implementations use the GitHub API. Git branch, commit and push work stays with the workspace. */
-export interface ForgeDriver {
+export type ForgeUnavailable = { kind: "unavailable"; reason: ForgeUnavailableReason };
+/** Each lookup borrows the host's login for that one operation and verifies the account again. */
+export interface ForgeLookupDriver {
   readonly platform: ForgeRepository["platform"];
+  account(host: string): Promise<{ kind: "verified"; account: ForgeAccount } | ForgeUnavailable>;
+  /** A name only locates the repository. Callers keep and compare the permanent ID. */
+  repository(
+    remote: ForgeRemote,
+  ): Promise<
+    { kind: "resolved"; account: ForgeAccount; repository: ForgeRepository } | ForgeUnavailable
+  >;
+}
+/** Network implementations use the GitHub API. Git branch, commit and push work stays with the workspace. */
+export interface ForgeDriver extends ForgeLookupDriver {
   findPulls(
     request: Pick<ForgePublish, "source" | "target">,
     includeClosed: boolean,

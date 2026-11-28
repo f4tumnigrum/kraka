@@ -8,6 +8,7 @@ import {
   type FirstSendStore,
   type LocalActor,
 } from "@kraka/environment";
+import { forgeReadOnControl } from "./signed-requests/forge";
 import { openAccessHost } from "./access";
 import { listenIdentity } from "./identity";
 import { startWriter } from "./first-send";
@@ -50,6 +51,8 @@ export async function listenBrowserDaemon(stateDir: string, options: BrowserList
             Boolean(host.store.ceiling(device.principal.id, target, right)),
         };
         const context = { actor, transaction, commandId: r.commandId };
+        if (r.method === "forge.account" || r.method === "project.repositorySource")
+          return forgeReadOnControl(r, transaction, actor);
         if (r.method === "project.register") {
           const receipt = registerProject({
             ...context,

@@ -12,6 +12,7 @@ import {
   type PairingPending,
 } from "@kraka/protocol";
 import * as v from "valibot";
+import { forgeReadOnControl } from "./signed-requests/forge";
 import { openAccessHost } from "./access";
 import { browserAssets, preflight } from "./browser-listener";
 import { ExecutorInstances } from "./executor-instances";
@@ -150,6 +151,8 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
       if (r.method === "executor.configure") return executors.configure(context, r.payload);
       if (r.method === "executor.refresh")
         return executors.refresh(context, r.payload, device.principal.ownerId);
+      if (r.method === "forge.account" || r.method === "project.repositorySource")
+        return forgeReadOnControl(r, store, actor);
       if (r.method === "project.register") {
         const response = registerProject({ ...context, environmentId, ...r.payload });
         if (response.kind === "accepted" && response.result.kind === "projectRegistered")

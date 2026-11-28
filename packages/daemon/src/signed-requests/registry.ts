@@ -5,6 +5,7 @@ import { lifecycle, rename, roundControl } from "./threads";
 import { git, subscription } from "./subscriptions";
 import { todo } from "./todos";
 import { executor } from "./executor";
+import { forgeRead } from "./forge";
 import { settings } from "./settings";
 import type { Request, RequestContext } from "./context";
 import type { CommandReceipt } from "@kraka/protocol";
@@ -41,6 +42,7 @@ const routes = new Map<
   route("executor.readLogin", executor),
   route("executor.refresh", executor),
   route("executor.startLogin", executor),
+  route("forge.account", forgeRead),
   route("git.readStatus", git),
   route("git.subscribeStatus", git),
   route("history.pageSaved", subscription),
@@ -49,6 +51,7 @@ const routes = new Map<
   route("input.reorderQueue", editQueue),
   route("input.send", input),
   route("input.steer", roundControl),
+  route("project.repositorySource", forgeRead),
   route("round.readStop", roundControl),
   route("round.stop", roundControl),
   route("settings.read", settings),

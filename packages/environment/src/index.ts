@@ -22,6 +22,13 @@ export { InstanceLogins } from "./instance-login";
 export * from "./first-send";
 export * from "./first-send-store";
 export * from "./forge";
+export { GitHubAccounts, readGitHubConfig, githubConfigFile } from "./forge-account";
+export type {
+  GitHubAccountRead,
+  GitHubRequest,
+  GitHubResponse,
+  GitHubConfig,
+} from "./forge-account";
 export * from "./forge-history";
 export * from "./forge-recovery";
 export * from "./git-status";

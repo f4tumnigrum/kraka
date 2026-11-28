@@ -1,6 +1,7 @@
 export { captures } from "./captures";
 export { context } from "./context";
 export { diff } from "./diff";
+export { forge } from "./forge";
 export { executors } from "./executors";
 export { logins } from "./logins";
 export { queues } from "./queues";
