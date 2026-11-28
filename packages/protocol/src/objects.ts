@@ -9,6 +9,7 @@ import {
   EnvironmentIdSchema,
   ExecutorInstanceIdSchema,
   MessageIdSchema,
+  NativeItemIdSchema,
   NativeSessionIdSchema,
   ObjectVersionSchema,
   PrincipalIdSchema,
@@ -159,6 +160,7 @@ export const TodoRequestBodySchema = v.variant("kind", [
   v.strictObject({
     kind: v.literal("approval"),
     tool: v.picklist(["command", "file", "other"]),
+    requestedTool: v.optional(v.strictObject({ id: NativeItemIdSchema, target: v.string() })),
     choices: v.array(
       v.strictObject({
         key: v.string(),

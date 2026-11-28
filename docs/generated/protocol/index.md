@@ -920,6 +920,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                             ],
                             "type": "string"
                           },
+                          "requestedTool": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "$ref": "#/$defs/NativeItemId"
+                              },
+                              "target": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          },
                           "choices": {
                             "type": "array",
                             "items": {
@@ -1263,6 +1279,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                 "other"
                               ],
                               "type": "string"
+                            },
+                            "requestedTool": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "$ref": "#/$defs/NativeItemId"
+                                },
+                                "target": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "target"
+                              ],
+                              "additionalProperties": false
                             },
                             "choices": {
                               "type": "array",
@@ -1867,6 +1899,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                         "other"
                       ],
                       "type": "string"
+                    },
+                    "requestedTool": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "$ref": "#/$defs/NativeItemId"
+                        },
+                        "target": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "target"
+                      ],
+                      "additionalProperties": false
                     },
                     "choices": {
                       "type": "array",
@@ -21875,6 +21923,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                   ],
                                                   "type": "string"
                                                 },
+                                                "requestedTool": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "id": {
+                                                      "$ref": "#/$defs/NativeItemId"
+                                                    },
+                                                    "target": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "id",
+                                                    "target"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
                                                 "choices": {
                                                   "type": "array",
                                                   "items": {
@@ -22784,6 +22848,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                       "other"
                                                     ],
                                                     "type": "string"
+                                                  },
+                                                  "requestedTool": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "id": {
+                                                        "$ref": "#/$defs/NativeItemId"
+                                                      },
+                                                      "target": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "id",
+                                                      "target"
+                                                    ],
+                                                    "additionalProperties": false
                                                   },
                                                   "choices": {
                                                     "type": "array",
@@ -25372,6 +25452,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "other"
               ],
               "type": "string"
+            },
+            "requestedTool": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/NativeItemId"
+                },
+                "target": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "target"
+              ],
+              "additionalProperties": false
             },
             "choices": {
               "type": "array",

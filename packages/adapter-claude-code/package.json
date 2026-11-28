@@ -14,10 +14,12 @@
   },
   "exports": "./src/index.ts",
   "scripts": {
-    "build": "bun build src/index.ts --outfile ../../.build/packages/adapter-claude-code.js"
+    "build": "bun build src/index.ts --target bun --outfile ../../.build/packages/adapter-claude-code.js"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.332",
     "@kraka/environment": "workspace:*",
-    "@kraka/protocol": "workspace:*"
+    "@kraka/protocol": "workspace:*",
+    "valibot": "1.5.0"
   }
 }

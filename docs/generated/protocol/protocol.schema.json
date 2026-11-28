@@ -737,6 +737,22 @@
                                 ],
                                 "type": "string"
                               },
+                              "requestedTool": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "$ref": "#/$defs/NativeItemId"
+                                  },
+                                  "target": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "target"
+                                ],
+                                "additionalProperties": false
+                              },
                               "choices": {
                                 "type": "array",
                                 "items": {
@@ -1080,6 +1096,22 @@
                                     "other"
                                   ],
                                   "type": "string"
+                                },
+                                "requestedTool": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "$ref": "#/$defs/NativeItemId"
+                                    },
+                                    "target": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "target"
+                                  ],
+                                  "additionalProperties": false
                                 },
                                 "choices": {
                                   "type": "array",
@@ -1664,6 +1696,22 @@
                             "other"
                           ],
                           "type": "string"
+                        },
+                        "requestedTool": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "$ref": "#/$defs/NativeItemId"
+                            },
+                            "target": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "target"
+                          ],
+                          "additionalProperties": false
                         },
                         "choices": {
                           "type": "array",
@@ -20622,6 +20670,22 @@
                                                       ],
                                                       "type": "string"
                                                     },
+                                                    "requestedTool": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "id": {
+                                                          "$ref": "#/$defs/NativeItemId"
+                                                        },
+                                                        "target": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "id",
+                                                        "target"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
                                                     "choices": {
                                                       "type": "array",
                                                       "items": {
@@ -21531,6 +21595,22 @@
                                                           "other"
                                                         ],
                                                         "type": "string"
+                                                      },
+                                                      "requestedTool": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "id": {
+                                                            "$ref": "#/$defs/NativeItemId"
+                                                          },
+                                                          "target": {
+                                                            "type": "string"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "id",
+                                                          "target"
+                                                        ],
+                                                        "additionalProperties": false
                                                       },
                                                       "choices": {
                                                         "type": "array",
@@ -23969,6 +24049,22 @@
                     "other"
                   ],
                   "type": "string"
+                },
+                "requestedTool": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "$ref": "#/$defs/NativeItemId"
+                    },
+                    "target": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "target"
+                  ],
+                  "additionalProperties": false
                 },
                 "choices": {
                   "type": "array",
