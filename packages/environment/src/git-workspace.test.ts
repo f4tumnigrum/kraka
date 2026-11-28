@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { DiffCleanup } from "./diff-cleanup";
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +39,12 @@ function git(directory: string, ...args: string[]) {
 function repository() {
   const root = mkdtempSync(join(tmpdir(), "kraka-s15-git-"));
   const path = join(root, "checkout");
-  const close = () => rmSync(root, { recursive: true, force: true });
+  const db = new Database(":memory:");
+  const cleanup = new DiffCleanup(db, root);
+  const close = () => {
+    db.close(true);
+    rmSync(root, { recursive: true, force: true });
+  };
   try {
     writeFileSync(join(root, "gitconfig"), "");
     mkdirSync(path);
@@ -45,7 +52,7 @@ function repository() {
     git(path, "config", "user.name", "S15 fixture");
     git(path, "config", "user.email", "s15@example.invalid");
     git(path, "config", "core.autocrlf", "false");
-    return { path, close };
+    return { path, close, cleanup, db };
   } catch (error) {
     close();
     throw error;
@@ -150,7 +157,7 @@ test("returns invalidated for a stale directory generation and distinguishes a n
   }
 });
 
-test("pins a working-tree comparison without changing the real index or HEAD", () => {
+test("pins a working-tree comparison without changing the real index or HEAD", async () => {
   const repo = repository();
   try {
     writeFileSync(join(repo.path, "base.txt"), "base\n");
@@ -164,8 +171,8 @@ test("pins a working-tree comparison without changing the real index or HEAD", (
     const headBefore = git(repo.path, "rev-parse", "HEAD");
     const indexPath = join(repo.path, git(repo.path, "rev-parse", "--git-path", "index"));
     const indexBefore = readFileSync(indexPath);
-    const service = new LocalDiffService();
-    const result = service.readLocalDiff({
+    const service = new LocalDiffService(repo.cleanup);
+    const result = await service.readLocalDiff({
       actor: { scope: "principal\0thread", directoryDiff: true },
       query: {
         kind: "workingTree",
@@ -197,7 +204,7 @@ test("pins a working-tree comparison without changing the real index or HEAD", (
   }
 });
 
-test("uses first-parent bytes, reports a missing shallow parent, and follows frozen UTF-8 pages", () => {
+test("uses first-parent bytes, reports a missing shallow parent, and follows frozen UTF-8 pages", async () => {
   const repo = repository();
   try {
     writeFileSync(join(repo.path, "value.txt"), "root\n");
@@ -207,7 +214,7 @@ test("uses first-parent bytes, reports a missing shallow parent, and follows fro
     writeFileSync(join(repo.path, "value.txt"), "feature\n");
     git(repo.path, "commit", "-qam", "feature");
     const featureCommit = git(repo.path, "rev-parse", "HEAD");
-    const branch = new LocalDiffService().readLocalDiff({
+    const branch = await new LocalDiffService(repo.cleanup).readLocalDiff({
       actor: { scope: "principal\0thread", directoryDiff: true },
       query: {
         kind: "commit",
@@ -233,7 +240,7 @@ test("uses first-parent bytes, reports a missing shallow parent, and follows fro
       `tree ${git(repo.path, "rev-parse", "HEAD^{tree}")}\nparent ${"f".repeat(40)}\nauthor S15 fixture <s15@example.invalid> 1 +0000\ncommitter S15 fixture <s15@example.invalid> 1 +0000\n\nshallow child\n`,
     );
     const missingParent = git(repo.path, "hash-object", "-t", "commit", "-w", missingParentFile);
-    const unavailable = new LocalDiffService().readLocalDiff({
+    const unavailable = await new LocalDiffService(repo.cleanup).readLocalDiff({
       actor: { scope: "principal\0thread", directoryDiff: true },
       query: {
         kind: "commit",
@@ -252,14 +259,14 @@ test("uses first-parent bytes, reports a missing shallow parent, and follows fro
     git(repo.path, "add", "large.txt");
     git(repo.path, "commit", "-qm", "large baseline");
     writeFileSync(join(repo.path, "large.txt"), `${content}\n`);
-    const service = new LocalDiffService();
+    const service = new LocalDiffService(repo.cleanup);
     const query = {
       kind: "workingTree" as const,
       threadId,
       directoryId: target.directoryId,
       generation: target.generation,
     };
-    const first = service.readLocalDiff({
+    const first = await service.readLocalDiff({
       actor: { scope: "principal\0thread", directoryDiff: true },
       query,
       cursor: null,
@@ -271,7 +278,7 @@ test("uses first-parent bytes, reports a missing shallow parent, and follows fro
     expect(firstBytes).toBeLessThanOrEqual(10_000_000);
     expect(Buffer.from(first.patch).toString("utf8")).toBe(first.patch);
     writeFileSync(join(repo.path, "large.txt"), "changed after open\n");
-    const second = service.readLocalDiff({
+    const second = await service.readLocalDiff({
       actor: { scope: "principal\0thread", directoryDiff: true },
       query,
       cursor: first.next,
@@ -356,6 +363,38 @@ test("verifies divergence against a real local upstream without moving HEAD", as
       behind: 0,
     });
     expect(git(repo.path, "rev-parse", "HEAD")).toBe(head.tip);
+  } finally {
+    repo.close();
+  }
+});
+
+test("retries partial cleanup without deleting a changed endpoint or following a repointed ref", async () => {
+  const repo = repository(),
+    cwd = repo.path;
+  try {
+    git(cwd, "commit", "--allow-empty", "-qm", "base");
+    const base = v.parse(GitObjectIdSchema, git(cwd, "rev-parse", "HEAD"));
+    git(cwd, "commit", "--allow-empty", "-qm", "other");
+    const other = git(cwd, "rev-parse", "HEAD");
+    const intent = repo.cleanup.begin(cwd);
+    if (!intent) throw Error("Missing comparison intent");
+    expect(await repo.cleanup.pin(intent.id, base, base)).toBe(true);
+    const prefix = "refs/kraka/diffs/" + intent.id;
+    git(cwd, "update-ref", prefix + "/from", other, base);
+    const exists = () => !!repo.db.query("SELECT id FROM diff_cleanup WHERE id=?").get(intent.id);
+    repo.cleanup.release(intent.id);
+    expect(exists()).toBe(true);
+    expect(git(cwd, "for-each-ref", "--format=%(refname) %(objectname)", prefix)).toBe(
+      prefix + "/from " + other,
+    );
+    git(cwd, "symbolic-ref", prefix + "/from", "refs/heads/main");
+    repo.cleanup.release(intent.id);
+    expect(exists()).toBe(true);
+    expect(git(cwd, "symbolic-ref", prefix + "/from")).toBe("refs/heads/main");
+    git(cwd, "symbolic-ref", "--delete", prefix + "/from");
+    repo.cleanup.release(intent.id);
+    expect(exists()).toBe(false);
+    expect(git(cwd, "rev-parse", "main")).toBe(other);
   } finally {
     repo.close();
   }

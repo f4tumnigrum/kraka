@@ -103,7 +103,7 @@ jobs:
           bun test ./tools/settings-readback.live.test.ts 2>&1 | tee "$RUNNER_TEMP/settings-tests.log"
           for group in 1 2 3 4; do grep -F "(pass) S18.$group " "$RUNNER_TEMP/settings-tests.log"; done
       - run: bun test ./tools/isolated-start.live.test.ts
-      - name: Verify all four local comparison cases
+      - name: Verify all five local comparison cases
         env:
           NO_COLOR: "1"
         shell: bash
@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           git --version
           bun test tools/local-diff.live.test.ts 2>&1 | tee "$RUNNER_TEMP/local-diff.log"
-          for group in 1 2 3 4; do grep -F "(pass) $group. " "$RUNNER_TEMP/local-diff.log"; done
+          for group in 1 2 3 4 5; do grep -F "(pass) $group. " "$RUNNER_TEMP/local-diff.log"; done
       - name: Test workspace and require all three short socket cases
         shell: bash
         env:

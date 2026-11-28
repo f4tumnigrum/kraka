@@ -3,12 +3,11 @@ import {
   copyFileSync,
   existsSync,
   fstatSync,
-  mkdtempSync,
   openSync,
   readSync,
   rmSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import type { DiffCleanup } from "./diff-cleanup";
 import { join } from "node:path";
 import {
   canonicalJson,
@@ -58,7 +57,8 @@ type CursorState = {
   scratch: string;
   patchPath: string;
   currentSize: number | null;
-  refs: string | null;
+  cleanupId: string;
+  pinned: boolean;
 };
 type EndpointPair = {
   from: OutputEndpoint;
@@ -95,8 +95,7 @@ function headCommit(directory: string) {
   return result.exitCode === 0 ? parsedOid(result.stdout.toString().trim()) : null;
 }
 
-function treeAtWorkingDirectory(directory: string, head: GitObjectId | null) {
-  const temporary = mkdtempSync(join(tmpdir(), "kraka-local-diff-"));
+function treeAtWorkingDirectory(directory: string, head: GitObjectId | null, temporary: string) {
   const index = join(temporary, "index");
   try {
     const original = runGit(directory, [
@@ -126,7 +125,7 @@ function treeAtWorkingDirectory(directory: string, head: GitObjectId | null) {
   } catch {
     return null;
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
+    rmSync(index, { force: true });
   }
 }
 
@@ -161,6 +160,7 @@ function buildComparison(
   directory: string,
   address: DiffAddress,
   query: DiffRequest,
+  scratch: string,
 ):
   | { pair: EndpointPair }
   | { reason: string; from: OutputEndpoint | null; to: OutputEndpoint | null } {
@@ -179,7 +179,7 @@ function buildComparison(
     }
     const fromTree = head ? treeFor(head) : root;
     if (!fromTree) return { reason: "headUnavailable", from: null, to: null };
-    const tree = treeAtWorkingDirectory(directory, head);
+    const tree = treeAtWorkingDirectory(directory, head, scratch);
     const from = head
       ? gitEndpoint(address, "head", head)
       : gitEndpoint(address, "emptyTree", root);
@@ -203,7 +203,7 @@ function buildComparison(
       `${query.baseRef}^{commit}`,
     ]);
     const base = ref.exitCode === 0 ? parsedOid(ref.stdout.toString().trim()) : null;
-    const tree = treeAtWorkingDirectory(directory, head);
+    const tree = treeAtWorkingDirectory(directory, head, scratch);
     const to = tree ? workingTreeEndpoint(address, tree) : null;
     if (!base) return { reason: "baseRefUnavailable", from: null, to };
     const merge = runGit(directory, ["merge-base", head, base]);
@@ -364,51 +364,6 @@ function preparePatch(state: CursorState, path: ChangedPath) {
     closeSync(fd);
   }
 }
-function pin(state: CursorState) {
-  const prefix = `refs/kraka/diffs/${crypto.randomUUID()}`;
-  const from = state.pair.from,
-    to = state.pair.to;
-  if (from.kind !== "git" || to.kind === "round") return false;
-  const right = to.kind === "workingTree" ? to.tree : to.oid;
-  const result = runGit(
-    state.directory.path,
-    ["-c", `core.hooksPath=${state.scratch}`, "update-ref", "--stdin"],
-    {
-      input: Buffer.from(`create ${prefix}/from ${from.oid}\ncreate ${prefix}/to ${right}\n`),
-    },
-  );
-  if (result.exitCode !== 0) return false;
-  state.refs = prefix;
-  return true;
-}
-function release(state: CursorState) {
-  const { from, to } = state.pair;
-  try {
-    if (state.refs && from.kind === "git" && to.kind !== "round") {
-      const right = to.kind === "workingTree" ? to.tree : to.oid;
-      runGit(
-        state.directory.path,
-        ["-c", `core.hooksPath=${state.scratch}`, "update-ref", "--stdin"],
-        {
-          input: Buffer.from(
-            "delete " +
-              state.refs +
-              "/from " +
-              from.oid +
-              "\ndelete " +
-              state.refs +
-              "/to " +
-              right +
-              "\n",
-          ),
-        },
-      );
-    }
-  } finally {
-    rmSync(state.scratch, { recursive: true, force: true });
-  }
-}
-
 function unavailable(
   request: DiffRequest,
   reason: string,
@@ -440,11 +395,14 @@ function queryAddressMatches(query: DiffRequest, directory: ResolvedDiffDirector
 }
 
 export class LocalDiffService {
+  constructor(private readonly cleanup: DiffCleanup) {}
+  private closed = false;
   private readonly cursors = new Map<
     string,
     { state: CursorState; timer: ReturnType<typeof setTimeout> }
   >();
   close() {
+    this.closed = true;
     for (const key of this.cursors.keys()) this.expire(key);
   }
   private expire(key: string) {
@@ -452,17 +410,18 @@ export class LocalDiffService {
     if (entry) {
       this.cursors.delete(key);
       clearTimeout(entry.timer);
-      release(entry.state);
+      this.cleanup.release(entry.state.cleanupId);
     }
   }
 
-  readLocalDiff(input: {
+  async readLocalDiff(input: {
     actor: DiffActor;
     query: DiffRequest;
     cursor: string | null;
     resolvedDirectory: ResolvedDiffDirectory;
-  }): DiffResult {
+  }): Promise<DiffResult> {
     const { actor, query, cursor, resolvedDirectory } = input;
+    if (this.closed) return unavailable(query, "cursorUnavailable");
     if (!queryAddressMatches(query, resolvedDirectory)) return unavailable(query, "invalidScope");
     if (resolvedDirectory.address.kind === "projectRoot" && !actor.directoryDiff)
       return unavailable(query, "unsupported");
@@ -483,41 +442,55 @@ export class LocalDiffService {
     }
     if (query.kind !== "workingTree" && query.kind !== "branch" && query.kind !== "commit")
       return unavailable(query, "capturedComparisonUnsupported");
-    const comparison = buildComparison(resolvedDirectory.path, resolvedDirectory.address, query);
-    if ("reason" in comparison)
-      return unavailable(query, comparison.reason, comparison.from, comparison.to);
-    const paths = changedPaths(
-      resolvedDirectory.path,
-      comparison.pair.fromTree,
-      comparison.pair.toTree,
-    );
-    if (!paths)
-      return unavailable(query, "diffUnavailable", comparison.pair.from, comparison.pair.to);
-    if (!paths.length)
-      return v.parse(DiffResultSchema, {
-        kind: "empty",
-        from: comparison.pair.from,
-        to: comparison.pair.to,
-      });
-    const scratch = mkdtempSync(join(tmpdir(), "kraka-diff-page-"));
-    return this.page(
-      {
-        actorScope: actor.scope,
-        query: queryKey,
-        directory: resolvedDirectory,
-        pair: comparison.pair,
-        paths,
-        pathIndex: 0,
-        byteOffset: 0,
-        scratch,
-        patchPath: join(scratch, "patch"),
-        currentSize: null,
-        refs: null,
-      },
-      query,
-    );
+    const intent = this.cleanup.begin(resolvedDirectory.path);
+    if (!intent) return unavailable(query, "gitUnavailable");
+    let paging = false;
+    try {
+      const comparison = buildComparison(
+        resolvedDirectory.path,
+        resolvedDirectory.address,
+        query,
+        intent.scratch,
+      );
+      if ("reason" in comparison)
+        return unavailable(query, comparison.reason, comparison.from, comparison.to);
+      const paths = changedPaths(
+        resolvedDirectory.path,
+        comparison.pair.fromTree,
+        comparison.pair.toTree,
+      );
+      if (!paths)
+        return unavailable(query, "diffUnavailable", comparison.pair.from, comparison.pair.to);
+      if (!paths.length)
+        return v.parse(DiffResultSchema, {
+          kind: "empty",
+          from: comparison.pair.from,
+          to: comparison.pair.to,
+        });
+      const scratch = intent.scratch;
+      paging = true;
+      return this.page(
+        {
+          actorScope: actor.scope,
+          query: queryKey,
+          directory: resolvedDirectory,
+          pair: comparison.pair,
+          paths,
+          pathIndex: 0,
+          byteOffset: 0,
+          scratch,
+          patchPath: join(scratch, "patch"),
+          currentSize: null,
+          cleanupId: intent.id,
+          pinned: false,
+        },
+        query,
+      );
+    } finally {
+      if (!paging) this.cleanup.release(intent.id);
+    }
   }
-  private page(state: CursorState, query: DiffRequest): DiffResult {
+  private async page(state: CursorState, query: DiffRequest): Promise<DiffResult> {
     const { from, to } = state.pair;
     let retained = false;
     try {
@@ -564,7 +537,20 @@ export class LocalDiffService {
       }
       let next: string | null = null;
       if (!unprintable && state.pathIndex < state.paths.length) {
-        if (!state.refs && !pin(state)) return unavailable(query, "retentionUnavailable", from, to);
+        if (!state.pinned) {
+          if (
+            from.kind !== "git" ||
+            to.kind === "round" ||
+            !(await this.cleanup.pin(
+              state.cleanupId,
+              from.oid,
+              to.kind === "workingTree" ? to.tree : to.oid,
+            )) ||
+            this.closed
+          )
+            return unavailable(query, "retentionUnavailable", from, to);
+          state.pinned = true;
+        }
         const cursor = crypto.randomUUID(),
           timer = setTimeout(() => this.expire(cursor), cursorRetentionMs);
         timer.unref();
@@ -584,7 +570,7 @@ export class LocalDiffService {
     } catch {
       return unavailable(query, "diffUnavailable", from, to);
     } finally {
-      if (!retained) release(state);
+      if (!retained) this.cleanup.release(state.cleanupId);
     }
   }
 }

@@ -1,3 +1,4 @@
+import { DiffCleanup } from "./diff-cleanup";
 import { TodoLedger } from "./todo-ledger";
 import { ThreadJournal } from "./thread-journal";
 import { Database } from "bun:sqlite";
@@ -158,6 +159,8 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
     : null;
 }
 export class FirstSendStore {
+  readonly diffCleanup: DiffCleanup;
+  readonly diffReads = new Set<Promise<void>>();
   readonly sync: ThreadJournal;
   readonly todos: TodoLedger;
   onQueueChanged?: (thread: Thread["id"]) => void;
@@ -169,6 +172,7 @@ export class FirstSendStore {
     db.exec(
       "CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));",
     );
+    this.diffCleanup = new DiffCleanup(db, writer.stateDirectory);
     this.sync = new ThreadJournal(db, writer.environmentId);
     this.todos = new TodoLedger(this);
   }

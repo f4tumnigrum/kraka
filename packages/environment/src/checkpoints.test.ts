@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { DiffCleanup } from "./diff-cleanup";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -296,6 +298,7 @@ test("a newly settled capture can finalize its matching round and joint rollback
 
 test("a shallow commit retains its verified right endpoint when its actual first parent is absent", async () => {
   const root = mkdtempSync(join(tmpdir(), "kraka-shallow-"));
+  const db = new Database(":memory:");
   const git = (...args: string[]) => {
     const r = Bun.spawnSync(["git", "-C", root, ...args], {
       env: {
@@ -323,8 +326,8 @@ test("a shallow commit retains its verified right endpoint when its actual first
       threadId: key.threadId,
       worktreeId: key.worktreeId,
     });
-    const service = new LocalDiffService();
-    const diff = service.readLocalDiff({
+    const service = new LocalDiffService(new DiffCleanup(db, root));
+    const diff = await service.readLocalDiff({
       actor: { scope: "viewer", directoryDiff: false },
       query,
       cursor: null,
@@ -346,6 +349,7 @@ test("a shallow commit retains its verified right endpoint when its actual first
       to: { relation: "commit", oid: git("rev-parse", "HEAD") },
     });
   } finally {
+    db.close(true);
     rmSync(root, { recursive: true, force: true });
   }
 });

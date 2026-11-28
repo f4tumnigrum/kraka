@@ -129,6 +129,7 @@ export function launchWriter(
   };
   return {
     child,
+    stderr,
     started,
     ready,
     async stop() {

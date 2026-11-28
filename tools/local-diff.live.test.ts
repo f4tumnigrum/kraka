@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import { launchBrowser } from "./fixtures/browser-selection";
@@ -19,7 +19,8 @@ import type { GitStatusUpdate } from "../packages/client-runtime/src";
 import { signP256 } from "@kraka/protocol/web-crypto";
 import { connectGitClient } from "../packages/cli-client/src/git-client";
 import { openAccessHost } from "../packages/daemon/src/access";
-import { accepted, startFirstSendFixture, productRoot } from "./fixtures/first-send";
+import { openReceiptReader } from "@kraka/environment";
+import { accepted, startFirstSendFixture, launchWriter, productRoot } from "./fixtures/first-send";
 import { cli, git, readClaim, seedGit } from "./fixtures/isolated-start";
 import { cliObserver } from "./fixtures/local-diff-cli";
 import { Journal } from "./fixtures/route-network";
@@ -499,6 +500,121 @@ test(
       expect(last.next).toBeNull();
       expect(Buffer.byteLength(first.patch)).toBeLessThanOrEqual(10_000_000);
       expect(Buffer.from(first.patch + last.patch).equals(expected.stdout)).toBe(true);
+    }),
+  120000,
+);
+
+test(
+  "5. writer restart releases a killed comparison and preserves live comparisons and checkpoint refs",
+  () =>
+    withCheckout(async (f, b) => {
+      const cwd = f.repo.path,
+        query = { kind: "workingTree" as const, ...(await f.thread()) };
+      const checkpoint = "refs/kraka/checkpoints/other-thread/capture/after";
+      git(cwd, "update-ref", checkpoint, f.repo.base);
+      const pins = () =>
+        git(cwd, "for-each-ref", "--format=%(refname) %(objectname)", "refs/kraka/diffs/");
+      const intents = () => {
+        const db = openReceiptReader(f.state);
+        try {
+          return db
+            .query<{ id: string; scratch: string }, []>("SELECT id,scratch FROM diff_cleanup")
+            .all();
+        } finally {
+          db.close(true);
+        }
+      };
+      const content = "A".repeat(10_050_000) + "\n";
+      writeFileSync(join(cwd, "large.txt"), content);
+      const first = changed(await b.diff(query));
+      if (!first.next || first.to.kind !== "workingTree")
+        throw Error("Expected a pinned first page");
+      const [intent] = intents();
+      if (!intent) throw Error("Unregistered comparison");
+      const scratch = intent.scratch;
+      expect(existsSync(join(scratch, "patch"))).toBe(true);
+      const refs = pins();
+      expect(refs.split("\n")).toEqual([
+        `refs/kraka/diffs/${intent.id}/from ${f.repo.base}`,
+        `refs/kraka/diffs/${intent.id}/to ${first.to.tree}`,
+      ]);
+
+      // A separate state directory already knows this repository and starts while the page is open.
+      const secondState = join(f.dir, "other-state");
+      const other = await startFirstSendFixture({
+        stateDir: secondState,
+        projectDirectory: cwd,
+        adapter: "replay",
+      });
+      await other.close();
+      const concurrent = launchWriter(secondState, productRoot);
+      try {
+        await concurrent.ready();
+        expect(pins()).toBe(refs);
+      } finally {
+        await concurrent.stop();
+      }
+
+      await f.daemon.kill();
+      expect(existsSync(scratch)).toBe(true);
+      expect(pins()).toBe(refs);
+      const orphan = "refs/kraka/diffs/unregistered/from";
+      git(cwd, "update-ref", orphan, f.repo.base);
+      git(cwd, "symbolic-ref", "refs/kraka/diffs/unregistered/alias", checkpoint);
+      const restarted = launchWriter(f.state, productRoot);
+      try {
+        const { instance } = await restarted.ready();
+        expect(pins()).toBe("");
+        expect(existsSync(scratch)).toBe(false);
+        expect(intents()).toHaveLength(0);
+        expect(git(cwd, "rev-parse", "--verify", checkpoint)).toBe(f.repo.base);
+
+        const key = await crypto.subtle.importKey(
+          "jwk",
+          f.credentials.privateKey,
+          { name: "ECDSA", namedCurve: "P-256" },
+          false,
+          ["sign"],
+        );
+        const client = await connectGitClient(
+          instance.endpoint,
+          { ...f.credentials, sign: (s) => signP256(key, s) },
+          () => {},
+        );
+        try {
+          const again = changed(await client.diff(query));
+          if (!again.next) throw Error("Expected a new continuation");
+          expect(again.to).toEqual(first.to);
+          expect(again.patch === first.patch).toBe(true);
+          const last = changed(await client.diff(query, again.next));
+          expect(last.next).toBeNull();
+          const expected = Bun.spawnSync(
+            [
+              "git",
+              "-C",
+              cwd,
+              "diff",
+              "--full-index",
+              f.repo.base,
+              first.to.tree,
+              "--",
+              "large.txt",
+            ],
+            { maxBuffer: 15_000_000 },
+          );
+          expect(expected.exitCode).toBe(0);
+          expect(Buffer.from(again.patch + last.patch).equals(expected.stdout)).toBe(true);
+          expect(pins()).toBe("");
+          expect(intents()).toHaveLength(0);
+        } finally {
+          client.close();
+        }
+      } finally {
+        await restarted.stop();
+      }
+      expect(await restarted.stderr).toContain(
+        "Removed orphan comparison ref " + realpathSync.native(join(cwd, ".git")) + " " + orphan,
+      );
     }),
   120000,
 );
