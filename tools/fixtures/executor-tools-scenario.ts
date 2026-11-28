@@ -1,3 +1,4 @@
+import { createPrivateKey, sign as signP256 } from "node:crypto";
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
@@ -5,6 +6,8 @@ import {
   DEFAULT_DEVICE_PERMISSIONS,
   CommandIdSchema,
   CommandReceiptSchema,
+  RequestSignerSchema,
+  ExecutorPrincipalSchema,
   type ThreadId,
   type AttemptId,
   type CommandId,
@@ -110,6 +113,8 @@ async function openScenario(dir: string, stop: string) {
     if (entry.event === "error") throw Error(entry.reason ?? "Fixture error");
     return entry;
   };
+  const toolSigner = v.object({ signer: RequestSignerSchema.options[1], privateKey: v.string() });
+  const toolKeys = new Map<string, v.InferOutput<typeof toolSigner>>();
   async function launch(stage: string, hold: boolean) {
     const since = log.items.length;
     const child = Bun.spawn(
@@ -128,6 +133,8 @@ async function openScenario(dir: string, stop: string) {
           const msg = v.parse(v.object({ event: v.string() }), raw);
           if (msg.event === "tools") {
             const offer = v.parse(v.object({ attempt: v.string(), tools: v.unknown() }), raw);
+            const [tool] = v.parse(v.array(v.object({ configuration: toolSigner })), offer.tools);
+            if (tool) toolKeys.set(offer.attempt, tool.configuration);
             peer.send({ action: "install", ...offer });
             return;
           }
@@ -271,6 +278,36 @@ async function openScenario(dir: string, stop: string) {
         await until("installed", { attempt: r.attemptId });
         await until("start", { attempt: r.attemptId });
         return r;
+      },
+      async executorSocket(attempt: AttemptId, threadId: ThreadId) {
+        const key = toolKeys.get(attempt),
+          opened = await until("open", { attempt });
+        if (!key) throw Error("Missing installed key");
+        const cache = new SqliteThreadCache(join(dir, crypto.randomUUID() + ".sqlite"), "executor");
+        caches.push(cache);
+        const privateKey = createPrivateKey(key.privateKey);
+        const socket = await connectReplica(
+          current().publication.endpoint,
+          pairing.identity,
+          {
+            signer: key.signer,
+            principal: v.parse(ExecutorPrincipalSchema, {
+              kind: "executor",
+              id: key.signer.principalId,
+              executorInstanceId: opened.instanceId,
+              threadId,
+              attemptId: attempt,
+            }),
+            sign: async (text) =>
+              signP256("sha256", Buffer.from(text), {
+                key: privateKey,
+                dsaEncoding: "ieee-p1363",
+              }).toString("base64url"),
+          },
+          cache,
+        );
+        sockets.push(socket);
+        return socket;
       },
       async callTool(
         attempt: AttemptId,

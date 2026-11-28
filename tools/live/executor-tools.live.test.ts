@@ -62,6 +62,16 @@ test(
     toolScenario(async (f) => {
       const first = await f.start("first"),
         other = await f.start("other");
+      const rpc = await f.executorSocket(first.attemptId, first.threadId);
+      expect(
+        accepted(
+          await rpc.client.rpc("thread.inspectCheckout", { threadId: first.threadId }),
+          "checkoutObserved",
+        ).checkout,
+      ).toMatchObject({ kind: "available", shared: true });
+      expect(
+        await rpc.client.rpc("thread.rename", { threadId: first.threadId, title: "forbidden" }),
+      ).toMatchObject({ failure: { kind: "unsupported" } });
       const root = fixtureGit(f.cwd, "rev-parse", "HEAD");
       for (const task of [first, other, await f.start("isolated", true)]) {
         const response = accepted(
@@ -350,8 +360,12 @@ async function crashAt(stop: "childSettled" | "parentMessageCommitted" | "return
       f.control("return", { transferId: before.id }),
       f.control("return", { transferId: before.id }),
     ]);
-    expect(await f.control("replay", { taskId: child.taskId })).toBe("unchanged");
-    expect(await f.control("conflict", { transferId: before.id })).toBe("conflict");
+    expect(
+      await Promise.all([
+        f.control("replay", { taskId: child.taskId }),
+        f.control("conflict", { transferId: before.id }),
+      ]),
+    ).toEqual(["unchanged", "conflict"]);
     const winner = transfer(f, original);
     if (winner.state.kind !== "returned") throw Error("Expected returned transfer");
     expect(winner).toMatchObject({ version: "2", result: text, parentRoundId: parent.roundId });
