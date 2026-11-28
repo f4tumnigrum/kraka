@@ -1,5 +1,7 @@
 export { captures } from "./captures";
+export { children } from "./children";
 export { diff } from "./diff";
+export { executorTools } from "./executor-tools";
 export { executors } from "./executors";
 export { queues } from "./queues";
 export { sessions } from "./sessions";
