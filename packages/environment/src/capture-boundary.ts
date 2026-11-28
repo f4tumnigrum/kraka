@@ -14,6 +14,8 @@ import { physicalDirectory } from "./project-directory";
 const sealSchema = v.strictObject({
   tree: GitObjectIdSchema,
   parent: v.nullable(GitObjectIdSchema),
+  name: v.string(),
+  email: v.string(),
   date: v.string(),
   message: v.string(),
   objects: v.string(),
@@ -151,6 +153,8 @@ export async function captureBoundary({
       tree,
       parent,
       objects,
+      name: "kraka",
+      email: "checkpoint@kraka.invalid",
       date: "@" + Math.floor(Date.now() / 1000) + " +0000",
       message: "kraka " + state.key.id + " " + boundary,
     };
@@ -165,10 +169,10 @@ export async function captureBoundary({
   if (seal.objects !== objects || seal.message !== "kraka " + state.key.id + " " + boundary)
     throw Error("sealMismatch");
   const meta = {
-    GIT_AUTHOR_NAME: "kraka",
-    GIT_COMMITTER_NAME: "kraka",
-    GIT_AUTHOR_EMAIL: "checkpoint@kraka.invalid",
-    GIT_COMMITTER_EMAIL: "checkpoint@kraka.invalid",
+    GIT_AUTHOR_NAME: seal.name,
+    GIT_COMMITTER_NAME: seal.name,
+    GIT_AUTHOR_EMAIL: seal.email,
+    GIT_COMMITTER_EMAIL: seal.email,
     GIT_AUTHOR_DATE: seal.date,
     GIT_COMMITTER_DATE: seal.date,
   };
@@ -192,38 +196,54 @@ export async function captureBoundary({
     )
   )
     throw Error("directoryLost");
-  const installed = await lease.installObjects({
-    repository: repo.realPath,
-    env,
-    commit,
-    parent: seal.parent,
-    timeout: remaining(),
-  });
-  if (installed.exitCode !== 0) {
-    remaining();
-    throw Error("objectPublicationFailed");
-  }
   const point = { ref: plan.ref, commit, tree: seal.tree };
-  // Check reachable objects before allowing the ref to keep this tree.
   const commonDir = "--git-dir=" + repo.realPath;
-  await read([commonDir, "fsck", "--connectivity-only", "--no-reflogs", "--no-dangling", commit]);
-  let failure = "idConflict";
+  const existing = recover
+    ? await lease.git([commonDir, "rev-parse", "--verify", "--quiet", plan.ref])
+    : null;
+  if (existing?.exitCode === 0 && existing.stdout.toString().trim() !== commit)
+    throw Error("idConflict");
+  let failure = "refPublicationFailed";
   try {
-    const r = await run([commonDir, "update-ref", plan.ref, commit, "0".repeat(commit.length)]);
-    if (r.exitCode !== 0 && performance.now() >= deadline) failure = "captureTimeout";
-  } catch (e) {
-    if (!(e instanceof Error) || e.message !== "captureTimeout") throw e;
-    failure = e.message;
+    if (existing?.exitCode !== 0) {
+      const installed = await lease.installObjects({
+        repository: repo.realPath,
+        env,
+        commit,
+        parent: seal.parent,
+        timeout: remaining(),
+      });
+      if (installed.exitCode !== 0) {
+        remaining();
+        throw Error("objectPublicationFailed");
+      }
+      await read([
+        commonDir,
+        "fsck",
+        "--connectivity-only",
+        "--no-reflogs",
+        "--no-dangling",
+        commit,
+      ]);
+      const published = await run([
+        commonDir,
+        "update-ref",
+        plan.ref,
+        commit,
+        "0".repeat(commit.length),
+      ]);
+      if (published.exitCode !== 0) remaining();
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "captureTimeout") throw error;
+    failure = "captureTimeout";
   }
   // A timeout may race with the ref rename. Reconcile only this exact publication.
   const verify = await lease.git([commonDir, "rev-parse", "--verify", plan.ref]);
   const tree = await lease.git([commonDir, "rev-parse", "--verify", plan.ref + "^{tree}"]);
-  if (
-    verify.exitCode !== 0 ||
-    verify.stdout.toString().trim() !== commit ||
-    tree.exitCode !== 0 ||
-    tree.stdout.toString().trim() !== point.tree
-  )
+  if (verify.exitCode === 0 && verify.stdout.toString().trim() !== commit)
+    throw Error("idConflict");
+  if (verify.exitCode !== 0 || tree.exitCode !== 0 || tree.stdout.toString().trim() !== point.tree)
     throw Error(failure);
   await hook?.("published", boundary, state);
   return { point, repo };
