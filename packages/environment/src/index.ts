@@ -46,6 +46,13 @@ export { transitionInputQueue } from "./queue";
 export { runReplayTurn } from "./replay-turn";
 export type { RejectionReason } from "./result";
 export type { TransitionResult } from "./result";
+export { reconcileRollback } from "./rollback-recovery";
+export {
+  type RollbackOperation,
+  type RollbackNative,
+  type RollbackActor,
+  RollbackOperationStore,
+} from "./rollback-store";
 export type { DeliveryRecovery } from "./round";
 export type { RoundReport } from "./round";
 export { recoverInputDelivery } from "./round";

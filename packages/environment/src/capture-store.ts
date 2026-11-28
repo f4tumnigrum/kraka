@@ -60,11 +60,11 @@ const sourceSchema = v.object({
   identity: v.string(),
   writer: v.optional(v.string()),
 });
-function captureSource(text: string) {
+export function captureSource(text: string) {
   const { writer, ...repo } = v.parse(sourceSchema, JSON.parse(text));
   return { writer, repo };
 }
-function storedCheckpointRef(
+export function storedCheckpointRef(
   path: string,
   key: Pick<CaptureState["key"], "id" | "threadId" | "writer" | "environmentId">,
   boundary: Boundary,

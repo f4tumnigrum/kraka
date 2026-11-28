@@ -136,7 +136,7 @@ export function acceptIsolatedStart({
     hashId(project.id),
     hashId(worktreeId),
   );
-  if (!common || exists(path)) return null;
+  if (!common || exists(path) || transaction.services.rollbacks.reserves(path)) return null;
   const generation = v.parse(WorktreeGenerationSchema, "1");
   const claim = reserveWorktree(
     { environmentId: project.environmentId, projectId: project.id, threadId, worktreeId },

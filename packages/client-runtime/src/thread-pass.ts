@@ -213,6 +213,7 @@ type AcceptedInput = { threadId: string; messageId: MessageId; text: string };
 type Membership = {
   cursor: SyncCursor;
   members: Record<string, ObjectKey>;
+  rollbacks?: Record<string, import("@kraka/protocol").RollbackProgress>;
   listRows?: Record<string, ThreadSummary>;
   facts?: Record<string, AttentionFacts>;
   counts: Extract<ObjectChange, { kind: "list.counts" }>["counts"] | null;
@@ -342,6 +343,7 @@ export async function installThreadPass(
     const scope: Membership = {
       cursor: begin.through,
       members: begin.mode === "replace" ? {} : { ...prior?.members },
+      ...(begin.mode === "merge" && prior?.rollbacks ? { rollbacks: { ...prior.rollbacks } } : {}),
       counts: begin.mode === "replace" ? null : (prior?.counts ?? null),
     };
     const list = begin.through.scope.kind === "list" && begin.through.shapeVersion === 2;
@@ -367,6 +369,10 @@ export async function installThreadPass(
             break;
           case "window.leave":
             delete scope.members[keyString(change.key)];
+            break;
+          case "checkpoint.rollbackProgress":
+            scope.rollbacks ??= {};
+            scope.rollbacks[change.progress.commandId] = change.progress;
             break;
           case "tool.activity":
             saveRow(cache, { objectType: "timelineItem", value: change.item });

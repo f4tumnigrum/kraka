@@ -1,5 +1,5 @@
 import { controlledTurn } from "./codex-controlled";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import * as v from "valibot";
@@ -51,6 +51,11 @@ if (
     );
     if (direction === "toExecutor") {
       methods.add("thread/read");
+      if (
+        process.env.PEER_HISTORY_DIRECTORY &&
+        existsSync(join(process.env.PEER_HISTORY_DIRECTORY, "rewind-enabled"))
+      )
+        methods.add("thread/rollback");
       methods.add("thread/resume");
       if (process.env.PEER_CONTROL) {
         methods.add("turn/interrupt");

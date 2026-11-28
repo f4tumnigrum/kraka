@@ -240,7 +240,7 @@ export function beginRollback(
   target: DialogueRollbackTarget,
   mode: "dialogue" | "files" | "both",
 ): RollbackProgress {
-  if (target.worktreeId === null) {
+  if (!("captureId" in target)) {
     if (mode !== "dialogue") throw new Error("Restoring files requires a worktree");
     return {
       commandId,
@@ -263,6 +263,7 @@ export type RollbackEvent = {
 } & (
   | { kind: "claim"; part: "dialogue" }
   | { kind: "claim"; part: "files"; capture: CheckpointCapture; exclusive: boolean }
+  | { kind: "preflightFailed"; part: "files"; reason: string; retryable: boolean }
   | { kind: "retry" }
   | Extract<RollbackPart, { kind: "succeeded" | "failed" | "unknown" }>
   | { kind: "verified"; finding: "applied" | "absentAfterFence" }
@@ -285,7 +286,7 @@ export function transitionRollback(
         const { target } = state,
           { capture } = event;
         if (
-          target.worktreeId === null ||
+          !("captureId" in target) ||
           capture.id !== target.captureId ||
           capture.roundId !== target.roundId ||
           capture.attemptId !== target.attemptId
@@ -295,8 +296,11 @@ export function transitionRollback(
           return set({ kind: "failed", execution, reason: "sharedWorkspace", retryable: true });
         if (
           capture.result.kind !== "ready" ||
-          !("worktreeId" in capture.result) ||
-          capture.result.worktreeId !== target.worktreeId ||
+          !("directoryId" in target
+            ? "directoryId" in capture.result &&
+              capture.result.directoryId === target.directoryId &&
+              capture.result.generation === target.generation
+            : "worktreeId" in capture.result && capture.result.worktreeId === target.worktreeId) ||
           !capture.result.comparison
         )
           return set({
@@ -308,6 +312,10 @@ export function transitionRollback(
       }
       return set({ kind: "running", execution });
     }
+    case "preflightFailed":
+      return current.kind === "pending"
+        ? set({ kind: "failed", reason: event.reason, retryable: event.retryable, execution })
+        : reject("invalidState");
     case "retry":
       return current.kind === "failed" && current.retryable
         ? set({ kind: "pending", execution: execution + 1 })
