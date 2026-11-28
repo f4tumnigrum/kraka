@@ -146,6 +146,7 @@ export async function startWriter<H extends object>(
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease, replay?.recovery);
     store = transaction;
+    transaction.diffCleanup.recover();
     lifecycle?.opened?.(transaction);
     const codex = new CodexInstances(transaction);
     const stops = new OrdinaryStops(transaction);
@@ -847,7 +848,11 @@ export async function startWriter<H extends object>(
         controller.abort();
         try {
           await server.stop(true);
-          await Promise.allSettled([...turns.values(), ...preparing.values()]);
+          await Promise.allSettled([
+            ...turns.values(),
+            ...preparing.values(),
+            ...transaction.diffReads,
+          ]);
           await Promise.allSettled(opening.values());
           for (const r of prepared.values())
             if (r.opened.kind === "ok") await r.adapter.close(r.opened.value, "shutdown");

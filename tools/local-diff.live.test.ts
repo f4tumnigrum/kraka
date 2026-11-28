@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright";
 import { launchBrowser } from "./fixtures/browser-selection";
@@ -19,7 +19,8 @@ import type { GitStatusUpdate } from "../packages/client-runtime/src";
 import { signP256 } from "@kraka/protocol/web-crypto";
 import { connectGitClient } from "../packages/cli-client/src/git-client";
 import { openAccessHost } from "../packages/daemon/src/access";
-import { accepted, startFirstSendFixture, productRoot } from "./fixtures/first-send";
+import { openReceiptReader } from "@kraka/environment";
+import { accepted, startFirstSendFixture, launchWriter, productRoot } from "./fixtures/first-send";
 import { cli, git, readClaim, seedGit } from "./fixtures/isolated-start";
 import { cliObserver } from "./fixtures/local-diff-cli";
 import { Journal } from "./fixtures/route-network";
@@ -80,11 +81,12 @@ async function withCheckout(
     }
   });
 }
-async function prepare(dir: string) {
-  const repo = seedGit(dir);
+async function prepare(dir: string, repo = seedGit(dir)) {
+  const common = git(repo.path, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  const metadataBefore = gitMetadataFiles(common);
   git(repo.path, "config", "core.autocrlf", "false");
   const state = join(dir, "state");
-  mkdirSync(state, { mode: 0o700 });
+  mkdirSync(state, { recursive: true, mode: 0o700 });
   const build = await Bun.build({
     entrypoints: [join(productRoot, "tools/fixtures/local-diff-browser.ts")],
     format: "iife",
@@ -175,7 +177,19 @@ async function prepare(dir: string) {
         generation: project.root.generation,
       };
     };
-    return { dir, state, repo, root, credentials, daemon, thread, completed, probes };
+    return {
+      dir,
+      state,
+      repo,
+      root,
+      credentials,
+      daemon,
+      thread,
+      completed,
+      probes,
+      common,
+      metadataBefore,
+    };
   } catch (e) {
     await daemon.close();
     throw e;
@@ -335,19 +349,7 @@ test(
       writeFileSync(join(a.cwd, "marker"), "only in A");
       expect(names(await b.diff({ kind: "workingTree", ...a.query }))).toEqual(["marker"]);
       expect((await b.diff({ kind: "workingTree", ...other.query })).kind).toBe("empty");
-      const oldKey = await crypto.subtle.importKey(
-        "jwk",
-        f.credentials.privateKey,
-        { name: "ECDSA", namedCurve: "P-256" },
-        false,
-        ["sign"],
-      );
-      const legacy = await connectGitClient(
-        f.credentials.url,
-        { ...f.credentials, sign: (s) => signP256(oldKey, s) },
-        () => {},
-        false,
-      );
+      const legacy = await fixtureGitClient(f.credentials, f.credentials.url, false);
       try {
         const shared = await f.thread();
         expect(
@@ -499,6 +501,212 @@ test(
       expect(last.next).toBeNull();
       expect(Buffer.byteLength(first.patch)).toBeLessThanOrEqual(10_000_000);
       expect(Buffer.from(first.patch + last.patch).equals(expected.stdout)).toBe(true);
+    }),
+  120000,
+);
+
+async function fixtureGitClient(
+  credentials: FixtureCredentials,
+  endpoint: string,
+  directoryDiff = true,
+) {
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    credentials.privateKey,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"],
+  );
+  return connectGitClient(
+    endpoint,
+    { ...credentials, sign: (s) => signP256(key, s) },
+    () => {},
+    directoryDiff,
+  );
+}
+
+function cleanupIntents(state: string) {
+  const db = openReceiptReader(state);
+  try {
+    return db
+      .query<{ id: string; scratch: string }, []>("SELECT id,scratch FROM diff_cleanup")
+      .all();
+  } finally {
+    db.close(true);
+  }
+}
+function pinnedComparison(f: Awaited<ReturnType<typeof prepare>>, tree: string) {
+  const rows = cleanupIntents(f.state);
+  expect(rows).toHaveLength(1);
+  const intent = rows[0];
+  if (!intent) throw Error("Missing cleanup intent");
+  expect(existsSync(join(intent.scratch, "patch"))).toBe(true);
+  const refs = git(f.repo.path, "for-each-ref", "--format=%(refname)", "refs/kraka/diffs/").split(
+    /\r?\n/,
+  );
+  const name = refs.find((r) => r.endsWith("/" + intent.id + "/from"));
+  if (!name) throw Error("Missing comparison ref");
+  const writer = name.slice(0, -(intent.id.length + "/from".length));
+  expect(writer).toMatch(/^refs\/kraka\/diffs\/w-[a-f0-9]{64}\/$/);
+  const pair = writer + intent.id;
+  expect(git(f.repo.path, "rev-parse", pair + "/from", pair + "/to").split(/\r?\n/)).toEqual([
+    f.repo.base,
+    tree,
+  ]);
+  return { writer, pair, scratch: intent.scratch };
+}
+function gitMetadataFiles(common: string, relative = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(join(common, relative), { withFileTypes: true })) {
+    const name = relative ? relative + "/" + entry.name : entry.name;
+    if (name === "refs" || name === "logs/refs") continue;
+    if (entry.isDirectory()) files.push(...gitMetadataFiles(common, name));
+    else if (!/^objects\/[a-f0-9]{2}\/(?:[a-f0-9]{38}|[a-f0-9]{62})$/.test(name)) files.push(name);
+  }
+  return files.sort();
+}
+
+function expectedPatch(cwd: string, from: string, to: string) {
+  const r = Bun.spawnSync(["git", "-C", cwd, "diff", "--full-index", from, to, "--", "large.txt"], {
+    maxBuffer: 15_000_000,
+  });
+  if (r.exitCode !== 0) throw Error(r.stderr.toString());
+  return r.stdout;
+}
+test(
+  "5. a killed writer releases only its own pins while the other writer finishes its comparison",
+  () =>
+    withCheckout(async (f, b) => {
+      const cwd = f.repo.path,
+        common = f.common;
+      const checkpoint = "refs/kraka/checkpoints/other-thread/capture/after";
+      const legacy = "refs/kraka/diffs/" + crypto.randomUUID();
+      git(cwd, "update-ref", checkpoint, f.repo.base);
+      git(cwd, "update-ref", legacy + "/from", f.repo.base);
+      git(cwd, "update-ref", legacy + "/to", f.repo.base);
+      const query = { kind: "workingTree" as const, ...(await f.thread()) };
+      const other = await prepare(join(f.dir, "second-writer"), f.repo);
+      try {
+        const otherQuery = { kind: "workingTree" as const, ...(await other.thread()) };
+        const otherClient = await fixtureGitClient(other.credentials, other.credentials.url);
+        try {
+          const userHooks = join(f.dir, "user-hooks");
+          mkdirSync(userHooks);
+          const hook = join(userHooks, "reference-transaction");
+          writeFileSync(hook, '#!/bin/sh\necho called >> "$0.called"\nexit 1\n', { mode: 0o700 });
+          git(cwd, "config", "core.hooksPath", userHooks);
+          const hookProbe = Bun.spawnSync([
+            "git",
+            "-C",
+            cwd,
+            "update-ref",
+            "refs/fixture/hook-probe",
+            f.repo.base,
+          ]);
+          expect(hookProbe.exitCode).not.toBe(0);
+          expect(existsSync(hook + ".called")).toBe(true);
+          rmSync(hook + ".called");
+          const file = join(cwd, "large.txt");
+          const content = "A".repeat(10_050_000) + "\n";
+          writeFileSync(file, content);
+          const first = changed(await b.diff(query));
+          if (!first.next || first.to.kind !== "workingTree")
+            throw Error("Expected first writer's continuation");
+          const own = pinnedComparison(f, first.to.tree);
+
+          writeFileSync(file, "B".repeat(10_050_000) + "\n");
+          const neighbor = changed(await otherClient.diff(otherQuery));
+          if (!neighbor.next || neighbor.to.kind !== "workingTree")
+            throw Error("Expected second writer's continuation");
+          const foreign = pinnedComparison(other, neighbor.to.tree);
+          expect(foreign.writer).not.toBe(own.writer);
+          expect(neighbor.to.tree).not.toBe(first.to.tree);
+          const expectedNeighbor = expectedPatch(cwd, f.repo.base, neighbor.to.tree);
+          const ownOrphan = own.writer + crypto.randomUUID() + "/from",
+            foreignOrphan = foreign.writer + crypto.randomUUID() + "/from";
+          const fixtureHooks = join(f.dir, "fixture-hooks");
+          mkdirSync(fixtureHooks);
+          for (const orphan of [ownOrphan, foreignOrphan])
+            git(cwd, "-c", "core.hooksPath=" + fixtureHooks, "update-ref", orphan, f.repo.base);
+          git(
+            cwd,
+            "-c",
+            "core.hooksPath=" + fixtureHooks,
+            "symbolic-ref",
+            own.writer + "orphan-alias",
+            checkpoint,
+          );
+          await f.daemon.kill();
+          expect(existsSync(own.scratch)).toBe(true);
+          expect(git(cwd, "rev-parse", own.pair + "/to")).toBe(first.to.tree);
+
+          const restarted = launchWriter(f.state, productRoot);
+          try {
+            const { publication } = await restarted.ready();
+            expect(existsSync(own.scratch)).toBe(false);
+            expect(cleanupIntents(f.state)).toHaveLength(0);
+            expect(git(cwd, "for-each-ref", "--format=%(refname)", own.writer)).toBe("");
+            expect(
+              git(
+                cwd,
+                "rev-parse",
+                checkpoint,
+                legacy + "/from",
+                legacy + "/to",
+                foreignOrphan,
+              ).split(/\r?\n/),
+            ).toEqual(Array(4).fill(f.repo.base));
+            expect(git(cwd, "rev-parse", foreign.pair + "/to")).toBe(neighbor.to.tree);
+            expect(existsSync(join(foreign.scratch, "patch"))).toBe(true);
+
+            writeFileSync(file, content);
+            const lastNeighbor = changed(await otherClient.diff(otherQuery, neighbor.next));
+            expect(lastNeighbor.next).toBeNull();
+            expect(Buffer.from(neighbor.patch + lastNeighbor.patch).equals(expectedNeighbor)).toBe(
+              true,
+            );
+            expect(cleanupIntents(other.state)).toHaveLength(0);
+            expect(existsSync(foreign.scratch)).toBe(false);
+            expect(git(cwd, "for-each-ref", "--format=%(refname)", foreign.writer)).toBe(
+              foreignOrphan,
+            );
+
+            const recovered = await fixtureGitClient(f.credentials, publication.endpoint);
+            try {
+              const again = changed(await recovered.diff(query));
+              if (!again.next || again.to.kind !== "workingTree")
+                throw Error("Expected new continuation");
+              expect(again.to).toEqual(first.to);
+              expect(pinnedComparison(f, again.to.tree).writer).toBe(own.writer);
+              const last = changed(await recovered.diff(query, again.next));
+              expect(last.next).toBeNull();
+              expect(
+                Buffer.from(again.patch + last.patch).equals(
+                  expectedPatch(cwd, f.repo.base, first.to.tree),
+                ),
+              ).toBe(true);
+              expect(cleanupIntents(f.state)).toHaveLength(0);
+              expect(git(cwd, "for-each-ref", "--format=%(refname)", own.writer)).toBe("");
+            } finally {
+              recovered.close();
+            }
+          } finally {
+            await restarted.stop();
+          }
+          const diagnostics = await restarted.stderr;
+          expect(diagnostics).toContain(
+            "Removed orphan comparison ref " + realpathSync.native(common) + " " + ownOrphan,
+          );
+          expect(diagnostics.split("Preserved legacy comparison refs").length - 1).toBe(1);
+          expect(diagnostics).toContain(legacy);
+          expect(existsSync(hook + ".called")).toBe(false);
+        } finally {
+          otherClient.close();
+        }
+      } finally {
+        await other.daemon.close();
+      }
+      expect(gitMetadataFiles(common)).toEqual(f.metadataBefore);
     }),
   120000,
 );

@@ -173,10 +173,10 @@ export async function threadConnection(
         allowsTarget({ kind: "thread", threadId }, permission);
       const allowsWorkspace = (target: WorkspaceTarget) =>
         allowsTarget(workspaceAuthorizationTarget(target), "thread.view");
-      const diffService = new LocalDiffService();
-      function readDiff(
+      const diffService = new LocalDiffService(store.diffCleanup);
+      async function readDiff(
         request: Extract<SignedRequest, { method: "checkpoint.diff" }>,
-      ): CommandReceipt {
+      ): Promise<CommandReceipt> {
         const { commandId } = request;
         const { query, cursor } = request.payload;
         const unavailable = (reason: string) =>
@@ -200,7 +200,7 @@ export async function threadConnection(
           };
         const directory = resolveDiffDirectory(store, query);
         const diff = directory
-          ? diffService.readLocalDiff({
+          ? await diffService.readLocalDiff({
               actor: {
                 scope: canonicalJson([
                   session?.principal.id,
@@ -462,7 +462,40 @@ export async function threadConnection(
               commandId: m.commandId,
               failure: { kind: "invalidState" },
             };
-          if (!result && m.method === "checkpoint.diff") result = readDiff(m);
+          if (m.method === "checkpoint.diff") {
+            const scope = visibility();
+            const allowed = () =>
+              scope === visibility() && allows(m.payload.query.threadId, "thread.view");
+            const work = readDiff(m)
+              .then((receipt) => {
+                if (!session) return;
+                if (receipt.kind === "accepted" && !allowed())
+                  peer.control({
+                    kind: "rejected",
+                    commandId: m.commandId,
+                    failure: { kind: "notFound" },
+                  });
+                else {
+                  const stream = sendLogicalRequest(peer, receipt);
+                  if (receipt.kind === "accepted")
+                    disclosures.set(m.commandId, { stream, allowed });
+                }
+                wake();
+              })
+              .catch(() => {
+                if (session) {
+                  peer.control({
+                    kind: "programError",
+                    commandId: m.commandId,
+                    code: "internalError",
+                  });
+                  wake();
+                }
+              });
+            store.diffReads.add(work);
+            void work.finally(() => store.diffReads.delete(work));
+            return;
+          }
           if (!result) result = subs.handle(m);
           if (
             !result &&
@@ -572,17 +605,11 @@ export async function threadConnection(
               return;
             }
           }
-          if (
-            result?.kind === "accepted" &&
-            (result.result.kind === "checkpointDiff" || result.result.kind === "gitStatus")
-          ) {
+          if (result?.kind === "accepted" && result.result.kind === "gitStatus") {
             const stream = sendLogicalRequest(peer, result);
             disclosures.set(m.commandId, {
               stream,
-              allowed: () =>
-                m.method === "checkpoint.diff"
-                  ? allows(m.payload.query.threadId, "thread.view")
-                  : m.method === "git.readStatus" && allowsWorkspace(m.payload.target),
+              allowed: () => m.method === "git.readStatus" && allowsWorkspace(m.payload.target),
             });
             return;
           }
