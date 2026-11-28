@@ -16,7 +16,7 @@ import { connectReplica } from "./thread-resume";
 import { codexFixture } from "./codex-turn";
 import { connectFirstSend } from "./first-send-client";
 import { accepted, launchWriter, productRoot } from "./first-send";
-import { Journal } from "./route-network";
+import { Journal, dispatchObservationMs } from "./route-network";
 import { within, withState } from "./replay-process";
 const observation = v.looseObject({
   event: v.string(),
@@ -136,7 +136,12 @@ async function setup(
     assert.equal(refresh.snapshot?.matrix.resumeSessionAfterHostRestart.kind, "native");
     let client = f.client,
       endpoint = f.instance.endpoint;
-    const event = (name: string, since = 0) => events.until((e) => e.event === name, since);
+    const event = (name: string, since = 0) =>
+      events.until(
+        (e) => e.event === name,
+        since,
+        name === "turn" ? dispatchObservationMs : undefined,
+      );
     const action = (handle: number, cmd: string) => {
       const ws = peers.get(handle);
       if (!ws || ws.send(cmd) <= 0) throw Error("Missing native peer " + handle);
@@ -173,7 +178,7 @@ async function setup(
         "threadStarted",
       );
       const turn = await event("turn", since);
-      const start = await updates.until(
+      const start = await updates.untilDispatch(
         (e) => e.kind === "round.started" && e.attemptId === ids.attemptId,
       );
       assert.ok(

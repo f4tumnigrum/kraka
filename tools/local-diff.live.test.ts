@@ -167,7 +167,9 @@ async function prepare(dir: string) {
         projectId: project.id,
       });
       const turn = accepted(receipt, "threadStarted");
-      await completed.until((e) => e.roundId === turn.roundId && e.threadId === turn.threadId);
+      await completed.untilDispatch(
+        (e) => e.roundId === turn.roundId && e.threadId === turn.threadId,
+      );
       if (!project.root) throw Error("Missing registered checkout");
       return {
         threadId: turn.threadId,
@@ -317,7 +319,7 @@ test(
           kind: "isolated",
           selection: { baseRef: f.repo.base, branch },
         });
-        await f.completed.until((e) => e.roundId === r.ids.roundId);
+        await f.completed.untilDispatch((e) => e.roundId === r.ids.roundId);
         const wid = r.request.payload.worktreeId;
         if (!wid) throw Error("Missing worktree ID");
         const managed = readClaim(f.state, wid);

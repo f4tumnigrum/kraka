@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { GitObjectIdSchema, type DirectoryBinding } from "@kraka/protocol";
 import * as v from "valibot";
 import {
+  CAPTURE_BOUNDARY_TIMEOUT_MS,
   captureWorkspace,
   type CaptureState,
   type CaptureLayout,
@@ -10,7 +11,13 @@ import {
   type Boundary,
   type PublishedBoundary,
 } from "./checkpoints";
-import { gitAlternateDirectory, gitCheckoutArgs, gitPath, gitProcessError } from "./git-process";
+import {
+  gitAlternateDirectory,
+  gitCheckoutArgs,
+  gitPath,
+  gitProcessError,
+  revParseLines,
+} from "./git-process";
 import type { DirectoryLease } from "./directory-lease";
 import { physicalDirectory } from "./project-directory";
 
@@ -87,7 +94,7 @@ export async function captureBoundary({
   } catch (cause) {
     throw Error("index.prepare", { cause });
   }
-  const deadline = lease.acquiredAt + 5000;
+  const deadline = lease.acquiredAt + CAPTURE_BOUNDARY_TIMEOUT_MS;
   function remaining() {
     const ms = Math.ceil(deadline - performance.now());
     if (ms <= 0)
@@ -96,9 +103,9 @@ export async function captureBoundary({
       });
     return ms;
   }
-  async function locate(option: "--absolute-git-dir" | "--show-toplevel" | "--git-common-dir") {
+  async function locate(...options: string[]) {
     const result = await lease.git(
-      ["rev-parse", "--path-format=absolute", option],
+      ["rev-parse", "--path-format=absolute", ...options],
       {},
       undefined,
       remaining(),
@@ -110,14 +117,28 @@ export async function captureBoundary({
           : "repository.rev-parse",
         result,
       );
-    return result.stdout.toString().replace(process.platform === "win32" ? /\r?\n$/ : /\n$/, "");
+    return result.stdout;
   }
-  const checkout = {
-    gitDir: await locate("--absolute-git-dir"),
-    workTree: await locate("--show-toplevel"),
-  };
+  async function checkoutPaths() {
+    const options = ["--absolute-git-dir", "--show-toplevel", "--git-common-dir"];
+    let paths = revParseLines(await locate(...options));
+    // rev-parse has no NUL delimiter for these fields; a POSIX directory may contain LF.
+    if (paths.length !== options.length) {
+      paths = [];
+      for (const option of options)
+        paths.push(
+          (await locate(option))
+            .toString()
+            .replace(process.platform === "win32" ? /\r?\n$/ : /\n$/, ""),
+        );
+    }
+    const [gitDir, workTree, common] = paths;
+    if (!gitDir || !workTree || !common) throw Error("repository.rev-parse");
+    return { gitDir, workTree, common };
+  }
+  const { gitDir, workTree, common } = await checkoutPaths();
+  const checkout = { gitDir, workTree };
   const checkoutArgs = gitCheckoutArgs(checkout);
-  const common = await locate("--git-common-dir");
   const repo = physicalDirectory(common);
   if (!repo || (source && !Bun.deepEquals(source, repo))) throw Error("sourceRepositoryChanged");
   const run = (args: string[], env: Record<string, string> = {}, input?: Buffer) =>
@@ -264,11 +285,12 @@ export async function captureBoundary({
     GitObjectIdSchema,
     await read("objects.commit-tree", args, { ...env, ...meta }),
   );
+  if (lease.revalidate(lease.key) !== "current") throw Error("lease.revalidate");
+  const current = await checkoutPaths();
   if (
-    lease.revalidate(lease.key) !== "current" ||
-    (await locate("--absolute-git-dir")) !== checkout.gitDir ||
-    (await locate("--show-toplevel")) !== checkout.workTree ||
-    !Bun.deepEquals(repo, physicalDirectory(await locate("--git-common-dir")))
+    current.gitDir !== gitDir ||
+    current.workTree !== workTree ||
+    !Bun.deepEquals(repo, physicalDirectory(current.common))
   )
     throw Error("lease.revalidate");
   const point = { ref: plan.ref, commit, tree: seal.tree };
@@ -305,13 +327,21 @@ export async function captureBoundary({
     publicationError = error;
   }
   // A timeout may race with the ref rename. Reconcile only this exact publication.
-  const verify = await lease.git([...checkoutArgs, "rev-parse", "--verify", plan.ref]);
-  const tree = await lease.git([...checkoutArgs, "rev-parse", "--verify", plan.ref + "^{tree}"]);
-  if (verify.exitCode === 0 && verify.stdout.toString().trim() !== commit)
+  const verified = await lease.git([
+    ...checkoutArgs,
+    "rev-parse",
+    "--revs-only",
+    plan.ref,
+    plan.ref + "^{tree}",
+    "--",
+  ]);
+  const [actual, tree] = revParseLines(verified.stdout);
+  if (!v.is(GitObjectIdSchema, actual))
+    throw publicationError ?? gitProcessError("ref.verify", verified);
+  if (actual !== commit)
     throw Error("idConflict", { cause: "ref.verify: published commit differs from sealed commit" });
-  if (verify.exitCode !== 0) throw publicationError ?? gitProcessError("ref.verify", verify);
-  if (tree.exitCode !== 0) throw gitProcessError("tree.verify", tree);
-  if (tree.stdout.toString().trim() !== point.tree)
+  if (verified.exitCode !== 0) throw gitProcessError("tree.verify", verified);
+  if (tree !== point.tree)
     throw Error("tree.verify", { cause: "Published tree differs from sealed tree" });
   await hook?.("published", boundary, state);
   return { point, repo };

@@ -500,6 +500,7 @@ test(
           "threadStarted",
         );
         await f.waitTerminal();
+        await finishedCapture(f.client, first);
         const managed = readClaim(f.stateDir, id);
         expect(managedView(managed).availability).toBe("usable");
         expect(f.updates.at(-1)?.kind).toBe("round.ended");
@@ -510,7 +511,12 @@ test(
           [{ clientId: first.deliveryId }],
         );
       } finally {
-        await f.close();
+        try {
+          await f.close();
+        } finally {
+          for (const line of f.stderrTail().split("\n"))
+            if (line.startsWith("Checkpoint boundary timing ")) console.error(line);
+        }
       }
     }),
   60000,

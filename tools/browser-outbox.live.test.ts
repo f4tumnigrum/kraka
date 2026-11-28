@@ -2,6 +2,7 @@ import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dispatchObservationMs } from "./fixtures/route-network";
 import { X509Certificate, createHash } from "node:crypto";
 import * as v from "valibot";
 import {
@@ -277,8 +278,8 @@ describe.skipIf(!!skip)("persistent browser outbox", () => {
       [phone, other].map((page) => page.evaluate(() => Reflect.get(globalThis, "outboxFlush"))),
     );
     const [native, started] = await Promise.all([
-      f.peer.event("nativeInput"),
-      f.peer.event("started"),
+      f.peer.event("nativeInput", dispatchObservationMs),
+      f.peer.event("started", dispatchObservationMs),
     ]);
     const state = await f.status();
     expect(state.commands).toEqual([original.commandId, original.commandId]);

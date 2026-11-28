@@ -497,7 +497,7 @@ test("capture commands request long-path support for Windows drive and UNC paths
 
 test("read-tree seeds the linked checkout's private index from an unrelated working directory", async () => {
   const dir = mkdtempSync(join(tmpdir(), "kraka-read-tree-")),
-    linked = join(dir, "linked checkout"),
+    linked = join(dir, process.platform === "win32" ? "linked checkout" : "linked \ncheckout"),
     outside = join(dir, "unrelated"),
     scratch = join(dir, "scratch");
   try {

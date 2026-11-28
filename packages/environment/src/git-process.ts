@@ -1,3 +1,4 @@
+import { measureGit } from "./capture-timing";
 import { physicalDirectory } from "./project-directory";
 /** Git for Windows accepts drive/UNC paths with forward slashes in config and environment values. */
 export function gitPath(path: string, platform: NodeJS.Platform = process.platform) {
@@ -34,6 +35,12 @@ export function gitCommand(
 export type GitCheckout = { gitDir: string; workTree: string };
 export function gitCheckoutArgs({ gitDir, workTree }: GitCheckout) {
   return ["--git-dir=" + gitDir, "--work-tree=" + workTree];
+}
+export function revParseLines(stdout: Buffer): string[] {
+  const text = stdout.toString();
+  return process.platform === "win32"
+    ? text.replace(/\r?\n$/, "").split(/\r?\n/)
+    : text.replace(/\n$/, "").split("\n");
 }
 export function gitRepositoryIdentity(directory: string) {
   const r = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
@@ -84,14 +91,16 @@ export function runGit(
     maxBuffer?: number;
   } = {},
 ): GitProcessResult {
-  const result = Bun.spawnSync(gitCommand(directory, args), {
-    stdout: options.outputFile ?? "pipe",
-    stderr: "pipe",
-    stdin: options.input ?? "ignore",
-    maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
-    env: gitEnvironment(options.env),
-    timeout: options.timeout ?? 10_000,
-  });
+  const result = measureGit("git", args, () =>
+    Bun.spawnSync(gitCommand(directory, args), {
+      stdout: options.outputFile ?? "pipe",
+      stderr: "pipe",
+      stdin: options.input ?? "ignore",
+      maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
+      env: gitEnvironment(options.env),
+      timeout: options.timeout ?? 10_000,
+    }),
+  );
   return {
     exitCode: result.exitCode,
     stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.alloc(0),

@@ -313,8 +313,10 @@ test(
       s.action(linked.handle, "finish");
       await s.event("root-ended", since);
       const input = accepted((await s.input(first.threadId, "steer")).receipt, "inputScheduled"),
-        running = await s.events.until((e) => e.event === "turn" && e.text === "steer");
-      await s.updates.until((e) => e.kind === "round.started" && e.attemptId === input.attemptId);
+        running = await s.events.untilDispatch((e) => e.event === "turn" && e.text === "steer");
+      await s.updates.untilDispatch(
+        (e) => e.kind === "round.started" && e.attemptId === input.attemptId,
+      );
       for (const [mode, text] of [
         ["queueNext", "resume"],
         ["insertCurrent", "add detail"],
@@ -345,7 +347,7 @@ test(
       ).toMatchObject([{ state: "pending", submission: "submitted" }]);
       expect(s.events.items.some((e) => e.text === "resume")).toBe(false);
       s.action(running.handle, "finish");
-      const queued = await s.events.until((e) => e.event === "turn" && e.text === "resume");
+      const queued = await s.events.untilDispatch((e) => e.event === "turn" && e.text === "resume");
       expect(queued).toMatchObject({ session: linked.session });
       s.action(queued.handle, "finish");
       expect(s.events.items.filter((e) => e.event === "turn" && e.text === "blue")).toHaveLength(1);

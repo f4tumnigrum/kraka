@@ -168,7 +168,9 @@ export async function codexFixture(
         payload,
         send: () => client.send("thread.start", payload),
         async waitTerminal() {
-          await events.until((e) => e.kind === "round.ended" || e.kind === "executor.failed");
+          await events.untilDispatch(
+            (e) => e.kind === "round.ended" || e.kind === "executor.failed",
+          );
         },
         async close() {
           if (profile.gate) ledger.release(profile.gate);

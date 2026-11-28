@@ -22,6 +22,7 @@ export type CaptureKey = Pick<CheckpointCapture, "id" | "roundId" | "attemptId">
   worktreeId: WorktreeId | null;
   projectRoot?: Extract<DirectoryBinding, { kind: "projectRoot" }>;
 };
+export const CAPTURE_BOUNDARY_TIMEOUT_MS = 5000;
 export type Boundary = "before" | "after";
 /** Git writes this operation's private index and publishes its commit under the boundary ref. */
 export type CaptureWorkspace = {

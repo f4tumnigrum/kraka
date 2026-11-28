@@ -1,3 +1,4 @@
+import { measureCaptureBoundary } from "./capture-timing";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, rmSync } from "node:fs";
 import {
@@ -230,7 +231,18 @@ export class RoundCaptures {
     }
     return result;
   }
-  private async boundary(
+  private boundary(
+    round: Round,
+    thread: Thread,
+    row: CaptureIntent,
+    boundary: Boundary,
+    recover: boolean,
+  ) {
+    return measureCaptureBoundary(boundary, () =>
+      this.runBoundary(round, thread, row, boundary, recover),
+    );
+  }
+  private async runBoundary(
     round: Round,
     thread: Thread,
     row: CaptureIntent,
@@ -377,7 +389,10 @@ export class RoundCaptures {
           let comparison: Extract<CaptureEvent, { kind: "endPublished" }>["comparison"];
           try {
             await this.hook?.("summary", boundary, state);
-            const files = compareCaptureFiles(dir, state.baseline.tree, point.tree);
+            const files =
+              state.baseline.tree === point.tree
+                ? []
+                : compareCaptureFiles(dir, state.baseline.tree, point.tree);
             const observations = this.observations(round, path);
             const shared =
               binding.kind === "projectRoot" ||
