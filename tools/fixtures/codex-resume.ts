@@ -126,6 +126,7 @@ async function setup(
       state,
       (e) => updates.push(e),
     );
+    const writers = [f.stderrTail];
     if (patch) patch.barriers.writer = f;
     clean.push(f.close);
     const reg = structuredClone(f.registration);
@@ -200,6 +201,7 @@ async function setup(
       if (abrupt) await f.kill();
       else await f.stop();
       const next = launchWriter(state, root, patch ? "codex" : "codex-cli");
+      writers.push(next.stderrTail);
       clean.push(next.stop);
       const { publication: instance } = await next.ready();
       endpoint = instance.endpoint;
@@ -209,6 +211,7 @@ async function setup(
     }
     return {
       f,
+      stderrTails: () => writers.map((tail) => tail()),
       async patchReader(threadId: ThreadId, directoryDiff = true) {
         const cache = new SqliteThreadCache(
           join(dir, crypto.randomUUID() + ".sqlite"),

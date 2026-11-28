@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { mkdirSync, readdirSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
 import { accepted } from "./fixtures/first-send";
+import { within } from "./fixtures/replay-process";
 import { git } from "./fixtures/isolated-start";
 import {
   address,
@@ -71,7 +72,7 @@ test(
         if (phase?.kind === "closing") sawClosing.resolve();
         return phase?.kind === "finished";
       });
-      await sawClosing.promise;
+      await within(sawClosing.promise, 5000, "Local subscriber observed the closing capture");
       b.release(hit.token);
       b.hold = null;
       expect((await installed).find((r) => r.id === t.roundId)?.attempt.phase).toMatchObject({
@@ -121,6 +122,12 @@ test(
 test("2. a missing checkpoint preserves success and a verified empty patch stays empty", async () => {
   for (const repository of [false, true])
     await patchCase(async (s) => {
+      if (repository) {
+        git(s.f.cwd, "config", "core.autocrlf", "true");
+        writeFileSync(join(s.f.cwd, "version.txt"), "unchanged worktree bytes\r\n");
+        git(s.f.cwd, "add", "version.txt");
+        git(s.f.cwd, "commit", "-qm", "Record normalized Git content");
+      }
       const t = await s.start("command"),
         client = await s.patchReader(t.threadId);
       s.action(t.turn.handle, "finish");
@@ -130,9 +137,42 @@ test("2. a missing checkpoint preserves success and a verified empty patch stays
       expect((await diff(client, s, t.threadId, capture.id)).kind).toBe(
         repository ? "empty" : "unavailable",
       );
-      if (repository) expect(comparison(capture).summary).toEqual({ kind: "empty" });
+      if (repository) {
+        const pair = comparison(capture);
+        expect(pair.summary).toEqual({ kind: "empty" });
+        expect(git(s.f.cwd, "rev-parse", pair.before + ":version.txt")).toBe(
+          git(s.f.cwd, "rev-parse", "HEAD:version.txt"),
+        );
+      }
     }, repository);
 }, 30000);
+test(
+  "a failed private-index add identifies the failing Git step and preserves native success",
+  () =>
+    patchCase(async (s) => {
+      const repo = s.f.cwd;
+      git(
+        repo,
+        "config",
+        "filter.capture-failure.clean",
+        "git rev-parse --verify refs/capture-test-absent",
+      );
+      git(repo, "config", "filter.capture-failure.required", "true");
+      writeFileSync(join(repo, ".gitattributes"), "unreadable filter=capture-failure\n");
+      writeFileSync(join(repo, "unreadable"), "fixture");
+      const t = await s.start("command"),
+        reader = await s.patchReader(t.threadId);
+      s.action(t.turn.handle, "finish");
+      const { capture, round } = await finished(reader, t.roundId);
+      expect(round.attempt.phase.kind).toBe("finished");
+      expect(capture.result).toEqual({ kind: "error", boundary: "before", reason: "index.add" });
+      await s.f.stop();
+      expect(s.stderrTails().join(" ")).toContain("Git exit");
+      expect(s.stderrTails().join(" ")).toContain("index.add");
+    }),
+  20000,
+);
+
 test("3. shared manual edits have unknown authors and a failed summary still has a patch", async () => {
   await patchCase(async (s) => {
     const a = await s.start("command"),

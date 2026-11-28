@@ -6,17 +6,20 @@ import { readManaged, openReceiptReader, hashId, confirmWriter } from "@kraka/en
 import * as v from "valibot";
 import { CommandReceiptSchema, REQUEST_METHODS } from "@kraka/protocol";
 export function git(cwd: string, ...args: string[]) {
-  const r = Bun.spawnSync(["git", ...args], {
-    cwd,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Fixture",
-      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-      GIT_COMMITTER_NAME: "Fixture",
-      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  const r = Bun.spawnSync(
+    ["git", ...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []), ...args],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+      timeout: 30000,
     },
-    timeout: 30000,
-  });
+  );
   if (r.exitCode !== 0) throw Error(r.stderr.toString());
   return r.stdout.toString().trimEnd();
 }

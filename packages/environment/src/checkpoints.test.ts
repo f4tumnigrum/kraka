@@ -2,6 +2,8 @@ import { git, seedGit } from "../../../tools/fixtures/isolated-start";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gitCommand, gitPath, gitAlternateDirectory } from "./git-process";
+import { win32 } from "node:path";
 import { LocalDiffService } from "./local-diff";
 import { test, expect } from "bun:test";
 import * as v from "valibot";
@@ -14,6 +16,7 @@ import {
   REQUEST_METHODS,
   hasMethodPermissions,
   CaptureIdSchema,
+  EnvironmentIdSchema,
   CheckpointCaptureSchema,
   CommandIdSchema,
   GitObjectIdSchema,
@@ -442,5 +445,40 @@ test("a range cursor keeps the first before and the fixed last after across page
   } finally {
     service.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("capture commands request long-path support for Windows drive and UNC paths beyond MAX_PATH", () => {
+  const state = beginCapture({ ...key, environmentId: v.parse(EnvironmentIdSchema, "windows") });
+  const workspace = captureWorkspace(state);
+  if (!workspace) throw Error("Missing workspace");
+  const runner = String.raw`D:\a\_temp\kraka-replay-AAAAAA`;
+  const index = win32.join(
+    runner,
+    "paired-BBBBBB",
+    "host",
+    "capture-scratch",
+    workspace.privateIndexPath,
+  );
+  const ref = win32.join(runner, "project", ".git", workspace.ref);
+  expect(index.length).toBeGreaterThan(260);
+  expect((ref + ".lock").length).toBeGreaterThan(260);
+  expect(gitPath(index, "win32")).toBe(index.split(win32.sep).join("/"));
+  expect(gitAlternateDirectory("D:/other;repo/objects", "win32")).toBe('"D:/other;repo/objects"');
+  expect(gitAlternateDirectory("D:/other/objects", "win32")).toBe("D:/other/objects");
+  expect(gitAlternateDirectory("/tmp/a:b/objects", "darwin")).toBe('"/tmp/a:b/objects"');
+  const drive = win32.toNamespacedPath(index);
+  expect(gitPath(drive, "win32")).toBe(gitPath(index, "win32"));
+  expect(gitPath("//?/UNC/server/share/objects", "win32")).toBe("//server/share/objects");
+  const cwd = mkdtempSync(join(tmpdir(), "kraka-longpaths-"));
+  try {
+    // Read the effective setting using a real Git child and the Windows command builder.
+    const r = Bun.spawnSync(
+      gitCommand(cwd, ["config", "--type=bool", "--get", "core.longpaths"], "win32"),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString().trim()).toBe("true");
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });

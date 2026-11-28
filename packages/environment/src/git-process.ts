@@ -1,4 +1,36 @@
 import { physicalDirectory } from "./project-directory";
+/** Git for Windows accepts drive/UNC paths with forward slashes in config and environment values. */
+export function gitPath(path: string, platform: NodeJS.Platform = process.platform) {
+  if (platform !== "win32") return path;
+  const normalized = path.replaceAll("\\", "/");
+  if (normalized.startsWith("//?/UNC/")) return "//" + normalized.slice(8);
+  if (/^\/\/\?\/[A-Za-z]:\//.test(normalized)) return normalized.slice(4);
+  return normalized;
+}
+export function gitAlternateDirectory(path: string, platform: NodeJS.Platform = process.platform) {
+  const value = gitPath(path, platform);
+  return value.includes(platform === "win32" ? ";" : ":") || value.startsWith('"')
+    ? JSON.stringify(value)
+    : value;
+}
+export function gitProcessError(step: string, r: GitProcessResult) {
+  return new Error(step, {
+    cause: "Git exit " + String(r.exitCode) + ": " + r.stderr.toString().trim().slice(-2048),
+  });
+}
+export function gitCommand(
+  directory: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+) {
+  return [
+    "git",
+    ...(platform === "win32" ? ["-c", "core.longpaths=true"] : []),
+    "-C",
+    gitPath(directory, platform),
+    ...args,
+  ];
+}
 export function gitRepositoryIdentity(directory: string) {
   const r = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return r.exitCode === 0 ? physicalDirectory(r.stdout.toString().trimEnd()) : null;
@@ -37,13 +69,13 @@ export function runGit(
   options: {
     env?: Record<string, string>;
     timeout?: number;
-    input?: Uint8Array | number;
-    outputFd?: number;
+    input?: Uint8Array | Bun.BunFile;
+    outputFile?: Bun.BunFile;
     maxBuffer?: number;
   } = {},
 ): GitProcessResult {
-  const result = Bun.spawnSync(["git", "-C", directory, ...args], {
-    stdout: options.outputFd ?? "pipe",
+  const result = Bun.spawnSync(gitCommand(directory, args), {
+    stdout: options.outputFile ?? "pipe",
     stderr: "pipe",
     stdin: options.input ?? "ignore",
     maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,

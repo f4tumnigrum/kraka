@@ -19,6 +19,37 @@ export function patchCase(
     async (s) => {
       try {
         await run(s, b);
+      } catch (error) {
+        const diagnostic: {
+          daemonStderr: string[];
+          stages: typeof b.events.items;
+          captures: unknown[];
+          pending: unknown[];
+          readError?: string;
+        } = { daemonStderr: s.stderrTails(), stages: b.events.items, captures: [], pending: [] };
+        try {
+          const db = openReceiptReader(s.state);
+          try {
+            diagnostic.captures = db
+              .query<{ payload: string }, []>(
+                "SELECT payload FROM sync_rows WHERE json_extract(key,'$[0]')='checkpointCapture' AND payload IS NOT NULL",
+              )
+              .all()
+              .map((r) => JSON.parse(r.payload).value);
+            diagnostic.pending = db
+              .query<{ id: string; round: string; attempt: string; failure: string | null }, []>(
+                "SELECT id,round,attempt,failure FROM capture_intents",
+              )
+              .all()
+              .map((r) => ({ ...r, failure: r.failure ? JSON.parse(r.failure) : null }));
+          } finally {
+            db.close(true);
+          }
+        } catch (readError) {
+          diagnostic.readError = String(readError);
+        }
+        console.error("Round patch fixture failure", JSON.stringify(diagnostic));
+        throw error;
       } finally {
         if (b.hold && b.writer?.child.exitCode === null && b.writer.child.signalCode === null) {
           b.hold = null;

@@ -51,7 +51,7 @@ import {
   type LocalDiffService,
 } from "./local-diff";
 import { resolveDiffDirectory } from "./git-workspace";
-import { gitRepositoryIdentity, runGit } from "./git-process";
+import { gitRepositoryIdentity, gitProcessError, runGit } from "./git-process";
 
 const version = v.parse(ObjectVersionSchema, "1");
 const physical = v.strictObject({ realPath: v.string(), identity: v.string() });
@@ -109,7 +109,20 @@ export class RoundCaptures {
     });
   }
   private clean(path: string) {
-    rmSync(path, { recursive: true, force: true });
+    try {
+      rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        !["EBUSY", "EPERM", "ENOTEMPTY"].includes(String(error.code))
+      )
+        throw error;
+      // The cleanup row was committed with the boundary. Restart can finish it.
+      console.warn("Checkpoint scratch cleanup deferred", error.message);
+      return;
+    }
     this.store.db.run("DELETE FROM capture_cleanup WHERE path=?", [path]);
   }
   cleanSettled() {
@@ -283,7 +296,8 @@ export class RoundCaptures {
               commit + "^{tree}",
             ]);
             const [actual, tree] = found.stdout.toString().trim().split(/\r?\n/);
-            if (found.exitCode !== 0 || actual !== commit) throw Error("baselineUnavailable");
+            if (found.exitCode !== 0) throw gitProcessError("baseline.verify", found);
+            if (actual !== commit) throw Error("baselineUnavailable");
             const working = apply(state, {
               ...ids,
               kind: "baselinePublished",
@@ -322,12 +336,14 @@ export class RoundCaptures {
           if (lease.revalidate(lease.key) !== "current") throw Error("directoryLost");
           const verifyPoint = async () => {
             const actual = await lease.git(["rev-parse", point.ref, point.ref + "^{tree}"]);
+            if (actual.exitCode !== 0) throw gitProcessError("tree.verify", actual);
             if (
-              actual.exitCode !== 0 ||
               actual.stdout.toString().trim().split(/\r?\n/).join(" ") !==
-                point.commit + " " + point.tree
+              point.commit + " " + point.tree
             )
-              throw Error("idConflict");
+              throw Error("idConflict", {
+                cause: "tree.verify: ref or tree differs from the sealed publication",
+              });
           };
           if (boundary === "before") {
             await verifyPoint();
@@ -400,6 +416,19 @@ export class RoundCaptures {
       );
     } catch (error) {
       const reason = error instanceof Error ? error.message : "captureFailed";
+      if (reason !== "noRepository")
+        console.error(
+          "Checkpoint capture failed",
+          JSON.stringify({
+            id: key.id,
+            boundary,
+            reason,
+            detail:
+              error instanceof Error && error.cause !== undefined
+                ? String(error.cause).slice(-2048)
+                : undefined,
+          }),
+        );
       db.transaction(() =>
         settled({
           id: key.id,

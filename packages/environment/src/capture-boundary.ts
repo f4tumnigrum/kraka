@@ -1,4 +1,4 @@
-import { dirname, join, delimiter } from "node:path";
+import { dirname, join } from "node:path";
 import { lstatSync, mkdirSync, rmSync } from "node:fs";
 import { GitObjectIdSchema, type DirectoryBinding } from "@kraka/protocol";
 import * as v from "valibot";
@@ -8,6 +8,7 @@ import {
   type Boundary,
   type PublishedBoundary,
 } from "./checkpoints";
+import { gitAlternateDirectory, gitPath, gitProcessError } from "./git-process";
 import type { DirectoryLease } from "./directory-lease";
 import { physicalDirectory } from "./project-directory";
 
@@ -65,18 +66,25 @@ export async function captureBoundary({
   const index = join(scratch, plan.privateIndexPath),
     objects = join(scratch, plan.privateObjectDirectory);
   const hooks = join(dirname(index), "hooks");
-  mkdirSync(hooks, { recursive: true, mode: 0o700 });
+  try {
+    mkdirSync(hooks, { recursive: true, mode: 0o700 });
+  } catch (cause) {
+    throw Error("index.prepare", { cause });
+  }
   const deadline = lease.acquiredAt + 5000;
   function remaining() {
     const ms = Math.ceil(deadline - performance.now());
-    if (ms <= 0) throw Error("captureTimeout");
+    if (ms <= 0)
+      throw Error("captureTimeout", {
+        cause: "Git boundary deadline elapsed after acquiring the directory lease",
+      });
     return ms;
   }
   const run = (args: string[], env: Record<string, string> = {}, input?: Buffer) =>
     lease.git(
       [
         "-c",
-        "core.hooksPath=" + hooks,
+        "core.hooksPath=" + gitPath(hooks),
         "-c",
         "core.fsync=loose-object,reference",
         "-c",
@@ -93,62 +101,77 @@ export async function captureBoundary({
       input,
       remaining(),
     );
-  const read = async (args: string[], env?: Record<string, string>, input?: Buffer) => {
-    const r = await run(args, env, input);
+  const read = async (
+    step: string,
+    args: string[],
+    env?: Record<string, string>,
+    input?: Buffer,
+  ) => {
+    const r = await run(args, env, input).catch((error) => {
+      if (error instanceof Error && error.message === "lease.git")
+        throw Error(step, { cause: error.cause });
+      throw error;
+    });
     if (r.exitCode !== 0) {
       remaining();
-      throw Error("gitCaptureFailed");
+      throw gitProcessError(step, r);
     }
     return r.stdout.toString().replace(/\r?\n$/, "");
   };
   const gitDir = await run(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   if (gitDir.exitCode !== 0)
-    throw Error(
+    throw gitProcessError(
       gitDir.stderr.toString().includes("not a git repository")
         ? "noRepository"
-        : "gitCaptureFailed",
+        : "repository.rev-parse",
+      gitDir,
     );
   const repo = physicalDirectory(gitDir.stdout.toString().trimEnd());
   if (!repo || (source && !Bun.deepEquals(source, repo))) throw Error("sourceRepositoryChanged");
   bindSource(repo);
   const commonObjects = join(repo.realPath, "objects");
-  const alt = commonObjects.includes(delimiter) ? JSON.stringify(commonObjects) : commonObjects;
   const env = {
     GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_INDEX_FILE: index,
-    GIT_OBJECT_DIRECTORY: objects,
-    GIT_ALTERNATE_OBJECT_DIRECTORIES: alt,
+    GIT_INDEX_FILE: gitPath(index),
+    GIT_OBJECT_DIRECTORY: gitPath(objects),
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: gitAlternateDirectory(commonObjects),
   };
   if (!seal) {
     if (recover) throw Error("boundaryNotSealed");
-    rmSync(index, { force: true });
-    mkdirSync(objects, { recursive: true, mode: 0o700 });
+    try {
+      rmSync(index, { force: true });
+      mkdirSync(objects, { recursive: true, mode: 0o700 });
+    } catch (cause) {
+      throw Error("index.prepare", { cause });
+    }
     const head = await run(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
     const parent =
       head.exitCode === 0 ? v.parse(GitObjectIdSchema, head.stdout.toString().trim()) : null;
     if (!parent) {
-      const ref = await read(["symbolic-ref", "--quiet", "HEAD"]);
-      if ((await run(["show-ref", "--exists", ref])).exitCode !== 2) throw Error("headUnavailable");
+      const ref = await read("head.symbolic-ref", ["symbolic-ref", "--quiet", "HEAD"]);
+      const exists = await run(["show-ref", "--exists", ref]);
+      if (exists.exitCode !== 2) throw gitProcessError("headUnavailable", head);
     }
-    await read(parent ? ["read-tree", parent] : ["read-tree", "--empty"], env);
-    const tracked = (await read(["ls-files", "--cached", "-z", "--", "."]))
+    await read("index.read-tree", parent ? ["read-tree", parent] : ["read-tree", "--empty"], env);
+    const tracked = (await read("index.ls-files", ["ls-files", "--cached", "-z", "--", "."]))
       .split("\0")
       .filter(Boolean);
-    await read(["add", "-A", "--", "."], env);
+    await read("index.add", ["add", "-A", "--", "."], env);
     // A staged addition can since have become ignored. Capture its current disk bytes.
     const present = new Set(
-      (await read(["ls-files", "--cached", "-z", "--", "."], env)).split("\0"),
+      (await read("index.ls-files", ["ls-files", "--cached", "-z", "--", "."], env)).split("\0"),
     );
     const extra = tracked.filter(
       (path) => !present.has(path) && lstatSync(join(lease.path, path), { throwIfNoEntry: false }),
     );
     if (extra.length)
       await read(
+        "index.add-tracked",
         ["add", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
         env,
         Buffer.from(extra.join("\0") + "\0"),
       );
-    const tree = v.parse(GitObjectIdSchema, await read(["write-tree"], env));
+    const tree = v.parse(GitObjectIdSchema, await read("objects.write-tree", ["write-tree"], env));
     seal = {
       tree,
       parent,
@@ -158,14 +181,18 @@ export async function captureBoundary({
       date: "@" + Math.floor(Date.now() / 1000) + " +0000",
       message: "kraka " + state.key.id + " " + boundary,
     };
-    if (lease.revalidate(lease.key) !== "current") throw Error("directoryLost");
+    if (lease.revalidate(lease.key) !== "current") throw Error("lease.revalidate");
     const checked = await run(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
     if ((checked.exitCode === 0 ? checked.stdout.toString().trim() : null) !== parent)
       throw Error("headChanged");
     remember(seal);
     await hook?.("sealed", boundary, state);
   }
-  mkdirSync(objects, { recursive: true, mode: 0o700 });
+  try {
+    mkdirSync(objects, { recursive: true, mode: 0o700 });
+  } catch (cause) {
+    throw Error("objects.prepare", { cause });
+  }
   if (seal.objects !== objects || seal.message !== "kraka " + state.key.id + " " + boundary)
     throw Error("sealMismatch");
   const meta = {
@@ -187,37 +214,42 @@ export async function captureBoundary({
     "-m",
     seal.message,
   ];
-  const commit = v.parse(GitObjectIdSchema, await read(args, { ...env, ...meta }));
+  const commit = v.parse(
+    GitObjectIdSchema,
+    await read("objects.commit-tree", args, { ...env, ...meta }),
+  );
   if (
     lease.revalidate(lease.key) !== "current" ||
     !Bun.deepEquals(
       repo,
-      physicalDirectory(await read(["rev-parse", "--path-format=absolute", "--git-common-dir"])),
+      physicalDirectory(
+        await read("repository.rev-parse", [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-common-dir",
+        ]),
+      ),
     )
   )
-    throw Error("directoryLost");
+    throw Error("lease.revalidate");
   const point = { ref: plan.ref, commit, tree: seal.tree };
-  const commonDir = "--git-dir=" + repo.realPath;
+  const commonDir = "--git-dir=" + gitPath(repo.realPath);
   const existing = recover
     ? await lease.git([commonDir, "rev-parse", "--verify", "--quiet", plan.ref])
     : null;
   if (existing?.exitCode === 0 && existing.stdout.toString().trim() !== commit)
     throw Error("idConflict");
-  let failure = "refPublicationFailed";
+  let publicationError: Error | undefined;
   try {
     if (existing?.exitCode !== 0) {
-      const installed = await lease.installObjects({
+      await lease.installObjects({
         repository: repo.realPath,
         env,
         commit,
         parent: seal.parent,
         timeout: remaining(),
       });
-      if (installed.exitCode !== 0) {
-        remaining();
-        throw Error("objectPublicationFailed");
-      }
-      await read([
+      await read("objects.fsck", [
         commonDir,
         "fsck",
         "--connectivity-only",
@@ -232,19 +264,24 @@ export async function captureBoundary({
         commit,
         "0".repeat(commit.length),
       ]);
-      if (published.exitCode !== 0) remaining();
+      if (published.exitCode !== 0) {
+        remaining();
+        publicationError = gitProcessError("ref.update-ref", published);
+      }
     }
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "captureTimeout") throw error;
-    failure = "captureTimeout";
+    publicationError = error;
   }
   // A timeout may race with the ref rename. Reconcile only this exact publication.
   const verify = await lease.git([commonDir, "rev-parse", "--verify", plan.ref]);
   const tree = await lease.git([commonDir, "rev-parse", "--verify", plan.ref + "^{tree}"]);
   if (verify.exitCode === 0 && verify.stdout.toString().trim() !== commit)
-    throw Error("idConflict");
-  if (verify.exitCode !== 0 || tree.exitCode !== 0 || tree.stdout.toString().trim() !== point.tree)
-    throw Error(failure);
+    throw Error("idConflict", { cause: "ref.verify: published commit differs from sealed commit" });
+  if (verify.exitCode !== 0) throw publicationError ?? gitProcessError("ref.verify", verify);
+  if (tree.exitCode !== 0) throw gitProcessError("tree.verify", tree);
+  if (tree.stdout.toString().trim() !== point.tree)
+    throw Error("tree.verify", { cause: "Published tree differs from sealed tree" });
   await hook?.("published", boundary, state);
   return { point, repo };
 }

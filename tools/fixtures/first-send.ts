@@ -86,7 +86,14 @@ export function launchWriter(
       ...(ipc && { ipc }),
     },
   );
-  const stderr = new Response(child.stderr).text();
+  let stderrTail = "";
+  const stderr = (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of child.stderr)
+      stderrTail = (stderrTail + decoder.decode(chunk, { stream: true })).slice(-8192);
+    stderrTail = (stderrTail + decoder.decode()).slice(-8192);
+    return stderrTail;
+  })();
   const line = Promise.withResolvers<string>();
   const drained = (async () => {
     let out = "";
@@ -126,6 +133,7 @@ export function launchWriter(
     child,
     started,
     ready,
+    stderrTail: () => stderrTail,
     async stop() {
       try {
         if (child.stdin && child.exitCode === null && child.signalCode === null) {

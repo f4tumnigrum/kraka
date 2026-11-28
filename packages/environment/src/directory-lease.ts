@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
-import { closeSync, openSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, toNamespacedPath } from "node:path";
 import { createHash } from "node:crypto";
 import * as v from "valibot";
 import { GitObjectIdSchema, type DirectoryBinding, type EnvironmentId } from "@kraka/protocol";
 import { physicalDirectory } from "./project-directory";
-import { runGit, type GitProcessResult } from "./git-process";
+import { runGit, gitPath, gitProcessError, type GitProcessResult } from "./git-process";
 import { worktreeWorkerCommand } from "./worktree-worker";
 
 export type LeaseKey = Pick<DirectoryBinding, "directoryId" | "generation"> & {
@@ -39,39 +39,53 @@ function installObjects(path: string, req: v.InferOutput<typeof transfer>) {
   const scratch = dirname(index),
     pack = join(scratch, "capture.pack");
   const config = [
-    "--git-dir=" + req.repository,
+    "--git-dir=" + gitPath(req.repository),
     "-c",
-    "core.hooksPath=" + join(scratch, "hooks"),
+    "core.hooksPath=" + gitPath(join(scratch, "hooks")),
     "-c",
     "core.fsync=loose-object,reference",
   ];
   const until = performance.now() + req.timeout;
-  const out = openSync(pack, "w", 0o600);
+  const packFile = Bun.file(toNamespacedPath(pack));
+  // BunFile redirection does not truncate a prior pack on replay.
+  let step = "objects.pack-objects";
   try {
+    writeFileSync(pack, Buffer.alloc(0), { mode: 0o600 });
     const selected = req.commit + "\n" + (req.parent ? "^" + req.parent + "\n" : "");
     const packed = runGit(path, [...config, "pack-objects", "--stdout", "--local", "--revs"], {
       env: req.env,
       input: Buffer.from(selected),
-      outputFd: out,
+      outputFile: packFile,
       timeout: req.timeout,
     });
-    if (packed.exitCode !== 0) return packed;
-  } finally {
-    closeSync(out);
-  }
-  const ms = Math.ceil(until - performance.now());
-  if (ms <= 0)
-    return { exitCode: null, stdout: Buffer.alloc(0), stderr: Buffer.from("captureTimeout") };
-  const input = openSync(pack, "r");
-  try {
-    return runGit(path, [...config, "unpack-objects", "-r"], { input, timeout: ms });
-  } finally {
-    closeSync(input);
+    if (packed.exitCode !== 0) {
+      const error = gitProcessError(step, packed);
+      if (performance.now() >= until) throw Error("captureTimeout", { cause: error.cause });
+      throw error;
+    }
+    step = "objects.unpack-objects";
+    const ms = Math.ceil(until - performance.now());
+    if (ms <= 0) throw Error("captureTimeout", { cause: step });
+    const unpacked = runGit(path, [...config, "unpack-objects", "-r"], {
+      input: packFile,
+      timeout: ms,
+    });
+    if (unpacked.exitCode !== 0) {
+      const error = gitProcessError(step, unpacked);
+      if (performance.now() >= until) throw Error("captureTimeout", { cause: error.cause });
+      throw error;
+    }
+    return unpacked;
+  } catch (error) {
+    if (error instanceof Error && (error.message === step || error.message === "captureTimeout"))
+      throw error;
+    throw Error(step, { cause: error });
   }
 }
 const requestSchema = v.union([gitRequest, transfer]);
 const replySchema = v.variant("kind", [
   v.object({ kind: v.literal("acquired"), at: v.number() }),
+  v.object({ kind: v.literal("failure"), reason: v.string(), detail: v.string() }),
   v.object({
     kind: v.literal("git"),
     exitCode: v.nullable(v.number()),
@@ -109,7 +123,7 @@ export async function runDirectoryWriter(raw: unknown) {
           ? installObjects(task.path, req)
           : runGit(task.path, req.args, {
               env: req.env,
-              input: Buffer.from(req.input, "base64"),
+              ...(req.input ? { input: Buffer.from(req.input, "base64") } : {}),
               timeout: req.timeout,
             });
       process.send?.({
@@ -124,10 +138,17 @@ export async function runDirectoryWriter(raw: unknown) {
         handle(raw);
       } catch (error) {
         process.send?.({
-          kind: "git",
-          exitCode: 1,
-          stdout: "",
-          stderr: Buffer.from(String(error)).toString("base64"),
+          kind: "failure",
+          reason:
+            error instanceof Error &&
+            ["objects.pack-objects", "objects.unpack-objects", "captureTimeout"].includes(
+              error.message,
+            )
+              ? error.message
+              : "lease.git",
+          detail: String(error instanceof Error ? (error.cause ?? error.message) : error).slice(
+            -2048,
+          ),
         });
       }
     };
@@ -142,7 +163,7 @@ export async function runDirectoryWriter(raw: unknown) {
 }
 
 export interface DirectoryLease {
-  installObjects: (request: v.InferOutput<typeof transfer>) => Promise<GitProcessResult>;
+  installObjects: (request: v.InferOutput<typeof transfer>) => Promise<void>;
   key: LeaseKey;
   path: string;
   acquiredAt: number;
@@ -167,7 +188,7 @@ export class DirectoryWriters {
     signal?: AbortSignal,
   ) {
     const physical = this.resolve(key);
-    if (!physical) throw Error("directoryLost");
+    if (!physical) throw Error("lease.acquire", { cause: "Directory binding unavailable" });
     const previous = this.writers.get(physical.identity) ?? Promise.resolve();
     const done = Promise.withResolvers<void>();
     const tail = previous.then(() => done.promise);
@@ -187,29 +208,42 @@ export class DirectoryWriters {
         directoryId: key.directoryId,
       };
       let pending = Promise.withResolvers<v.InferOutput<typeof replySchema>>();
-      const child = Bun.spawn(
-        [
-          process.execPath,
-          ...(Bun.isStandaloneExecutable ? [] : [Bun.main]),
-          worktreeWorkerCommand,
-          JSON.stringify(task),
-        ],
-        {
-          stdin: "ignore",
-          stdout: "ignore",
-          stderr: "pipe",
-          ipc(raw) {
-            const r = v.safeParse(replySchema, raw);
-            if (r.success) pending.resolve(r.output);
-            else pending.reject(Error("Invalid directory writer reply"));
+      const launch = () =>
+        Bun.spawn(
+          [
+            process.execPath,
+            ...(Bun.isStandaloneExecutable ? [] : [Bun.main]),
+            worktreeWorkerCommand,
+            JSON.stringify(task),
+          ],
+          {
+            stdin: "ignore",
+            stdout: "ignore",
+            stderr: "pipe",
+            ipc(raw) {
+              const r = v.safeParse(replySchema, raw);
+              if (r.success) pending.resolve(r.output);
+              else pending.reject(Error("Invalid directory writer reply"));
+            },
           },
-        },
-      );
+        );
+      let child: ReturnType<typeof launch>;
+      try {
+        child = launch();
+      } catch (cause) {
+        throw Error("lease.acquire", { cause });
+      }
       const error = new Response(child.stderr).text();
-      void child.exited.then(async () => pending.reject(Error((await error) || "directoryLost")));
+      void child.exited.then(async (code) =>
+        pending.reject(
+          Error(acquired ? "lease.workerExit" : "lease.acquire", {
+            cause: "Directory writer exit " + code + ": " + (await error).slice(-2048),
+          }),
+        ),
+      );
       try {
         const held = await Promise.race([pending.promise, cancelled.promise]);
-        if (held.kind !== "acquired") throw Error("directoryLost");
+        if (held.kind !== "acquired") throw Error("lease.acquire");
         acquired = true;
         const revalidate = (probe: LeaseKey): "current" | "lost" =>
           acquired &&
@@ -220,7 +254,7 @@ export class DirectoryWriters {
           child.signalCode === null
             ? "current"
             : "lost";
-        if (revalidate(key) !== "current") throw Error("directoryLost");
+        if (revalidate(key) !== "current") throw Error("lease.revalidate");
         let busy = false;
         const send = async (message: v.InferOutput<typeof requestSchema>) => {
           if (busy || !acquired || signal?.aborted) throw Error("directoryLost");
@@ -229,6 +263,7 @@ export class DirectoryWriters {
             pending = Promise.withResolvers();
             child.send(message);
             const r = await pending.promise;
+            if (r.kind === "failure") throw Error(r.reason, { cause: r.detail });
             if (r.kind !== "git") throw Error("invalidWriterReply");
             return {
               exitCode: r.exitCode,
@@ -246,7 +281,9 @@ export class DirectoryWriters {
           revalidate,
           git: (args, env = {}, input = Buffer.alloc(0), timeout = 5000) =>
             send({ args, env, input: input.toString("base64"), timeout }),
-          installObjects: send,
+          installObjects: async (request) => {
+            await send(request);
+          },
         });
       } finally {
         if (!acquired && child.exitCode === null) child.kill();
