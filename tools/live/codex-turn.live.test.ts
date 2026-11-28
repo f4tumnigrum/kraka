@@ -139,6 +139,11 @@ test("2. installation, compatibility and existing-login probe; interactive login
         "absent" in profile ? null : "version" in profile ? profile.version : "0.156.0",
       );
       const rows = f.ledger.rows();
+      const handles = [...new Set(rows.map((row) => row.handle))].sort((a, b) => a - b);
+      const exited = [
+        ...new Set(rows.filter((row) => row.event === "exit").map((row) => row.handle)),
+      ].sort((a, b) => a - b);
+      expect(exited).toEqual(handles);
       expect(rows.filter((x) => x.event === "account/login/start")).toHaveLength(0);
       if (advisory === "broken") expect(rows.filter((x) => x.event === "version")).toHaveLength(2);
       if (authenticated === "yes") expect(rows.some((x) => x.event === "account/read")).toBe(true);

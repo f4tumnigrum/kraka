@@ -132,9 +132,13 @@ export class CodexConnection {
       if (this.child.exitCode === null) this.child.kill("SIGKILL");
     }, 2000);
     try {
-      this.child.stdin.end();
-      await this.child.exited;
-      await this.reader;
+      const results = await Promise.allSettled([
+        this.child.stdin.end(),
+        this.child.exited,
+        this.reader,
+      ]);
+      if (results[1].status === "rejected") throw results[1].reason;
+      if (results[2].status === "rejected") throw results[2].reason;
     } finally {
       clearTimeout(timer);
     }

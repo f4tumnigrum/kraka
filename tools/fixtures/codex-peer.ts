@@ -16,6 +16,7 @@ function log(event: string, id: string | number | null, details: Record<string, 
 if (args[0] === "--version") {
   log("version", null);
   console.log(`codex-cli ${process.env.PEER_VERSION ?? "0.156.0"}`);
+  log("exit", null);
   process.exit(0);
 }
 if (
@@ -86,6 +87,7 @@ if (
       }),
     );
   }
+  log("exit", null);
   process.exit(0);
 }
 if (args.join() !== "app-server") throw new Error("Unexpected fixture command");
