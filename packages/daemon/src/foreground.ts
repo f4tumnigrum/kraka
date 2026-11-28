@@ -1,7 +1,14 @@
 import { randomInt } from "node:crypto";
 import { createInterface } from "node:readline";
 import { clientDeviceFile, openDeviceCredentials, ownedDirectory } from "@kraka/cli-client";
-import { createPairingInvite, openStore, openWriter, registerProject } from "@kraka/environment";
+import {
+  measureWriterStartup,
+  type WriterStartupMark,
+  createPairingInvite,
+  openStore,
+  openWriter,
+  registerProject,
+} from "@kraka/environment";
 import {
   CommandIdSchema,
   DEFAULT_DEVICE_PERMISSIONS,
@@ -32,12 +39,16 @@ async function openBrowser(url: string) {
 }
 
 export async function startForeground(stateDir: string, mode: "print" | "open") {
+  return measureWriterStartup((mark) => openForeground(stateDir, mode, mark));
+}
+async function openForeground(stateDir: string, mode: "print" | "open", mark: WriterStartupMark) {
   const dir = await ownedDirectory(stateDir);
   const lock = await openWriter(
     dir,
     v.parse(HostInstanceIdSchema, crypto.randomUUID()),
     performance.now() + 10_000,
   );
+  mark("writerLock");
   if (lock.kind === "unconfirmed") throw Error(lock.reason);
   if (lock.kind === "existingInstance") {
     emit({ kind: lock.kind, publication: lock.instance });
@@ -63,10 +74,12 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
   }
   try {
     const store = openStore(lock.lease);
+    mark("databaseAndQueues");
     cleanup.push(() => store.db.close(true));
     const executors = new ExecutorInstances(store);
     cleanup.push(() => executors.close());
     const local = await openDeviceCredentials(clientDeviceFile());
+    mark("owner");
     cleanup.push(local.close);
     let confirmed = false;
     const host = await openAccessHost(dir, {
@@ -78,6 +91,7 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
         d.keyId === local.keyId &&
         d.publicKey === local.publicKey,
     });
+    mark("access");
     cleanup.push(host.close);
     const environmentId = host.identity.id;
     const localProject = registerProject({
@@ -196,7 +210,13 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
     cleanup.push(listener.close);
     const endpoint = new URL("/ws", listener.origin);
     endpoint.protocol = "ws:";
-    work.recover(() => emit({ kind: "ready", publication: lock.publish(endpoint.href) }));
+    mark("listener");
+    work.recover(() => {
+      mark("registerRecovery");
+      const publication = lock.publish(endpoint.href);
+      mark("publish");
+      emit({ kind: "ready", publication });
+    });
     process.once("SIGINT", close);
     process.once("SIGTERM", close);
     const url = new URL("/", listener.origin);

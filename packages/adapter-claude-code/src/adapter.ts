@@ -1,3 +1,4 @@
+import { traceClaudeChild } from "./child-timing";
 import * as v from "valibot";
 import {
   CAPABILITY_IDS,
@@ -35,6 +36,7 @@ export type ClaudeLaunch = {
   executable: string;
   instanceId?: ExecutorInstanceId;
   previousEpoch?: number;
+  verifiedCli?: { executable: string; version: string };
   capabilityVersion?: number;
   environment?: Readonly<Record<string, string>>;
 };
@@ -99,13 +101,19 @@ export async function claudeCliVersion(
   cwd: string,
   env: Readonly<Record<string, string>>,
 ) {
+  const trace = traceClaudeChild(executable, "version");
   const child = Bun.spawn([executable, "--version"], {
     cwd,
     env: { ...env },
     stdin: "ignore",
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: trace ? "pipe" : "ignore",
   });
+  trace?.spawn(child.pid);
+  const errors = (async () => {
+    if (trace && child.stderr)
+      for await (const chunk of child.stderr) trace.stderr(child.pid, chunk);
+  })();
   try {
     const [code, output] = await within(
       Promise.all([child.exited, new Response(child.stdout).text()]),
@@ -115,6 +123,8 @@ export async function claudeCliVersion(
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill();
     await child.exited;
+    await errors;
+    trace?.exit(child.pid, child.exitCode, child.signalCode);
   }
 }
 export function createClaudeCodeAdapter(
@@ -210,11 +220,12 @@ export function createClaudeCodeAdapter(
         PATH: setup.environment.PATH ?? process.env.PATH ?? "",
       });
       if (!executable) return rejected("notFound", "Claude executable unavailable");
-      const cliVersion = await claudeCliVersion(
-        executable,
-        setup.workingDirectory,
-        setup.environment,
-      ).catch(() => null);
+      const cliVersion =
+        launch?.verifiedCli?.executable === executable
+          ? launch.verifiedCli.version
+          : await claudeCliVersion(executable, setup.workingDirectory, setup.environment).catch(
+              () => null,
+            );
       if (!cliVersion) return rejected("unsupported", "Claude executable version unavailable");
       const epoch = (epochs.get(instance.instanceId) ?? launch?.previousEpoch ?? 0) + 1;
       const binding = {

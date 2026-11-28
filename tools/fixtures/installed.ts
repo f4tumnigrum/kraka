@@ -88,7 +88,7 @@ export async function runIdentity(site: Installation) {
     JSON.parse(out),
   ).environmentId;
 }
-export function startInstalled(site: Installation, mode?: string) {
+export function startInstalled(site: Installation, mode?: string, stderrLimit?: number) {
   const start = performance.now();
   const child = Bun.spawn([site.bin, "start", "--state-dir", site.state, ...(mode ? [mode] : [])], {
     cwd: site.cwd,
@@ -97,7 +97,7 @@ export function startInstalled(site: Installation, mode?: string) {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const { tail: stderrTail, drained: errors } = captureStderr(child.stderr);
+  const { tail: stderrTail, drained: errors } = captureStderr(child.stderr, stderrLimit);
   const lines = createInterface({ input: Readable.fromWeb(child.stdout), crlfDelay: Infinity });
   const reader = lines[Symbol.asyncIterator]();
   async function next<S extends v.GenericSchema>(schema: S): Promise<v.InferOutput<S>> {

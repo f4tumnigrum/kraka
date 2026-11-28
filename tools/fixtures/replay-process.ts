@@ -37,13 +37,13 @@ export async function within<T>(promise: Promise<T>, ms: number, description: st
     clearTimeout(timeout);
   }
 }
-export function captureStderr(stream: ReadableStream<Uint8Array>) {
+export function captureStderr(stream: ReadableStream<Uint8Array>, limit = 8192) {
   let tail = "";
   const drained = (async () => {
     const decoder = new TextDecoder();
     for await (const chunk of stream)
-      tail = (tail + decoder.decode(chunk, { stream: true })).slice(-8192);
-    tail = (tail + decoder.decode()).slice(-8192);
+      tail = (tail + decoder.decode(chunk, { stream: true })).slice(-limit);
+    tail = (tail + decoder.decode()).slice(-limit);
     return tail;
   })();
   return { tail: () => tail, drained };

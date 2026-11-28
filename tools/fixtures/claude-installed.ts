@@ -19,14 +19,7 @@ import { ControlStream, ControlMessageSchema, decodeFrame } from "@kraka/protoco
 import { openDeviceCredentials } from "../../packages/cli-client/src";
 import { SqliteThreadCache } from "../../packages/cli-client/src/thread-cache";
 import type { RouteDial } from "../../packages/client-runtime/src";
-import {
-  hostRelease,
-  installedDirectory,
-  startInstalled,
-  runIdentity,
-  pairingRecord,
-} from "./installed";
-import { installArtifact } from "../package-release";
+import { installedDirectory, startInstalled, runIdentity, pairingRecord } from "./installed";
 import { beginApplication, commandId, connectDevice, type Client } from "./paired-project";
 import { claudePeerControl } from "./claude-peer-control";
 import { connectReplica } from "./thread-resume";
@@ -82,12 +75,60 @@ const framed: RouteDial = (url, receive) => {
   };
 };
 export async function installedClaude(
-  artifact: Awaited<ReturnType<typeof hostRelease>>,
+  binary: string,
   executable: string,
   scenario: "command" | "interrupt" | "edit",
 ) {
   const dir = await mkdtemp(join(tmpdir(), "kraka-claude-installed-")),
     control = claudePeerControl();
+  const startedAt = Date.now();
+  const stages: { label: string; startMs: number; ms: number }[] = [];
+  const daemons: ReturnType<typeof startInstalled>[] = [];
+  const clients: Client[] = [];
+  const positions = new Map<string, unknown>();
+  function report() {
+    return {
+      scenario,
+      startedAt,
+      elapsedMs: Date.now() - startedAt,
+      stages,
+      peers: control.recent(),
+      routes: clients.map((c) =>
+        c.events.items
+          .slice(-10)
+          .map((e) =>
+            e.kind === "receipt"
+              ? { kind: e.kind, id: e.receipt.commandId, outcome: e.receipt.kind }
+              : e.kind,
+          ),
+      ),
+      replicas: Object.fromEntries(positions),
+      daemons: daemons.map((d) => ({
+        pid: d.child.pid,
+        exit: d.child.exitCode,
+        signal: d.child.signalCode,
+        stderrTail: d.stderrTail().slice(-2048),
+        timings: d
+          .stderrTail()
+          .split("\n")
+          .filter((line) =>
+            /^(Writer startup timing|Checkpoint boundary timing|Claude peer timing) /.test(line),
+          ),
+      })),
+    };
+  }
+  async function step<T>(label: string, work: () => Promise<T>) {
+    const at = Date.now();
+    try {
+      return await work();
+    } catch (cause) {
+      throw new Error("Claude fixture waiting for " + label + " " + JSON.stringify(report()), {
+        cause,
+      });
+    } finally {
+      stages.push({ label, startMs: at - startedAt, ms: Date.now() - at });
+    }
+  }
   const clean: (() => void | Promise<void>)[] = [];
   const sockets = new Set<() => Promise<void>>();
   const disconnect = async () => {
@@ -104,24 +145,31 @@ export async function installedClaude(
         await daemon?.close();
       } finally {
         for (const fn of clean.reverse()) await fn();
-        await control.close();
-        await rm(dir, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
+        try {
+          await step("all CLI sessions through EOF", control.close);
+        } finally {
+          console.log("Claude fixture timing " + JSON.stringify(report()));
+          await rm(dir, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
+        }
       }
     }
   }
   try {
-    const site = await installedDirectory(
-      dir,
-      await installArtifact(artifact, join(dir, "prefix")),
-    );
+    const site = await step("prepare isolated site", () => installedDirectory(dir, binary));
     git(site.cwd, "init", "-b", "main");
     await writeFile(join(site.cwd, "note.txt"), "old\n");
     git(site.cwd, "add", "note.txt");
     git(site.cwd, "commit", "-m", "Initial note");
     const account = join(dir, "account");
     await mkdir(account);
-    daemon = startInstalled(site, "--print-pairing");
-    let pub = await daemon.ready(),
+    function launch() {
+      const env = { ...site.env, KRAKA_TRACE_CLAUDE_PEER: executable };
+      const d = startInstalled({ ...site, env }, "--print-pairing", 65536);
+      daemons.push(d);
+      return d;
+    }
+    daemon = launch();
+    let pub = await step("first daemon ready", daemon.ready),
       intro = await daemon.next(pairingRecord);
     const owner = await daemon.register();
     if ((await runIdentity(site)) !== owner.identity.id) throw Error("Wrong installed environment");
@@ -153,8 +201,13 @@ export async function installedClaude(
       }
     })();
     const instanceId = v.parse(ExecutorInstanceIdSchema, "fixture-claude");
-    const connect = async () =>
-      connectDevice(new URL(intro.url).origin, owner.identity, device, owner.principal, framed);
+    const connect = async () => {
+      const c = await step("owner authorized configuration", () =>
+        connectDevice(new URL(intro.url).origin, owner.identity, device, owner.principal, framed),
+      );
+      clients.push(c);
+      return c;
+    };
     let client = await connect();
     clean.push(() => client.close());
     const registration = {
@@ -171,41 +224,50 @@ export async function installedClaude(
         historyRoot: null,
         endpoint: null,
         variables: {
+          KRAKA_CLAUDE_PEER_TIMING: { kind: "literal" as const, value: "1" },
           KRAKA_CLAUDE_PEER: { kind: "literal" as const, value: control.url },
           KRAKA_CLAUDE_CASE: { kind: "literal" as const, value: scenario },
         },
       },
     };
     accepted(
-      await client.request({
-        method: "executor.configure",
-        commandId: commandId(),
-        payload: { expectedVersion: null, registration },
-      }),
+      await step("owner executor.configure receipt", () =>
+        client.request({
+          method: "executor.configure",
+          commandId: commandId(),
+          payload: { expectedVersion: null, registration },
+        }),
+      ),
       "executorConfigured",
     );
     const refresh = accepted(
-      await client.request({
-        method: "executor.refresh",
-        commandId: commandId(),
-        payload: { projectId, instanceId },
-      }),
+      await step("owner executor.refresh receipt", () =>
+        client.request({
+          method: "executor.refresh",
+          commandId: commandId(),
+          payload: { projectId, instanceId },
+        }),
+      ),
       "executorRefreshed",
     );
     async function start(mode: "ask" | "open" = "ask") {
-      return client.request({
-        method: "thread.start",
-        commandId: commandId(),
-        payload: {
-          projectId,
-          instanceId,
-          worktreeId: null,
-          requestedMode: mode,
-          content: { text: "Claude " + scenario, references: [], attachments: [] },
-        },
-      });
+      const id = commandId();
+      return step("owner thread.start receipt " + id, () =>
+        client.request({
+          method: "thread.start",
+          commandId: id,
+          payload: {
+            projectId,
+            instanceId,
+            worktreeId: null,
+            requestedMode: mode,
+            content: { text: "Claude " + scenario, references: [], attachments: [] },
+          },
+        }),
+      );
     }
     async function replica(threadId: ThreadId, deviceInfo: Pick<Client, "device" | "principal">) {
+      const target = deviceInfo.device.deviceId + "/" + threadId;
       const cache = new SqliteThreadCache(
         join(dir, crypto.randomUUID() + ".sqlite"),
         "claude-tests",
@@ -216,21 +278,34 @@ export async function installedClaude(
         threads: Thread[];
         tools: ToolActivityHistoryItem[];
       }>();
-      const replica = await connectReplica(pub.endpoint, owner.identity, deviceInfo, cache, {
-        minor: 2,
-        installedDaemon: true,
-        installed() {
-          const values = Object.values(cache.read().rows).map((r) => r.row);
-          snapshots.push({
-            rounds: values.flatMap((r) => (r?.objectType === "round" ? [r.value] : [])),
-            todos: values.flatMap((r) => (r?.objectType === "todoRequest" ? [r.value] : [])),
-            threads: values.flatMap((r) => (r?.objectType === "thread" ? [r.value] : [])),
-            tools: values.flatMap((r) =>
-              r?.objectType === "timelineItem" && r.value.kind === "toolActivity" ? [r.value] : [],
-            ),
-          });
-        },
-      }).catch((e) => {
+      const replica = await step(target + " configured thread connection", () =>
+        connectReplica(pub.endpoint, owner.identity, deviceInfo, cache, {
+          minor: 2,
+          installedDaemon: true,
+          installed(head) {
+            const values = Object.values(cache.read().rows).map((r) => r.row);
+            positions.set(target, {
+              through: head.through,
+              rounds: values.flatMap((r) =>
+                r?.objectType === "round" ? [r.value.attempt.phase.kind] : [],
+              ),
+              todos: values.flatMap((r) =>
+                r?.objectType === "todoRequest" ? [r.value.state.kind] : [],
+              ),
+            });
+            snapshots.push({
+              rounds: values.flatMap((r) => (r?.objectType === "round" ? [r.value] : [])),
+              todos: values.flatMap((r) => (r?.objectType === "todoRequest" ? [r.value] : [])),
+              threads: values.flatMap((r) => (r?.objectType === "thread" ? [r.value] : [])),
+              tools: values.flatMap((r) =>
+                r?.objectType === "timelineItem" && r.value.kind === "toolActivity"
+                  ? [r.value]
+                  : [],
+              ),
+            });
+          },
+        }),
+      ).catch((e) => {
         cache.close();
         throw e;
       });
@@ -243,10 +318,17 @@ export async function installedClaude(
         }
       };
       sockets.add(end);
-      accepted(await (await replica.client.open(threadId, null)).receipt, "subscriptionOpened");
-      return { rpc: replica.client.rpc.bind(replica.client), snapshots, end };
+      accepted(
+        await step(
+          target + " subscribe",
+          async () => (await replica.client.open(threadId, null)).receipt,
+        ),
+        "subscriptionOpened",
+      );
+      return { rpc: replica.client.rpc.bind(replica.client), snapshots, end, target, step };
     }
     return {
+      step,
       start,
       refresh,
       control,
@@ -259,9 +341,9 @@ export async function installedClaude(
       async restart() {
         await disconnect();
         client.close();
-        await daemon!.close();
-        daemon = startInstalled(site, "--print-pairing");
-        pub = await daemon.ready();
+        await step("original daemon exit", daemon!.close);
+        daemon = launch();
+        pub = await step("replacement daemon ready", daemon.ready);
         intro = await daemon.next(pairingRecord);
         client = await connect();
       },

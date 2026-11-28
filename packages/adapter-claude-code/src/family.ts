@@ -24,6 +24,7 @@ export const claudeCodeFamily: ExecutorFamily = {
       const adapter = createClaudeCodeAdapter(launch);
       const declaration = await adapter.capabilities(instance);
       if (declaration.kind !== "ok") throw Error("Missing Claude declaration");
+      let verifiedCli: { executable: string; version: string } | undefined;
       let binaryVersion: string | null = null,
         sdkVersion: string | null = null;
       let models: FamilyProbe["models"] = null;
@@ -47,6 +48,7 @@ export const claudeCodeFamily: ExecutorFamily = {
         const session = opened.value;
         try {
           binaryVersion = session.handle.cliVersion;
+          verifiedCli = { executable: session.handle.executable, version: binaryVersion };
           sdkVersion = session.handle.sdkVersion;
           d.readiness = { ...d.readiness, installed: ready };
           const info = await within(session.handle.connection.initializationResult(), 10000);
@@ -106,7 +108,11 @@ export const claudeCodeFamily: ExecutorFamily = {
         driver: (previousEpoch) =>
           bindExecutorAdapter(
             instance,
-            createClaudeCodeAdapter({ ...launch, previousEpoch }),
+            createClaudeCodeAdapter({
+              ...launch,
+              previousEpoch,
+              ...(verifiedCli && { verifiedCli }),
+            }),
             (h, setup) => ({
               requestOpen: (id) => !h.closed && !h.failure && h.approvals.pending.has(id),
               interrupted: () => ({

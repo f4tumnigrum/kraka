@@ -61,6 +61,8 @@ export async function reconcileExecutor(
     prior.attemptId !== initial.attempt.attemptId
   )
     return false;
+  const support = s.snapshot.matrix.readHistory;
+  if (support.kind !== "native") return false;
   const root = phase.seen.root;
   const { opened } = await resumeBinding(
     s,
@@ -77,8 +79,6 @@ export async function reconcileExecutor(
       !replaceBinding(store, prior, { ...prior, epoch: opened.value.epoch })
     )
       return false;
-    const support = s.snapshot.matrix.readHistory;
-    if (support.kind !== "native") return false;
     const result = await opened.value.invoke(
       { capabilityVersion: s.snapshot.version, support },
       {

@@ -4,16 +4,17 @@ import { beforeAll, afterAll, test, expect } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { installArtifact } from "../package-release";
 import { hostRelease } from "../fixtures/installed";
 import { installedClaude } from "../fixtures/claude-installed";
 import { accepted } from "../fixtures/first-send";
 import { git } from "../fixtures/isolated-start";
 
-let root: string, peer: string, artifact: Awaited<ReturnType<typeof hostRelease>>;
+let root: string, peer: string, binary: string;
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "kraka-s23-build-"));
   console.log(git(root, "--version"));
-  artifact = await hostRelease(join(root, "release"));
+  binary = await installArtifact(await hostRelease(join(root, "release")), join(root, "prefix"));
   peer = join(root, process.platform === "win32" ? "peer.exe" : "peer");
   const child = Bun.spawn(
     [
@@ -37,7 +38,10 @@ type Replica = Awaited<ReturnType<Fixture["replica"]>>;
 const allow = { kind: "approval", choiceKey: "allow", decision: "allow", scope: "once" } as const;
 const deny = { kind: "approval", choiceKey: "deny", decision: "deny", scope: "once" } as const;
 async function pending(replica: Replica) {
-  const data = await replica.snapshots.until((p) => p.todos.some((t) => t.state.kind === "open"));
+  // The signed todo follows dispatch, including the mandatory before checkpoint.
+  const data = await replica.step(replica.target + " pending approval", () =>
+    replica.snapshots.untilDispatch((p) => p.todos.some((t) => t.state.kind === "open")),
+  );
   const todo = data.todos.find((t) => t.state.kind === "open");
   if (!todo || todo.state.kind !== "open" || todo.state.route.kind !== "live")
     throw Error("Expected live request");
@@ -56,7 +60,7 @@ async function settled(replica: Replica) {
   return { round, phase: round.attempt.phase, data };
 }
 test("1. Command approval and selected policy", async () => {
-  const f = await installedClaude(artifact, peer, "command");
+  const f = await installedClaude(binary, peer, "command");
   let session = "",
     request = "",
     input = "";
@@ -125,7 +129,7 @@ test("1. Command approval and selected policy", async () => {
   expect(f.control.count("eof", session, session)).toBe(1);
 }, 60000);
 test("2. File approval and diff", async () => {
-  const f = await installedClaude(artifact, peer, "edit");
+  const f = await installedClaude(binary, peer, "edit");
   let session = "",
     request = "";
   try {
@@ -172,7 +176,7 @@ test("2. File approval and diff", async () => {
   expect(f.control.count("answer", session, request)).toBe(1);
 }, 60000);
 test("3. Interrupt outcome", async () => {
-  const f = await installedClaude(artifact, peer, "interrupt");
+  const f = await installedClaude(binary, peer, "interrupt");
   let session = "",
     input = "";
   try {
@@ -218,7 +222,7 @@ test("3. Interrupt outcome", async () => {
   expect(f.control.count("terminal", session, input)).toBe(1);
 }, 60000);
 test("4. Cached approval after restart", async () => {
-  const f = await installedClaude(artifact, peer, "command");
+  const f = await installedClaude(binary, peer, "command");
   let old = "",
     next = "",
     key = "";
@@ -237,7 +241,10 @@ test("4. Cached approval after restart", async () => {
     expect(String(fresh.route.requestId)).toBe(key);
     expect(next).not.toBe(old);
     const restored = await f.replica(first.threadId, f.phone);
-    const result = await restored.rpc("todo.decide", { ...cached.target, decision: allow });
+    const result = await f.step(
+      restored.target + " stale todo.decide " + cached.target.todoRequestId,
+      () => restored.rpc("todo.decide", { ...cached.target, decision: allow }),
+    );
     expect(result).toMatchObject({
       kind: "rejected",
       failure: {

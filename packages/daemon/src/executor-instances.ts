@@ -120,13 +120,12 @@ export class ExecutorInstances {
     if (!cwd || !reg) return null;
     const cached = this.current(id, actor, cwd);
     if (cached) return cached;
-    const work = this.probe(reg, directory, cwd, actor);
-    this.active.add(work);
-    try {
-      return await work;
-    } finally {
-      this.active.delete(work);
-    }
+    return this.serialize(reg, async () => {
+      if (this.closed || directory() !== cwd || this.registry.current(id)?.version !== reg.version)
+        return null;
+      // Recovery and the first new turn can queue a lookup for the same cold instance.
+      return this.current(id, actor, cwd) ?? this.discover(reg, directory, cwd, actor);
+    });
   }
   select(
     entry: InstanceEntry | null,

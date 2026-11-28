@@ -19,6 +19,16 @@ function recording(text: string) {
 const requestId = "sample-request-one",
   toolUseID = "toolu_sample_cabinet";
 async function run() {
+  if (process.env.KRAKA_CLAUDE_PEER_TIMING === "1")
+    process.stderr.write(
+      "Fixture CLI ready " +
+        JSON.stringify({
+          pid: process.pid,
+          at: Date.now(),
+          runtimeAgeMs: Math.round(performance.now()),
+        }) +
+        "\n",
+    );
   if (process.argv.includes("--version")) {
     console.log("2.1.332 (Claude Code)");
     return;

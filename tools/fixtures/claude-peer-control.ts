@@ -9,6 +9,7 @@ const row = v.object({
 });
 export function claudePeerControl() {
   const events = new Journal<v.InferOutput<typeof row>>();
+  const recent: { at: number; kind: string; session: string; key: string }[] = [];
   const peers = new Map<string, Bun.ServerWebSocket<null>>();
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -23,10 +24,12 @@ export function claudePeerControl() {
         const e = v.parse(row, JSON.parse(String(raw)));
         peers.set(e.session, ws);
         events.push(e);
+        recent.push({ at: Date.now(), kind: e.kind, session: e.session, key: e.key });
       },
     },
   });
   return {
+    recent: () => recent.slice(-24),
     totalInputs: () => events.items.filter((e) => e.kind === "input").length,
     url: "ws://127.0.0.1:" + server.port,
     waitFor(kind: string, session: string, key: string) {
@@ -49,9 +52,13 @@ export function claudePeerControl() {
     async close() {
       try {
         await Promise.all(
-          [...peers.keys()]
-            .filter(Boolean)
-            .map((session) => events.until((e) => e.kind === "eof" && e.session === session)),
+          [...peers.keys()].filter(Boolean).map((session) =>
+            events
+              .until((e) => e.kind === "eof" && e.session === session)
+              .catch((cause) => {
+                throw new Error("Waiting for CLI stdin EOF in session " + session, { cause });
+              }),
+          ),
         );
       } finally {
         await server.stop(true);

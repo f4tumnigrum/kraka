@@ -1,3 +1,4 @@
+import { traceClaudeChild } from "./child-timing";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { realpathSync } from "node:fs";
 import {
@@ -72,7 +73,7 @@ export class ClaudeCodeSessionHandle {
     readonly binding: Binding,
     readonly attemptId: Input["attemptId"],
     private setup: OpenSessionInput<"claude-code">["setup"],
-    executable: string,
+    readonly executable: string,
     sdkVersion: string,
     readonly cliVersion: string,
   ) {
@@ -114,6 +115,7 @@ export class ClaudeCodeSessionHandle {
           ? { settings: { permissions: { ask: ["Bash", "Edit", "Write", "MultiEdit"] } } }
           : {}),
         spawnClaudeCodeProcess: (options) => {
+          const trace = traceClaudeChild(executable, "query");
           const child = spawn(options.command, options.args, {
             cwd: options.cwd,
             env: options.env,
@@ -121,7 +123,11 @@ export class ClaudeCodeSessionHandle {
             windowsHide: true,
           });
           this.child = child;
-          child.stderr.resume();
+          trace?.spawn(child.pid);
+          if (trace) {
+            child.stderr.on("data", (chunk: Buffer) => trace.stderr(child.pid, chunk));
+            child.once("exit", (code, signal) => trace.exit(child.pid, code, signal));
+          } else child.stderr.resume();
           child.once("exit", () => this.childEnded.resolve());
           child.once("error", () => this.childEnded.resolve());
           return child;
