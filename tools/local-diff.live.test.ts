@@ -642,7 +642,7 @@ test(
 
           const restarted = launchWriter(f.state, productRoot);
           try {
-            const { instance } = await restarted.ready();
+            const { publication } = await restarted.ready();
             expect(existsSync(own.scratch)).toBe(false);
             expect(cleanupIntents(f.state)).toHaveLength(0);
             expect(git(cwd, "for-each-ref", "--format=%(refname)", own.writer)).toBe("");
@@ -671,7 +671,7 @@ test(
               foreignOrphan,
             );
 
-            const recovered = await fixtureGitClient(f.credentials, instance.endpoint);
+            const recovered = await fixtureGitClient(f.credentials, publication.endpoint);
             try {
               const again = changed(await recovered.diff(query));
               if (!again.next || again.to.kind !== "workingTree")
