@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import {
   confirmWriter,
   InstancePublicationSchema,
-  type InstancePublication,
+  readInstancePublication,
   openReceiptReader,
   readReceipt,
 } from "@kraka/environment";
@@ -69,7 +69,7 @@ export function launchWriter(
 ) {
   const argv =
     point === "codex-cli"
-      ? [join(root, entry), "start", "--state-dir", stateDir]
+      ? [join(root, entry), "start", "--state-dir", stateDir, "--local-owner"]
       : point === "codex"
         ? [join(root, "tools/fixtures/codex-writer.ts"), stateDir]
         : point
@@ -80,7 +80,7 @@ export function launchWriter(
     executable ? [executable, ...argv.slice(1)] : [process.execPath, ...argv],
     {
       cwd: root,
-      stdin: "ignore",
+      stdin: point === "codex" ? "pipe" : "ignore",
       stdout: "pipe",
       stderr: "pipe",
       ...(ipc && { ipc }),
@@ -110,19 +110,14 @@ export function launchWriter(
     const result = v.parse(
       v.strictObject({
         kind: v.picklist(["ready", "existingInstance"]),
-        instance: InstancePublicationSchema,
+        publication: InstancePublicationSchema,
       }),
       JSON.parse(raw),
     );
-    const deadline = performance.now() + 10000;
-    let confirmed: InstancePublication | null;
-    do {
-      confirmed = await confirmWriter(realpathSync.native(stateDir), deadline);
-      if (!confirmed) await Bun.sleep(10);
-    } while (!confirmed && performance.now() < deadline);
+    const confirmed = await readInstancePublication(stateDir);
     if (
-      !Bun.deepEquals(confirmed, result.instance) ||
-      (result.kind === "ready" && result.instance.pid !== child.pid)
+      !Bun.deepEquals(confirmed, result.publication) ||
+      (result.kind === "ready" && result.publication.pid !== child.pid)
     )
       throw new Error("Unconfirmed writer");
     return result;
@@ -133,8 +128,16 @@ export function launchWriter(
     started,
     ready,
     async stop() {
-      await terminate(child, point === "settings" && ipc ? () => child.disconnect() : undefined);
-      await Promise.all([drained, stderr]);
+      try {
+        if (child.stdin && child.exitCode === null && child.signalCode === null) {
+          await child.stdin.end();
+          const code = await within(child.exited, 10000, "Codex writer shutdown");
+          if (code !== 0) throw Error(`Codex writer exited with ${code}: ${await stderr}`);
+        }
+      } finally {
+        await terminate(child, point === "settings" && ipc ? () => child.disconnect() : undefined);
+        await Promise.all([drained, stderr]);
+      }
     },
     async kill() {
       if (child.exitCode === null) child.kill("SIGKILL");
@@ -179,7 +182,7 @@ export async function startFirstSendFixture({
   onStage?.("waiting for the writer to publish and confirm its endpoint");
   const launcher = launchWriter(stateDir, root, point, recording, ipc, executable);
   try {
-    const { kind, instance } = await launcher.ready();
+    const { kind, publication: instance } = await launcher.ready();
     if (kind !== "ready") throw new Error("Expected owned writer");
     onStage?.("connecting to the writer and registering the project");
     const client = await connectFirstSend(stateDir, instance);
@@ -210,7 +213,7 @@ export async function startFirstSendFixture({
               v.parse(CommandIdSchema, command),
             );
           } finally {
-            db.close();
+            db.close(true);
           }
         },
         async close() {

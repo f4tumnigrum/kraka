@@ -78,3 +78,11 @@ bun run protocol:reference
 ```
 
 Generated files live in `docs/generated/protocol/`. Regenerate them after changing a schema. CI checks that the generated files match the schemas.
+
+### Install and start the foreground daemon
+
+Build the host archive with Bun 1.4.5 using `bun tools/package-release.ts --host --out .build/release`. The archive contains one program. Its adjacent JSON manifest records the target, compressed and executable sizes and both SHA-256 digests. To install a verified archive, run `bun tools/package-release.ts --install ARCHIVE --prefix DIR` from this checkout. Add the directory containing the printed executable to PATH. The installed program needs Git and runs independently of Bun and the checkout.
+
+From the working directory you want to register, run `kraka start --state-dir DIR --print-pairing`. The launching terminal receives the live instance record followed by a one-use URL. Keep this output private. Use `--open-browser` to open the URL once in the system browser. On first use, verify the local CLI key in the terminal and enter the displayed `register CODE` command. For a launcher using pipes, first confirm that same CLI key from a local terminal with `kraka access confirm --state-dir DIR --device DEVICE --key KEY --public-key PUBLIC_KEY`, using the identifiers in the owner confirmation record. On the new device, confirm the host identity and submit its pairing request. Compare its six-digit code with the pending request in the terminal, then enter `approve REQUEST_ID CODE`.
+
+In another terminal, run `kraka identity --state-dir DIR --json` to read the environment ID. The CLI uses its device key in the user's `.kraka-client` directory. Set `KRAKA_CLIENT_DIR` to use a separate private profile. Ctrl-C in the launching terminal stops the foreground daemon.

@@ -33,7 +33,14 @@ function matches(value: string, selector: Metadata["os"]) {
     (!items.some((item) => !item.startsWith("!")) || items.includes(value))
   );
 }
-function onTarget(info: Metadata) {
+type Target = { os: string; arch: string; libc: string | null };
+function onTarget(info: Metadata, target?: Target) {
+  if (target)
+    return (
+      matches(target.os, info.os) &&
+      matches(target.arch, info.cpu) &&
+      (!info.libc || (!!target.libc && matches(target.libc, info.libc)))
+    );
   if (!matches(process.platform, info.os) || !matches(process.arch, info.cpu)) return false;
   if (!info.libc) return true;
   if (process.platform !== "linux") return false;
@@ -80,7 +87,11 @@ export interface DependencyObservation {
   packages: { id: string; native: boolean; platformSelected: boolean }[];
   workspaces: string[];
 }
-export async function productionClosure(product: string, result: DependencyObservation) {
+export async function productionClosure(
+  product: string,
+  result: DependencyObservation,
+  target?: Target,
+) {
   const root = await realpath(product);
   const lock = v.parse(lockSchema, Bun.JSONC.parse(await readFile(join(root, "bun.lock"), "utf8")));
   const visited = new Set<string>();
@@ -132,7 +143,7 @@ export async function productionClosure(product: string, result: DependencyObser
           ? v.parse(metadata, typeof registryOrInfo === "string" ? npmInfo : registryOrInfo)
           : lock.workspaces[local];
       if (!entry) throw new Error(`Missing locked workspace ${local}`);
-      if (optional && !onTarget(entry)) continue;
+      if (optional && !onTarget(entry, target)) continue;
       const child = await installedDir(root, dir, name);
       if (!child) {
         if (info.optionalPeers?.includes(name)) continue;
@@ -152,6 +163,9 @@ export async function productionClosure(product: string, result: DependencyObser
   const workspace = lock.workspaces[relative(root, daemon).split(sep).join("/")];
   if (!workspace) throw new Error("Daemon is missing from bun.lock");
   await visit(daemon, ["@kraka/daemon"], workspace, true);
+  const browser = lock.workspaces["packages/browser-host"];
+  if (browser && (await Bun.file(join(root, "tools/package-release.ts")).exists()))
+    await visit(join(root, "packages/browser-host"), ["@kraka/browser-host"], browser, true);
   result.packages.sort((a, b) => a.id.localeCompare(b.id));
   result.workspaces.sort();
 }

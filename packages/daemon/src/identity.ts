@@ -76,6 +76,8 @@ export interface IdentityPort {
     address?: string;
     sequence?: number;
   }) => void;
+  pairingPending?: (pending: PairingPending) => void;
+  confirmInstance?: (nonce: string) => string | null;
   openThread?: (nonce: string) => Promise<SocketApplication | null>;
   beforeConfiguration?: (session: SessionAuthorized) => Promise<void>;
   beforePairingReply?: (result: DevicePairingResult) => Promise<void>;
@@ -263,6 +265,7 @@ export function listenIdentity(
       p.application = result;
       host.observed?.({ kind: "applied", deviceId: result.deviceId });
       send(p, result);
+      host.pairingPending?.(result);
       challenge(p);
       return;
     }
@@ -428,6 +431,13 @@ export function listenIdentity(
     return checkBusinessUpgrade(req.url ?? "", incoming, [...origins], URL);
   }
   const serve: RequestListener = (req, res) => {
+    const proof = /^\/instance\/([a-f0-9]{48}(?:\?idle)?)$/.exec(req.url ?? "");
+    if (host.confirmInstance && proof?.[1] && req.method === "GET") {
+      const answer = host.confirmInstance(proof[1]);
+      res.writeHead(answer ? 200 : 409);
+      res.end(answer);
+      return;
+    }
     if (browser && (req.method === "GET" || req.method === "HEAD")) {
       const js = req.url === "/assets/browser-host.js";
       const content = js

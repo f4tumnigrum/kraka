@@ -82,7 +82,7 @@ export async function codexFixture(
   ]);
   const launch = launchWriter(stateDir, root, hostSecret ? "codex" : "codex-cli");
   try {
-    const { instance } = await launch.ready();
+    const { publication: instance } = await launch.ready();
     const events = new Journal<ExecutorTurnUpdate>();
     const updates = events.items;
     const client = await connectFirstSend(stateDir, instance, (e) => {
