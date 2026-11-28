@@ -1,21 +1,15 @@
 import * as v from "valibot";
 
 import type { ActiveSteers } from "./durable-replay";
-import {
-  canonicalJson,
-  DeliveryIdSchema,
-  type Round,
-  type ExecutorTurnUpdate,
-} from "@kraka/protocol";
+import { DeliveryIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
   savedBinding,
   replaceBinding,
   latestFrozenSession,
   type OrdinaryStops,
-  type CodexBinding,
+  type ExecutorBinding,
   frozenInput,
-  bindTodoSession,
   recordAdapterActivity,
   readThread,
   readRound,
@@ -30,46 +24,28 @@ import {
   type RoundReport,
   type ThreadSessionBinding,
 } from "@kraka/environment";
-import type { CodexSelection } from "./codex-instances";
+import type { ExecutorSelection } from "./executor-instances";
 
-export function bindingContext(s: CodexSelection) {
-  return canonicalJson({
-    instance: s.reg.instanceId,
-    credential: s.reg.credential,
-    version: s.reg.version,
-    account: s.probe.accountContext,
-    historyRoot: s.reg.driver.historyRoot,
-    nativeHome: s.probe.nativeHome,
-    configurationRoot: s.reg.driver.configurationRoot,
-    cwd: s.cwd,
-  });
-}
 export async function resumeBinding(
-  s: CodexSelection,
-  savedThreadId: CodexBinding["nativeSessionId"] | null,
+  s: ExecutorSelection,
+  savedThreadId: ExecutorBinding["nativeSessionId"] | null,
   expectedEpoch: number,
   attemptId: Round["attempt"]["attemptId"],
 ) {
-  const adapter = s.adapter(expectedEpoch);
-  const opened = await adapter.open({
-    instance: { family: "codex", instanceId: s.reg.instanceId },
-    attemptId,
-    resume: savedThreadId,
-    setup: {
-      workingDirectory: s.cwd,
-      additionalDirectories: [],
-      environment: {},
-      model: s.model,
-      permission: s.snapshot.permission,
-    },
+  const opened = await s.probe.driver(expectedEpoch).open(savedThreadId, attemptId, {
+    workingDirectory: s.cwd,
+    additionalDirectories: [],
+    environment: {},
+    model: s.model,
+    permission: s.snapshot.permission,
   });
-  return { adapter, opened };
+  return { opened };
 }
 export type PreparedSession = Awaited<ReturnType<typeof resumeBinding>>;
-export async function reconcileCodex(
+export async function reconcileExecutor(
   store: FirstSendStore,
   initial: Round,
-  s: CodexSelection,
+  s: ExecutorSelection,
   isCurrent: () => boolean,
   stops: OrdinaryStops,
 ) {
@@ -79,12 +55,14 @@ export async function reconcileCodex(
     phase.kind !== "unobserved" ||
     phase.seen.kind !== "root" ||
     !prior ||
-    prior.context !== bindingContext(s) ||
+    prior.family !== s.reg.family ||
+    prior.instanceId !== s.reg.instanceId ||
+    prior.context !== s.probe.bindingContext ||
     prior.attemptId !== initial.attempt.attemptId
   )
     return false;
   const root = phase.seen.root;
-  const { adapter, opened } = await resumeBinding(
+  const { opened } = await resumeBinding(
     s,
     prior.nativeSessionId,
     prior.epoch,
@@ -101,15 +79,8 @@ export async function reconcileCodex(
       return false;
     const support = s.snapshot.matrix.readHistory;
     if (support.kind !== "native") return false;
-    const result = await adapter.invoke(
-      opened.value,
-      {
-        family: "codex",
-        instanceId: prior.instanceId,
-        capabilityVersion: s.snapshot.version,
-        capability: "readHistory",
-        support,
-      },
+    const result = await opened.value.invoke(
+      { capabilityVersion: s.snapshot.version, support },
       {
         kind: "nativeAction",
         capability: "readHistory",
@@ -120,7 +91,7 @@ export async function reconcileCodex(
     );
     if (result.kind !== "ok" || result.value.kind !== "history" || !result.value.rows.length)
       return false;
-    const iterator = adapter.events(opened.value, null)[Symbol.asyncIterator]();
+    const iterator = opened.value.events()[Symbol.asyncIterator]();
     const event = await iterator.next();
     if (event.done || !matchesAdapterEvent(opened.value, event.value) || !isCurrent()) return false;
     const p = event.value.payload;
@@ -147,13 +118,13 @@ export async function reconcileCodex(
     stops.ended(initial.attempt.attemptId);
     return evidence.kind === "ok";
   } finally {
-    await adapter.close(opened.value, "finished");
+    await opened.value.close("finished");
   }
 }
-export async function dispatchCodex(
+export async function dispatchExecutor(
   store: FirstSendStore,
   initial: Round,
-  selection: CodexSelection,
+  selection: ExecutorSelection,
   isCurrent: () => boolean,
   emit: (update: ExecutorTurnUpdate) => void,
   signal: AbortSignal,
@@ -163,17 +134,17 @@ export async function dispatchCodex(
 ) {
   const thread = readThread(store.db, initial.threadId),
     message = readMessage(store.db, initial.messageId);
-  if (!thread || !message) throw Error("Missing committed Codex input");
+  if (!thread || !message) throw Error("Missing committed executor input");
   if (initial.attempt.phase.kind !== "filed" || initial.attempt.phase.gate !== "eligible") return;
   const { reg, snapshot } = selection;
   const { attemptId, deliveryId } = initial.attempt,
     roundId = initial.id,
     ids = { roundId, attemptId },
     ticket = { attemptId, deliveryId };
-  const instance = { family: "codex", instanceId: reg.instanceId } as const;
+  const instance = { family: reg.family, instanceId: reg.instanceId } as const;
   let binding: ThreadSessionBinding | null = null;
   function report(event: RoundReport) {
-    if (!binding) throw Error("Unbound Codex delivery");
+    if (!binding) throw Error("Unbound executor delivery");
     const result = recordInputEvidence(store, binding, event);
     if (result.kind === "rejected") throw Error(result.reason);
   }
@@ -199,36 +170,32 @@ export async function dispatchCodex(
   };
   const cwd = store.directory(thread);
   if (!cwd || cwd !== selection.cwd || !isCurrent() || signal.aborted) {
-    if (prepared?.opened.kind === "ok")
-      await prepared.adapter.close(prepared.opened.value, "restart");
+    if (prepared?.opened.kind === "ok") await prepared.opened.value.close("restart");
     return failed("invalidState", "Project directory or instance changed");
   }
   const previous = savedBinding(store, thread.id);
-  if (previous && previous.context !== bindingContext(selection)) {
-    if (prepared?.opened.kind === "ok")
-      await prepared.adapter.close(prepared.opened.value, "restart");
-    return failed("invalidState", "Saved Codex account, history or directory changed");
+  if (
+    previous &&
+    (previous.family !== reg.family ||
+      previous.instanceId !== reg.instanceId ||
+      previous.context !== selection.probe.bindingContext)
+  ) {
+    if (prepared?.opened.kind === "ok") await prepared.opened.value.close("restart");
+    return failed("invalidState", "Saved executor account, history or directory changed");
   }
   const legacy = previous ? null : latestFrozenSession(store, initial);
   const saved = previous?.nativeSessionId ?? legacy?.nativeSessionId ?? null;
-  if (legacy && (legacy.family !== "codex" || legacy.instanceId !== instance.instanceId))
+  if (legacy && (legacy.family !== reg.family || legacy.instanceId !== instance.instanceId))
     return failed("invalidState", "Saved executor changed");
-  const { adapter, opened } =
+  const { opened } =
     prepared ??
     (await resumeBinding(selection, saved, previous?.epoch ?? legacy?.epoch ?? 0, attemptId));
   if (opened.kind === "rejected") return failed(opened.reason, opened.message);
   const session = opened.value;
-  const todos = bindTodoSession(
-    store.todos,
-    initial,
-    session,
-    adapter,
-    selection.probe.declaration,
-    (key) => !session.handle.lost && !session.handle.closed && session.handle.callbacks.has(key),
-  );
-  let closing: ReturnType<typeof adapter.close> | undefined;
+  const todos = session.todos(store.todos, initial, selection.probe.declaration);
+  let closing: ReturnType<typeof session.close> | undefined;
   const release = () => {
-    closing ??= adapter.close(session, "shutdown");
+    closing ??= session.close("shutdown");
     void closing.catch(() => {});
   };
   signal.addEventListener("abort", release, { once: true });
@@ -266,16 +233,16 @@ export async function dispatchCodex(
     if (support.kind !== "native") return failed("unsupported", null);
     const nextBinding = {
       ...binding,
-      family: "codex" as const,
+      family: reg.family,
       nativeSessionId: sessionId,
-      context: bindingContext(selection),
+      context: selection.probe.bindingContext,
     };
     const claim = store.db.transaction(() => {
       if (!Bun.deepEquals(savedBinding(store, thread.id), previous))
         return { kind: "rejected" } as const;
       const claim = claimNext(store, thread.id, delivery, selection.probe.declaration.input);
       if (claim.kind === "ok" && !replaceBinding(store, previous, nextBinding, legacy?.epoch))
-        throw Error("Codex binding changed");
+        throw Error("executor binding changed");
       return claim;
     })();
     if (claim.kind === "rejected") return;
@@ -283,12 +250,11 @@ export async function dispatchCodex(
     signal.throwIfAborted();
     if (!isCurrent() || store.directory(thread) !== cwd)
       return failed("invalidState", "Directory changed before delivery");
-    const events = adapter.events(session, null)[Symbol.asyncIterator]();
+    const events = session.events()[Symbol.asyncIterator]();
     const first = events.next();
     void first.catch(() => {});
-    const written = await adapter.invoke(
-      session,
-      { ...instance, capabilityVersion: snapshot.version, capability: "submitTextInput", support },
+    const written = await session.invoke(
+      { capabilityVersion: snapshot.version, support },
       { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: claim.value.input },
     );
     if (written.kind === "rejected") return failed(written.reason, written.message);
@@ -321,7 +287,7 @@ export async function dispatchCodex(
         p.attemptId !== attemptId ||
         ("deliveryId" in p && p.deliveryId !== deliveryId)
       )
-        throw new Error("Foreign Codex event");
+        throw new Error("Foreign executor event");
       switch (p.kind) {
         case "deliveryReceived":
           if (p.receipt.kind === "input")
@@ -345,27 +311,15 @@ export async function dispatchCodex(
               root: p.nativeRootTurnId,
               interrupt: async (id) =>
                 (
-                  await adapter.invoke(
-                    session,
-                    {
-                      ...instance,
-                      capability: "stopRound",
-                      capabilityVersion: snapshot.version,
-                      support: stopSupport,
-                    },
+                  await session.invoke(
+                    { capabilityVersion: snapshot.version, support: stopSupport },
                     { kind: "stop", capability: "stopRound", deliveryId: id, attemptId },
                   )
                 ).kind === "ok",
               inspect: async () => {
                 if (readSupport.kind === "native")
-                  await adapter.invoke(
-                    session,
-                    {
-                      ...instance,
-                      capability: "readHistory",
-                      capabilityVersion: snapshot.version,
-                      support: readSupport,
-                    },
+                  await session.invoke(
+                    { capabilityVersion: snapshot.version, support: readSupport },
                     {
                       kind: "nativeAction",
                       capability: "readHistory",
@@ -380,14 +334,8 @@ export async function dispatchCodex(
           if (steer.support.kind === "native" && steer.accepts.includes("text")) {
             const support = steer.support;
             steers.set(attemptId, async (input, id) => {
-              const submission = await adapter.invoke(
-                session,
-                {
-                  ...instance,
-                  capability: "steerCurrentRound",
-                  capabilityVersion: snapshot.version,
-                  support,
-                },
+              const submission = await session.invoke(
+                { capabilityVersion: snapshot.version, support },
                 {
                   kind: "steer",
                   capability: "steerCurrentRound",
@@ -412,46 +360,16 @@ export async function dispatchCodex(
               );
             });
           }
-          emit({
-            kind: "round.started",
-            ...ids,
-            nativeSessionId: sessionId,
-            nativeRootTurnId: p.nativeRootTurnId,
-            startedAt: p.at,
-            selectedMode: snapshot.permission.selected,
-            effectiveMode: snapshot.permission.selected,
-            effectivePolicy: session.handle.policy,
-            supportedModes: [snapshot.permission.selected],
-            enforcement: "native",
-          });
+          const update = session.view.update?.(p, ids);
+          if (update) emit(update);
           break;
         }
         case "toolActivity": {
-          const callId = p.callId;
           const activity = recordAdapterActivity(store.sync, binding, roundId, event, root);
           if (activity === "conflict") throw Error("Conflicting tool event");
           if (activity === "unchanged") break;
-          if (p.phase === "started")
-            emit({
-              kind: "tool.started",
-              ...ids,
-              callId,
-              ...v.parse(v.object({ command: v.string() }), p.input),
-            });
-          else if (p.phase === "progress")
-            emit({
-              kind: "tool.output",
-              ...ids,
-              callId,
-              ...v.parse(v.object({ text: v.string() }), p.output),
-            });
-          else {
-            const o = v.parse(
-              v.object({ text: v.nullable(v.string()), exitCode: v.nullable(v.number()) }),
-              p.output,
-            );
-            emit({ kind: "tool.ended", ...ids, callId, output: o.text, exitCode: o.exitCode });
-          }
+          const update = session.view.update?.(p, ids);
+          if (update) emit(update);
           break;
         }
         case "contentDelta":
@@ -464,11 +382,6 @@ export async function dispatchCodex(
           break;
 
         case "roundEnded": {
-          if (
-            p.endTimeEvidence.source !== "executorReported" ||
-            p.endedAt !== p.endTimeEvidence.executorEndedAt
-          )
-            throw new Error("Missing Codex end boundary");
           const root = { id: p.nativeRootTurnId, sessionId, beganAt: null };
           store.db.transaction(() => {
             if (p.outcome.reason === "failed" && p.outcome.failure.kind === "usageLimit")
@@ -509,21 +422,18 @@ export async function dispatchCodex(
       }
       next = await events.next();
     }
-    throw new Error("Codex session ended before its root");
+    throw new Error("executor session ended before its root");
   } catch {
-    const child = session.handle.rpc.child;
-    const exited = child.exitCode !== null || child.signalCode !== null;
+    const interrupted = session.view.interrupted?.();
     failed(
-      exited ? "unexpectedExit" : "unsafeToRetry",
-      exited
-        ? "Codex process exited before a verified root end"
-        : "Codex delivery outcome could not be confirmed",
+      interrupted?.reason ?? "unsafeToRetry",
+      interrupted?.message ?? "Executor delivery outcome could not be confirmed",
     );
   } finally {
     stops.endpoints.delete(attemptId);
     steers.delete(attemptId);
     todos.close();
     signal.removeEventListener("abort", release);
-    await (closing ?? adapter.close(session, "finished"));
+    await (closing ?? session.close("finished"));
   }
 }
