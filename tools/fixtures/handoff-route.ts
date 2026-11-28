@@ -27,7 +27,7 @@ export async function handoffRoute(
         return;
       }
       try {
-        const response = await fetch(new URL(req.url!, base));
+        const response = await fetch(new URL(req.url ?? "/", base));
         res.writeHead(response.status, {
           "Content-Type": response.headers.get("content-type") ?? "text/plain",
         });

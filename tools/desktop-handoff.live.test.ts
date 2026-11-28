@@ -1,3 +1,5 @@
+import type { ThreadCache } from "../packages/client-runtime/src";
+import type { InstalledThread } from "../packages/client-runtime/hosts/native-thread";
 import { beforeAll, afterAll, describe, test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -149,7 +151,8 @@ async function phoneHead(page: Page, condition: PhoneCondition = {}) {
             status.installed.through !== status.acknowledged.through
           )
             return;
-          const rows = Object.values(t.cache.rows).flatMap((r: any) => (r.row ? [r.row] : []));
+          const cache: ThreadCache = t.cache;
+          const rows = Object.values(cache.rows).flatMap((r) => (r.row ? [r.row] : []));
           if (condition.through && status.acknowledged.through !== condition.through) return;
           if (
             condition.message &&
@@ -289,7 +292,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     expect(head.head.scope).toEqual({ kind: "thread", threadId: f.args.threadId });
     expect(head.permissions).toEqual(expect.arrayContaining(["owner.decide", "thread.reply"]));
     expect(
-      new Set([phoneDevice, desktop!.deviceId, (await cli.at(() => true)).deviceId]).size,
+      new Set([phoneDevice, f.desktop.deviceId, (await cli.at(() => true)).deviceId]).size,
     ).toBe(3);
     expect(f.host.events.items.filter((e) => e.event === "interrupt-received")).toHaveLength(0);
   }, 45000);
@@ -298,7 +301,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     await phone.evaluate(async (path) => (await import(path)).pageThread.disconnect(), modulePath);
     const cached = await phone.evaluate(
       async (path) =>
-        Object.values((await import(path)).pageThread.cache.scopes).map(
+        Object.values(((await import(path)).pageThread.cache as ThreadCache).scopes).map(
           (s: any) => s.cursor.through,
         ),
       modulePath,
@@ -326,9 +329,9 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     );
     expect(reply.messageId).toBe(message);
     expect(reply.epoch).not.toBe(lost.epoch);
-    const contains = (r: Awaited<ReturnType<typeof desktopNonNullRead>>) =>
+    const contains = (r: InstalledThread) =>
       r.rows.some((x) => x.objectType === "message" && x.value.id === message);
-    await Promise.all([phoneHead(phone, { message }), cli.at(contains), desktop!.at(contains)]);
+    await Promise.all([phoneHead(phone, { message }), cli.at(contains), f.desktop.at(contains)]);
     await phone.getByRole("status").filter({ hasText: "Delivered to thread" }).waitFor();
     expect(
       await phone.evaluate(
@@ -339,9 +342,6 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     ).toBe(message);
     await f.host.events.untilDispatch((e) => e.event === "turn" && e.text === "question");
   }, 60000);
-  function desktopNonNullRead() {
-    return f.desktop.read();
-  }
   test("handoff 3. CLI stays subscribed through the answer and approval", async () => {
     const turn = await f.host.events.until((e) => e.event === "turn" && e.text === "question");
     const submitted = async (kind: "question" | "approval") => {
@@ -399,16 +399,16 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
       kind: "question",
       answers: [{ questionKey: "color", answer: "blue" }],
     });
-    const last = await desktop!.at(
+    const last = await f.desktop.at(
       (r) =>
         r.answers.some((a) => a.todoRequestId === question.todoRequestId) &&
         handed(r.rows, question.todoRequestId),
     );
     expect(last.answers).toContainEqual(question);
-    desktopMethods.push(...(await desktop!.methods()));
-    await desktop!.closeViewer();
-    await desktop!.quit();
-    missedFrom = f.desktop.records.items.at(-1)!.head.through;
+    desktopMethods.push(...(await f.desktop.methods()));
+    await f.desktop.closeViewer();
+    await f.desktop.quit();
+    missedFrom = (f.desktop.records.items.at(-1) ?? last).head.through;
     desktop = undefined;
     approval = await submitted("approval");
     expect(approval.todoRequestId).not.toBe(question.todoRequestId);
@@ -420,7 +420,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     expect(desktop.first.after?.through).toBe(missedFrom);
     expect(desktop.first.connectionId).not.toBe(firstEpoch);
     expect(desktop.deviceId).toBe(f.registered.deviceId);
-    const check = (r: Awaited<ReturnType<typeof desktopNonNullRead>>) =>
+    const check = (r: InstalledThread) =>
       r.answers.some((a) => a.todoRequestId === approval.todoRequestId) &&
       handed(r.rows, approval.todoRequestId);
     const reader = await desktop.at(check);

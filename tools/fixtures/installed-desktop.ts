@@ -68,7 +68,7 @@ export async function launchInstalledDesktop(input: {
   let quitting: Promise<void> | undefined,
     viewerClosed = false;
   function quit() {
-    return (quitting ??= (async () => {
+    quitting ??= (async () => {
       if (
         (!viewerClosed || process.platform === "darwin") &&
         processHandle.exitCode === null &&
@@ -83,7 +83,8 @@ export async function launchInstalledDesktop(input: {
         });
       }
       await within(exit, 10000, "Electron exit");
-    })());
+    })();
+    return quitting;
   }
   try {
     const page = await app.firstWindow(),
