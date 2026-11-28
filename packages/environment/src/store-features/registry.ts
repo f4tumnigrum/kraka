@@ -1,4 +1,5 @@
 export { captures } from "./captures";
+export { context } from "./context";
 export { diff } from "./diff";
 export { forge } from "./forge";
 export { executors } from "./executors";

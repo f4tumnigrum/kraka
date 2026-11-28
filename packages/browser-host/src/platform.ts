@@ -52,15 +52,8 @@ export interface BrowserCredentials extends DeviceCredentialProvider {
     reply: Extract<DevicePairingResult, { kind: "pairing.completed" }>,
   ): Promise<"stored" | "alreadyRegistered" | "conflict" | "commitFailed">;
 }
-export type SocketEvent =
-  | { kind: "open" }
-  | { kind: "message"; data: string | Uint8Array }
-  | { kind: "error" }
-  | { kind: "close"; code: number; reason: string };
-export type BrowserSocketFactory = (
-  sameOriginUrl: string,
-  receive: (event: SocketEvent) => void,
-) => { send(data: string | Uint8Array): void; close(code: number, reason?: string): void };
+import type { BrowserSocketFactory } from "./control-socket";
+export type { BrowserSocketFactory, SocketEvent } from "./control-socket";
 export interface BrowserPlatform {
   page(): { origin: string; secureContext: boolean; subtleAvailable: boolean };
   verify(publicKey: string, bytes: Uint8Array, signature: Uint8Array): Promise<boolean>;

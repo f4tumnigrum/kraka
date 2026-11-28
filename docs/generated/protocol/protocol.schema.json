@@ -1975,6 +1975,22 @@
                                 "unknown"
                               ],
                               "type": "string"
+                            },
+                            "failure": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "message": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "message"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [
@@ -3921,6 +3937,30 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "sessionPolicy": {
+                      "type": "object",
+                      "properties": {
+                        "supportedModes": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/PermissionMode"
+                          }
+                        },
+                        "enforcement": {
+                          "enum": [
+                            "native",
+                            "adapter",
+                            "unknown"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "supportedModes",
+                        "enforcement"
+                      ],
+                      "additionalProperties": false
                     },
                     "variables": {
                       "type": "array",
@@ -14963,6 +15003,38 @@
     "Round": {
       "type": "object",
       "properties": {
+        "executor": {
+          "type": "object",
+          "properties": {
+            "nativeSessionId": {
+              "$ref": "#/$defs/NativeSessionId"
+            },
+            "selectedMode": {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "supportedModes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionMode"
+              }
+            },
+            "enforcement": {
+              "enum": [
+                "adapter",
+                "native",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "nativeSessionId",
+            "selectedMode",
+            "supportedModes",
+            "enforcement"
+          ],
+          "additionalProperties": false
+        },
         "id": {
           "$ref": "#/$defs/RoundId"
         },
@@ -15593,6 +15665,22 @@
                 "unknown"
               ],
               "type": "string"
+            },
+            "failure": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -21765,6 +21853,22 @@
                                                             "unknown"
                                                           ],
                                                           "type": "string"
+                                                        },
+                                                        "failure": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "type": "string"
+                                                            },
+                                                            "message": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "message"
+                                                          ],
+                                                          "additionalProperties": false
                                                         }
                                                       },
                                                       "required": [
@@ -22675,6 +22779,22 @@
                                                               "unknown"
                                                             ],
                                                             "type": "string"
+                                                          },
+                                                          "failure": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "type": "string"
+                                                              },
+                                                              "message": {
+                                                                "type": "string"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "message"
+                                                            ],
+                                                            "additionalProperties": false
                                                           }
                                                         },
                                                         "required": [
@@ -29774,6 +29894,12 @@
                         }
                       ]
                     },
+                    "args": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "endpoint": {
                       "anyOf": [
                         {
@@ -36213,6 +36339,9 @@
             },
             "instanceId": {
               "$ref": "#/$defs/ExecutorInstanceId"
+            },
+            "permission": {
+              "$ref": "#/$defs/PermissionMode"
             },
             "model": {
               "type": "object",

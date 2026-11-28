@@ -83,3 +83,4 @@ export { runWorktreeWorker } from "./worktree-worker";
 export { worktreeWorkerCommand } from "./worktree-worker";
 export * from "./worktrees";
 export * from "./writer";
+export { turnContent } from "./turn-content";
