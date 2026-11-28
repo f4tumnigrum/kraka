@@ -155,7 +155,7 @@ async function openDurableWriter<H extends object>(
   mark("writerLock");
   if (lock.kind !== "writer") return lock;
   let store: FirstSendStore | undefined;
-  let auth: Awaited<ReturnType<typeof openAccessHost>> | undefined;
+  let ownedAccess: Awaited<ReturnType<typeof openAccessHost>> | undefined;
   try {
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease, replay?.recovery);
@@ -184,7 +184,8 @@ async function openDurableWriter<H extends object>(
     };
     markStartupDetail("owner.key");
     mark("owner");
-    const authHost = lifecycle?.accessHost ?? (auth = await openAccessHost(stateDir));
+    const authHost = lifecycle?.accessHost ?? (await openAccessHost(stateDir));
+    if (!lifecycle?.accessHost) ownedAccess = authHost;
     if (authHost.identity.id !== lock.lease.environmentId)
       throw Error("Access identity conflicts with durable writer");
     mark("access");
@@ -905,7 +906,7 @@ async function openDurableWriter<H extends object>(
           await codex.close();
         } finally {
           try {
-            auth?.close();
+            ownedAccess?.close();
             transaction.db.close(true);
           } finally {
             lock.close();
@@ -915,7 +916,7 @@ async function openDurableWriter<H extends object>(
     };
   } catch (e) {
     try {
-      auth?.close();
+      ownedAccess?.close();
       store?.db.close();
     } finally {
       lock.close();
