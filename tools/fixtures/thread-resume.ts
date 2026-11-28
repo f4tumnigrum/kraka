@@ -37,6 +37,7 @@ type Options = {
   captureReply?: (wire: import("@kraka/protocol").WireMessage) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
+  installedProtocol?: boolean;
   directoryDiff?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
   pageStaged?: (p: SubscriptionPage) => Promise<void> | void;
@@ -54,7 +55,10 @@ export async function connectReplica(
 ) {
   const observed = observation();
   const nonce = base64url(crypto.getRandomValues(new Uint8Array(32)));
-  const socket = new WebSocket(url.replace("/commands", "/ws") + "?nonce=" + nonce);
+  const socket = new WebSocket(
+    url.replace("/commands", "/ws") + "?nonce=" + nonce,
+    opts.installedProtocol ? "kraka.thread.v1" : [],
+  );
   socket.binaryType = "arraybuffer";
   const ready = Promise.withResolvers<ThreadReplica>(),
     closed = Promise.withResolvers<void>();

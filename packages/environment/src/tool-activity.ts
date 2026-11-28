@@ -279,17 +279,23 @@ export function recordAdapterActivity(
       epoch: event.epoch,
       ...p.observation,
     };
-    return journal.saveObservation(binding.threadId, source, (prior) => {
-      if (!prior) throw Error("Unknown observation source");
+    let refused: "wrongAttempt" | "idConflict" | undefined;
+    const changed = journal.saveObservation(binding.threadId, source, (prior) => {
+      if (!prior) {
+        refused = "wrongAttempt";
+        return null;
+      }
       const linked = promoteSessionObservation(prior, {
         kind: "attempt",
         source,
         attemptId: p.attemptId,
         relationship: p.relationship,
       });
-      if (linked.kind !== "ok") throw Error(linked.reason);
-      return linked.value;
+      if (linked.kind === "ok") return linked.value;
+      refused = linked.reason === "idConflict" ? "idConflict" : "wrongAttempt";
+      return prior;
     });
+    return refused ?? changed;
   }
   if (p.kind === "sessionObservation") {
     const { kind, sourceId, ...payload } = p;

@@ -273,7 +273,7 @@ test("Promotion preserves the observed timeline item", async () => {
     }
     const linkedPayload = proof.payload;
     const competing = v.parse(AttemptIdSchema, "foreign");
-    expect(() =>
+    expect(
       recordAdapterActivity(
         journal,
         { ...binding, attemptId: competing },
@@ -281,7 +281,7 @@ test("Promotion preserves the observed timeline item", async () => {
         { ...proof, payload: { ...linkedPayload, attemptId: competing } },
         null,
       ),
-    ).toThrow("idConflict");
+    ).toBe("idConflict");
     expect(rows()).toEqual([promoted]);
     await f.adapter.close(h.session, "restart");
     const reopened = await f.open(h.session.nativeSessionId);

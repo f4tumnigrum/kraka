@@ -101,7 +101,7 @@ export async function piFixture(exe: string, hold?: string) {
         setup: {
           workingDirectory: cwd,
           additionalDirectories: [],
-          environment: launch.env,
+          environment: {},
           model: { id: "sample-provider/sample-chat", options: {} },
           permission,
         },

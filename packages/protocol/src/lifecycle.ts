@@ -1,3 +1,4 @@
+import { PermissionModeSchema } from "./access";
 import * as v from "valibot";
 import {
   AttemptIdSchema,
@@ -25,6 +26,14 @@ export const NativeRootSchema = v.strictObject({
   sessionId: NativeSessionIdSchema,
   id: NativeRootTurnIdSchema,
   beganAt: v.nullable(time),
+  toolPolicy: v.optional(
+    v.strictObject({
+      selectedMode: PermissionModeSchema,
+      effectiveMode: PermissionModeSchema,
+      supportedModes: v.array(PermissionModeSchema),
+      enforcement: v.literal("adapter"),
+    }),
+  ),
 });
 /** These are independently observed UTC Unix milliseconds. Unknown evidence is reserved for older recordings. */
 export const RoundEndTimeEvidenceSchema = v.variant("source", [

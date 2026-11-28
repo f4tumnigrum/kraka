@@ -130,7 +130,10 @@ export class PiSessionHandle {
           deadline: native.timeout === undefined ? null : frame.observedAt + native.timeout,
         });
       }
-      if (payload.kind === "roundEnded") this.callbacks.clear();
+      if (payload.kind === "roundEnded") {
+        this.callbacks.clear();
+        this.toolSources.clear();
+      }
       const id = this.emit(frame.position, i + 1, payload);
       if (payload.kind === "sessionObservation" && "toolCallId" in native) {
         const sources = this.toolSources.get(native.toolCallId) ?? [];
@@ -182,7 +185,6 @@ export class PiSessionHandle {
               relationship: { kind: "item", nativeItemId: item.id },
             });
           }
-          this.toolSources.delete(id);
         }
       })
       .catch(() => {});

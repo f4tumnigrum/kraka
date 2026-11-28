@@ -11388,6 +11388,33 @@
               "type": "null"
             }
           ]
+        },
+        "toolPolicy": {
+          "type": "object",
+          "properties": {
+            "selectedMode": {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "effectiveMode": {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "supportedModes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionMode"
+              }
+            },
+            "enforcement": {
+              "const": "adapter"
+            }
+          },
+          "required": [
+            "selectedMode",
+            "effectiveMode",
+            "supportedModes",
+            "enforcement"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -21132,6 +21159,33 @@
                                                                 }
                                                               ],
                                                               "default": null
+                                                            },
+                                                            "toolPolicy": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "selectedMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "effectiveMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "supportedModes": {
+                                                                  "type": "array",
+                                                                  "items": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  }
+                                                                },
+                                                                "enforcement": {
+                                                                  "const": "adapter"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "selectedMode",
+                                                                "effectiveMode",
+                                                                "supportedModes",
+                                                                "enforcement"
+                                                              ],
+                                                              "additionalProperties": false
                                                             }
                                                           },
                                                           "required": [
@@ -21209,6 +21263,33 @@
                                                                         }
                                                                       ],
                                                                       "default": null
+                                                                    },
+                                                                    "toolPolicy": {
+                                                                      "type": "object",
+                                                                      "properties": {
+                                                                        "selectedMode": {
+                                                                          "$ref": "#/$defs/PermissionMode"
+                                                                        },
+                                                                        "effectiveMode": {
+                                                                          "$ref": "#/$defs/PermissionMode"
+                                                                        },
+                                                                        "supportedModes": {
+                                                                          "type": "array",
+                                                                          "items": {
+                                                                            "$ref": "#/$defs/PermissionMode"
+                                                                          }
+                                                                        },
+                                                                        "enforcement": {
+                                                                          "const": "adapter"
+                                                                        }
+                                                                      },
+                                                                      "required": [
+                                                                        "selectedMode",
+                                                                        "effectiveMode",
+                                                                        "supportedModes",
+                                                                        "enforcement"
+                                                                      ],
+                                                                      "additionalProperties": false
                                                                     }
                                                                   },
                                                                   "required": [
@@ -21275,6 +21356,33 @@
                                                                 }
                                                               ],
                                                               "default": null
+                                                            },
+                                                            "toolPolicy": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "selectedMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "effectiveMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "supportedModes": {
+                                                                  "type": "array",
+                                                                  "items": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  }
+                                                                },
+                                                                "enforcement": {
+                                                                  "const": "adapter"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "selectedMode",
+                                                                "effectiveMode",
+                                                                "supportedModes",
+                                                                "enforcement"
+                                                              ],
+                                                              "additionalProperties": false
                                                             }
                                                           },
                                                           "required": [
@@ -21351,6 +21459,33 @@
                                                                 }
                                                               ],
                                                               "default": null
+                                                            },
+                                                            "toolPolicy": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "selectedMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "effectiveMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "supportedModes": {
+                                                                  "type": "array",
+                                                                  "items": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  }
+                                                                },
+                                                                "enforcement": {
+                                                                  "const": "adapter"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "selectedMode",
+                                                                "effectiveMode",
+                                                                "supportedModes",
+                                                                "enforcement"
+                                                              ],
+                                                              "additionalProperties": false
                                                             }
                                                           },
                                                           "required": [
@@ -21427,6 +21562,33 @@
                                                                 }
                                                               ],
                                                               "default": null
+                                                            },
+                                                            "toolPolicy": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "selectedMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "effectiveMode": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                },
+                                                                "supportedModes": {
+                                                                  "type": "array",
+                                                                  "items": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  }
+                                                                },
+                                                                "enforcement": {
+                                                                  "const": "adapter"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "selectedMode",
+                                                                "effectiveMode",
+                                                                "supportedModes",
+                                                                "enforcement"
+                                                              ],
+                                                              "additionalProperties": false
                                                             }
                                                           },
                                                           "required": [
@@ -22166,6 +22328,33 @@
                                                                   }
                                                                 ],
                                                                 "default": null
+                                                              },
+                                                              "toolPolicy": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "selectedMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "effectiveMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "supportedModes": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                      "$ref": "#/$defs/PermissionMode"
+                                                                    }
+                                                                  },
+                                                                  "enforcement": {
+                                                                    "const": "adapter"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "selectedMode",
+                                                                  "effectiveMode",
+                                                                  "supportedModes",
+                                                                  "enforcement"
+                                                                ],
+                                                                "additionalProperties": false
                                                               }
                                                             },
                                                             "required": [
@@ -22243,6 +22432,33 @@
                                                                           }
                                                                         ],
                                                                         "default": null
+                                                                      },
+                                                                      "toolPolicy": {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "selectedMode": {
+                                                                            "$ref": "#/$defs/PermissionMode"
+                                                                          },
+                                                                          "effectiveMode": {
+                                                                            "$ref": "#/$defs/PermissionMode"
+                                                                          },
+                                                                          "supportedModes": {
+                                                                            "type": "array",
+                                                                            "items": {
+                                                                              "$ref": "#/$defs/PermissionMode"
+                                                                            }
+                                                                          },
+                                                                          "enforcement": {
+                                                                            "const": "adapter"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "selectedMode",
+                                                                          "effectiveMode",
+                                                                          "supportedModes",
+                                                                          "enforcement"
+                                                                        ],
+                                                                        "additionalProperties": false
                                                                       }
                                                                     },
                                                                     "required": [
@@ -22309,6 +22525,33 @@
                                                                   }
                                                                 ],
                                                                 "default": null
+                                                              },
+                                                              "toolPolicy": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "selectedMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "effectiveMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "supportedModes": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                      "$ref": "#/$defs/PermissionMode"
+                                                                    }
+                                                                  },
+                                                                  "enforcement": {
+                                                                    "const": "adapter"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "selectedMode",
+                                                                  "effectiveMode",
+                                                                  "supportedModes",
+                                                                  "enforcement"
+                                                                ],
+                                                                "additionalProperties": false
                                                               }
                                                             },
                                                             "required": [
@@ -22385,6 +22628,33 @@
                                                                   }
                                                                 ],
                                                                 "default": null
+                                                              },
+                                                              "toolPolicy": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "selectedMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "effectiveMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "supportedModes": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                      "$ref": "#/$defs/PermissionMode"
+                                                                    }
+                                                                  },
+                                                                  "enforcement": {
+                                                                    "const": "adapter"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "selectedMode",
+                                                                  "effectiveMode",
+                                                                  "supportedModes",
+                                                                  "enforcement"
+                                                                ],
+                                                                "additionalProperties": false
                                                               }
                                                             },
                                                             "required": [
@@ -22461,6 +22731,33 @@
                                                                   }
                                                                 ],
                                                                 "default": null
+                                                              },
+                                                              "toolPolicy": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "selectedMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "effectiveMode": {
+                                                                    "$ref": "#/$defs/PermissionMode"
+                                                                  },
+                                                                  "supportedModes": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                      "$ref": "#/$defs/PermissionMode"
+                                                                    }
+                                                                  },
+                                                                  "enforcement": {
+                                                                    "const": "adapter"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "selectedMode",
+                                                                  "effectiveMode",
+                                                                  "supportedModes",
+                                                                  "enforcement"
+                                                                ],
+                                                                "additionalProperties": false
                                                               }
                                                             },
                                                             "required": [

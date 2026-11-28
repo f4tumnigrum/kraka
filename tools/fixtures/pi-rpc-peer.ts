@@ -4,10 +4,11 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import * as v from "valibot";
@@ -46,12 +47,21 @@ const dir = option("--session-dir");
 if (!dir || !process.env.PI_CODING_AGENT_DIR) throw Error("Missing isolated Pi directories");
 mkdirSync(dir, { recursive: true });
 const resume = option("--session");
-const sessionId = resume ?? crypto.randomUUID();
-const sessionFile = join(
-  dir,
-  readdirSync(dir).find((f) => resume && f.endsWith(`_${resume}.jsonl`)) ??
-    `fixture_${sessionId}.jsonl`,
-);
+const sessionId =
+  resume && isAbsolute(resume)
+    ? v.parse(
+        v.object({ id: v.pipe(v.string(), v.uuid()) }),
+        JSON.parse(readFileSync(resume, "utf8").split("\n")[0] ?? ""),
+      ).id
+    : (resume ?? crypto.randomUUID());
+const sessionFile =
+  resume && isAbsolute(resume)
+    ? resume
+    : join(
+        dir,
+        readdirSync(dir).find((f) => resume && f.endsWith(`_${resume}.jsonl`)) ??
+          `fixture_${sessionId}.jsonl`,
+      );
 if (resume && !existsSync(sessionFile)) throw Error("Missing fixture session");
 const model = { provider: "sample-provider", id: "sample-chat", name: "Sample Chat" };
 const commands: { name: string; source: string }[] = [];
@@ -86,6 +96,7 @@ const recording = errorRecording
   .map((line) => JSON.parse(line))
   .filter((row) => row.direction === "fromExecutor")
   .map((row) => row.frame);
+let historyRead = 0;
 let scenario = "",
   questions = 0;
 const approval: { resolve?: (allow: boolean) => void } = {};
@@ -208,22 +219,22 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
         await ui("question-2", "input", "Next answer");
       }
       break;
-    case "get_entries":
-      await signal("historyRead");
-      reply({
-        entries: [
-          {
-            type: "message",
-            id: "assistant-native-8",
-            parentId: null,
-            message: assistant("toolUse", [{ type: "toolCall", id: "call-7" }]),
-          },
-        ],
-        leafId: "assistant-native-8",
-      });
+    case "get_entries": {
+      historyRead++;
+      const entry = historyRead === 3 ? "conflicting-native-item" : "assistant-native-8";
+      await signal(historyRead === 1 ? "historyRead" : `historyReplay${historyRead}`);
+      const message = assistant("toolUse", [{ type: "toolCall", id: "call-7" }]);
+      reply({ entries: [{ type: "message", id: entry, parentId: null, message }], leafId: entry });
+      if (historyRead < 3) frame({ type: "message_end", message });
+      else frame({ type: "tool_execution_start", toolCallId: "proofs-drained" });
       break;
+    }
     case "abort":
       reply({});
+      if (scenario === "observe") {
+        for (let i = 0; i < 42; i++)
+          frame({ type: "tool_execution_start", toolCallId: `older-window-${i}` });
+      }
       frame({ type: "agent_settled", aborted: true });
       break;
     default:

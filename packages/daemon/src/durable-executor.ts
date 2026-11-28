@@ -258,6 +258,13 @@ export async function dispatchExecutor(
       { kind: "deliverInput", capability: "submitTextInput", ...ticket, input: claim.value.input },
     );
     if (written.kind === "rejected") return failed(written.reason, written.message);
+    if (
+      written.value.kind === "service" &&
+      Bun.deepEquals(written.value.result, { disposition: "handled" })
+    ) {
+      report({ kind: "handled", ...ticket, at: Date.now() });
+      return;
+    }
     if (written.value.kind !== "written" || written.value.deliveryId !== deliveryId)
       throw new Error("Unmatched delivery");
     report({ kind: "written", ...ticket, at: Date.now() });
@@ -272,11 +279,34 @@ export async function dispatchExecutor(
         matchesAdapterEvent(binding, event)
       )
         store.sync.observeQuota(initial, { resetAt: p.failure.resetAt });
+      if (
+        p.kind === "sessionLost" &&
+        p.observedAt !== undefined &&
+        matchesAdapterEvent(binding, event) &&
+        (p.failure.kind === "unexpectedExit" ||
+          p.failure.kind === "transportError" ||
+          p.failure.kind === "protocolError")
+      ) {
+        if (root) {
+          report({ kind: "sessionLost", ...ticket, at: p.observedAt, failure: p.failure });
+          emit({
+            kind: "executor.failed",
+            ...ids,
+            reason: p.failure.kind,
+            message: "Executor session lost",
+          });
+        } else failed("unsafeToRetry", "Executor session lost before root evidence");
+        return;
+      }
       if (todos.event(event)) {
         next = await events.next();
         continue;
       }
-      if (p.kind === "sessionObservation" || p.kind === "fileChanged") {
+      if (
+        p.kind === "sessionObservation" ||
+        p.kind === "sessionObservationLinked" ||
+        p.kind === "fileChanged"
+      ) {
         recordAdapterActivity(store.sync, binding, roundId, event, root);
         next = await events.next();
         continue;
@@ -299,10 +329,22 @@ export async function dispatchExecutor(
           break;
         case "roundStarted": {
           root = p.nativeRootTurnId;
+          const update = session.view.update?.(p, ids);
+          const policy =
+            update?.kind === "round.started" && update.enforcement === "adapter"
+              ? {
+                  toolPolicy: {
+                    selectedMode: update.selectedMode,
+                    effectiveMode: update.effectiveMode,
+                    supportedModes: update.supportedModes,
+                    enforcement: update.enforcement,
+                  },
+                }
+              : {};
           report({
             kind: "rootStarted",
             ...ticket,
-            root: { id: p.nativeRootTurnId, sessionId, beganAt: p.at },
+            root: { id: p.nativeRootTurnId, sessionId, beganAt: p.at, ...policy },
           });
           const stopSupport = snapshot.matrix.stopRound,
             readSupport = snapshot.matrix.readHistory;
@@ -360,7 +402,6 @@ export async function dispatchExecutor(
               );
             });
           }
-          const update = session.view.update?.(p, ids);
           if (update) emit(update);
           break;
         }

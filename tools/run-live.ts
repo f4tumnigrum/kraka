@@ -23,7 +23,11 @@ for (const path of suites) {
   const declared = /^\/\/ Live cases (\d+); required groups (\[[^\n]*\])$/m.exec(source);
   if (!declared) throw Error("Missing live case and group declaration in " + path);
   const required = v.parse(v.array(v.string()), JSON.parse(declared[2] ?? ""));
-  const child = Bun.spawn([process.execPath, "test", "./" + path], {
+  const name = path.replaceAll("\\", "/").split("/").at(-1)?.split(".")[0];
+  const xml = join(logDirectory, name + ".xml");
+  const manifest = /^\/\/ Live JUnit (.+)$/m.exec(source)?.[1];
+  const args = manifest ? ["--reporter=junit", "--reporter-outfile=" + xml] : [];
+  const child = Bun.spawn([process.execPath, "test", ...args, "./" + path], {
     stdout: "pipe",
     stderr: "pipe",
     ...(Object.keys(env).length && { env: { ...process.env, ...env } }),
@@ -34,7 +38,6 @@ for (const path of suites) {
     new Response(child.stderr).text(),
   ]);
   const output = stdout + stderr;
-  const name = path.replaceAll("\\", "/").split("/").at(-1)?.split(".")[0];
   await Bun.write(join(logDirectory, name + ".log"), output);
   process.stdout.write(output);
   if (code !== 0) throw Error(path + " failed with exit " + code);
@@ -47,6 +50,21 @@ for (const path of suites) {
   for (const group of required)
     if (!passed.some((title) => title.startsWith(group + " ")))
       throw Error(path + " missing passing group " + group);
+  if (manifest) {
+    const expected = v.parse(v.array(v.string()), JSON.parse(manifest)).sort();
+    const report = await Bun.file(xml).text();
+    const names = Array.from(
+      report.matchAll(/<testcase name="([^"]+)"/g),
+      (match) => match[1],
+    ).sort();
+    if (
+      expected.length !== Number(declared[1]) ||
+      new Set(expected).size !== expected.length ||
+      !Bun.deepEquals(names, expected) ||
+      /<(failure|error|skipped)\b/.test(report)
+    )
+      throw Error("Incomplete JUnit cases in " + xml);
+  }
   cases += passed.length;
   groups += required.length;
 }

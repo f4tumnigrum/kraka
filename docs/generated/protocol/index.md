@@ -12131,6 +12131,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
           "type": "null"
         }
       ]
+    },
+    "toolPolicy": {
+      "type": "object",
+      "properties": {
+        "selectedMode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "effectiveMode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "supportedModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionMode"
+          }
+        },
+        "enforcement": {
+          "const": "adapter"
+        }
+      },
+      "required": [
+        "selectedMode",
+        "effectiveMode",
+        "supportedModes",
+        "enforcement"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
@@ -22385,6 +22412,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                             }
                                                           ],
                                                           "default": null
+                                                        },
+                                                        "toolPolicy": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "selectedMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "effectiveMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "supportedModes": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              }
+                                                            },
+                                                            "enforcement": {
+                                                              "const": "adapter"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "selectedMode",
+                                                            "effectiveMode",
+                                                            "supportedModes",
+                                                            "enforcement"
+                                                          ],
+                                                          "additionalProperties": false
                                                         }
                                                       },
                                                       "required": [
@@ -22462,6 +22516,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                                     }
                                                                   ],
                                                                   "default": null
+                                                                },
+                                                                "toolPolicy": {
+                                                                  "type": "object",
+                                                                  "properties": {
+                                                                    "selectedMode": {
+                                                                      "$ref": "#/$defs/PermissionMode"
+                                                                    },
+                                                                    "effectiveMode": {
+                                                                      "$ref": "#/$defs/PermissionMode"
+                                                                    },
+                                                                    "supportedModes": {
+                                                                      "type": "array",
+                                                                      "items": {
+                                                                        "$ref": "#/$defs/PermissionMode"
+                                                                      }
+                                                                    },
+                                                                    "enforcement": {
+                                                                      "const": "adapter"
+                                                                    }
+                                                                  },
+                                                                  "required": [
+                                                                    "selectedMode",
+                                                                    "effectiveMode",
+                                                                    "supportedModes",
+                                                                    "enforcement"
+                                                                  ],
+                                                                  "additionalProperties": false
                                                                 }
                                                               },
                                                               "required": [
@@ -22528,6 +22609,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                             }
                                                           ],
                                                           "default": null
+                                                        },
+                                                        "toolPolicy": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "selectedMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "effectiveMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "supportedModes": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              }
+                                                            },
+                                                            "enforcement": {
+                                                              "const": "adapter"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "selectedMode",
+                                                            "effectiveMode",
+                                                            "supportedModes",
+                                                            "enforcement"
+                                                          ],
+                                                          "additionalProperties": false
                                                         }
                                                       },
                                                       "required": [
@@ -22604,6 +22712,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                             }
                                                           ],
                                                           "default": null
+                                                        },
+                                                        "toolPolicy": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "selectedMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "effectiveMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "supportedModes": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              }
+                                                            },
+                                                            "enforcement": {
+                                                              "const": "adapter"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "selectedMode",
+                                                            "effectiveMode",
+                                                            "supportedModes",
+                                                            "enforcement"
+                                                          ],
+                                                          "additionalProperties": false
                                                         }
                                                       },
                                                       "required": [
@@ -22680,6 +22815,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                             }
                                                           ],
                                                           "default": null
+                                                        },
+                                                        "toolPolicy": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "selectedMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "effectiveMode": {
+                                                              "$ref": "#/$defs/PermissionMode"
+                                                            },
+                                                            "supportedModes": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              }
+                                                            },
+                                                            "enforcement": {
+                                                              "const": "adapter"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "selectedMode",
+                                                            "effectiveMode",
+                                                            "supportedModes",
+                                                            "enforcement"
+                                                          ],
+                                                          "additionalProperties": false
                                                         }
                                                       },
                                                       "required": [
@@ -23419,6 +23581,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                               }
                                                             ],
                                                             "default": null
+                                                          },
+                                                          "toolPolicy": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "selectedMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "effectiveMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "supportedModes": {
+                                                                "type": "array",
+                                                                "items": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                }
+                                                              },
+                                                              "enforcement": {
+                                                                "const": "adapter"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "selectedMode",
+                                                              "effectiveMode",
+                                                              "supportedModes",
+                                                              "enforcement"
+                                                            ],
+                                                            "additionalProperties": false
                                                           }
                                                         },
                                                         "required": [
@@ -23496,6 +23685,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                                       }
                                                                     ],
                                                                     "default": null
+                                                                  },
+                                                                  "toolPolicy": {
+                                                                    "type": "object",
+                                                                    "properties": {
+                                                                      "selectedMode": {
+                                                                        "$ref": "#/$defs/PermissionMode"
+                                                                      },
+                                                                      "effectiveMode": {
+                                                                        "$ref": "#/$defs/PermissionMode"
+                                                                      },
+                                                                      "supportedModes": {
+                                                                        "type": "array",
+                                                                        "items": {
+                                                                          "$ref": "#/$defs/PermissionMode"
+                                                                        }
+                                                                      },
+                                                                      "enforcement": {
+                                                                        "const": "adapter"
+                                                                      }
+                                                                    },
+                                                                    "required": [
+                                                                      "selectedMode",
+                                                                      "effectiveMode",
+                                                                      "supportedModes",
+                                                                      "enforcement"
+                                                                    ],
+                                                                    "additionalProperties": false
                                                                   }
                                                                 },
                                                                 "required": [
@@ -23562,6 +23778,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                               }
                                                             ],
                                                             "default": null
+                                                          },
+                                                          "toolPolicy": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "selectedMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "effectiveMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "supportedModes": {
+                                                                "type": "array",
+                                                                "items": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                }
+                                                              },
+                                                              "enforcement": {
+                                                                "const": "adapter"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "selectedMode",
+                                                              "effectiveMode",
+                                                              "supportedModes",
+                                                              "enforcement"
+                                                            ],
+                                                            "additionalProperties": false
                                                           }
                                                         },
                                                         "required": [
@@ -23638,6 +23881,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                               }
                                                             ],
                                                             "default": null
+                                                          },
+                                                          "toolPolicy": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "selectedMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "effectiveMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "supportedModes": {
+                                                                "type": "array",
+                                                                "items": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                }
+                                                              },
+                                                              "enforcement": {
+                                                                "const": "adapter"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "selectedMode",
+                                                              "effectiveMode",
+                                                              "supportedModes",
+                                                              "enforcement"
+                                                            ],
+                                                            "additionalProperties": false
                                                           }
                                                         },
                                                         "required": [
@@ -23714,6 +23984,33 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                               }
                                                             ],
                                                             "default": null
+                                                          },
+                                                          "toolPolicy": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "selectedMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "effectiveMode": {
+                                                                "$ref": "#/$defs/PermissionMode"
+                                                              },
+                                                              "supportedModes": {
+                                                                "type": "array",
+                                                                "items": {
+                                                                  "$ref": "#/$defs/PermissionMode"
+                                                                }
+                                                              },
+                                                              "enforcement": {
+                                                                "const": "adapter"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "selectedMode",
+                                                              "effectiveMode",
+                                                              "supportedModes",
+                                                              "enforcement"
+                                                            ],
+                                                            "additionalProperties": false
                                                           }
                                                         },
                                                         "required": [

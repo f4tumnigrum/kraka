@@ -26,7 +26,7 @@ const sessionHeader = v.object({
   id: v.pipe(v.string(), v.uuid()),
   cwd: v.string(),
 });
-async function verifyFile(file: string, id: string, launch: PiLaunch) {
+async function verifiedFile(file: string, launch: PiLaunch) {
   const path = await realpath(file);
   const child = relative(await realpath(launch.sessionDirectory), path);
   if (!child || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child))
@@ -38,8 +38,9 @@ async function verifyFile(file: string, id: string, launch: PiLaunch) {
     const end = buf.subarray(0, bytesRead).indexOf(10);
     if (end < 0) throw Error("Missing Pi session header");
     const header = v.parse(sessionHeader, JSON.parse(buf.toString("utf8", 0, end)));
-    if (header.id !== id || (await realpath(header.cwd)) !== (await realpath(launch.cwd)))
+    if ((await realpath(header.cwd)) !== (await realpath(launch.cwd)))
       throw Error("Pi session identity changed");
+    return { path, id: header.id };
   } finally {
     await fd.close();
   }
@@ -102,11 +103,15 @@ export async function openPiProcess(
       "--tools",
       "read,grep,find,ls,edit,write,bash",
     ];
+    const expectedFile =
+      target.kind === "session" && target.resume && isAbsolute(target.resume)
+        ? await verifiedFile(target.resume, launch)
+        : null;
     if (target.kind === "probe") args.push("--no-session");
     else if (target.resume !== null) {
-      if (!v.is(v.pipe(v.string(), v.uuid()), target.resume))
+      if (!expectedFile && !v.is(v.pipe(v.string(), v.uuid()), target.resume))
         throw Error("Expected full Pi session UUID");
-      args.push("--session", target.resume);
+      args.push("--session", expectedFile?.path ?? target.resume);
     } else {
       const split = target.model.indexOf("/");
       if (split < 1) throw Error("Expected provider/model");
@@ -127,10 +132,13 @@ export async function openPiProcess(
     if (target.kind === "session") {
       if (!state.model || `${state.model.provider}/${state.model.id}` !== target.model)
         throw Error("Pi model differs from selection");
-      if (target.resume && (target.resume !== state.sessionId || !state.sessionFile))
-        throw Error("Pi session changed");
-      if (target.resume && state.sessionFile)
-        await verifyFile(state.sessionFile, target.resume, launch);
+      if (target.resume) {
+        if (!state.sessionFile || state.sessionId !== (expectedFile?.id ?? target.resume))
+          throw Error("Pi session changed");
+        const actual = await verifiedFile(state.sessionFile, launch);
+        if (actual.id !== state.sessionId || (expectedFile && actual.path !== expectedFile.path))
+          throw Error("Pi session file changed");
+      }
     }
     return {
       rpc,

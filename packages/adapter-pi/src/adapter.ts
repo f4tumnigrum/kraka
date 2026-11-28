@@ -106,7 +106,7 @@ export function createPiAdapter(
         !probe.models?.models.some((m) => m.id === setup.model.id) ||
         Object.values(probe.declaration.readiness).some((l) => l.state !== "yes") ||
         !probe.declaration.permission.modes.includes(setup.permission.selected) ||
-        !Bun.deepEquals(setup.environment, launch.env)
+        Object.keys(setup.environment).length > 0
       )
         return reject("unsupported");
       try {
