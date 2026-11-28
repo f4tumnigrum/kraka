@@ -57,6 +57,11 @@ export interface IdentityPort {
     "version" | "environment" | "executors" | "description"
   >;
   request(device: IdentityDevice, request: SignedRequest): CommandReceipt | Promise<CommandReceipt>;
+  login?(
+    device: IdentityDevice,
+    request: import("./instance-login").LoginRequest,
+    session: import("./instance-login").LoginSession,
+  ): Promise<CommandReceipt>;
   access?: AccessStore;
   claimListener?: () => () => void;
   observed?: (event: {
@@ -90,6 +95,7 @@ type Peer = {
   session: SessionAuthorized | null;
   sequence: number;
   closed: boolean;
+  lifetime: AbortController;
   pendingBytes: number;
   work: Promise<void>;
   application: PairingPending | null;
@@ -139,6 +145,7 @@ export function listenIdentity(
   function close(p: Peer, code: number) {
     if (p.closed) return;
     p.closed = true;
+    p.lifetime.abort();
     p.challenge = null;
     p.subscriptions.clear();
     p.flow?.close();
@@ -399,9 +406,35 @@ export function listenIdentity(
         transportLimits: TRANSPORT_LIMITS,
       } satisfies SessionConfiguration);
     } else {
-      const pending = host.request(device, m);
+      const login =
+        m.method === "executor.startLogin" ||
+        m.method === "executor.readLogin" ||
+        m.method === "executor.cancelLogin"
+          ? m
+          : null;
+      const pending =
+        login && p.session && host.login
+          ? host.login(device, login, {
+              id: p.session.environmentSessionId,
+              owner: device.principal.ownerId,
+              signal: p.lifetime.signal,
+              active: () => !p.closed && !!current(p, m.signer),
+            })
+          : host.request(device, m);
       const receipt = pending instanceof Promise ? await pending : pending;
       if (p.closed || !current(p, m.signer) || receipt.commandId !== m.commandId) return;
+      if (
+        login &&
+        receipt.kind === "accepted" &&
+        !host.access?.ceiling(
+          device.principal.id,
+          { kind: "environment", environmentId: host.identity.id },
+          "settings.change",
+        )
+      ) {
+        send(p, { kind: "rejected", commandId: m.commandId, failure: { kind: "notFound" } });
+        return;
+      }
       if (receipt.kind === "accepted") {
         host.observed?.({
           kind: "accepted",
@@ -528,6 +561,7 @@ export function listenIdentity(
         session: null,
         sequence: 0,
         closed: false,
+        lifetime: new AbortController(),
         pendingBytes: 0,
         work: Promise.resolve(),
         application: null,
@@ -600,6 +634,7 @@ export function listenIdentity(
       });
       ws.on("close", () => {
         peer.closed = true;
+        peer.lifetime.abort();
         peer.subscriptions.clear();
         peer.flow?.close();
         void peer.work.finally(() => peers.delete(peer));
@@ -649,6 +684,7 @@ export function listenIdentity(
     async close() {
       const work = [...peers].map((p) => {
         p.closed = true;
+        p.lifetime.abort();
         p.socket.terminate();
         return p.work;
       });

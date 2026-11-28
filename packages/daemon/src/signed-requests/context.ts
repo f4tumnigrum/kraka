@@ -23,6 +23,12 @@ export type Handler<M extends Request["method"]> = (
 ) => CommandReceipt | null | void;
 export interface RequestContext {
   store: FirstSendStore;
+  executors: import("../executor-instances").ExecutorInstances;
+  startThread: (
+    actor: LocalActor,
+    req: Extract<SignedRequest, { method: "thread.start" }>,
+  ) => Promise<CommandReceipt>;
+  loginSession: import("../instance-login").LoginSession;
   host: Awaited<ReturnType<typeof openAccessHost>>;
   principal: LocalActor;
   deviceId: Extract<SessionAuthorized["signer"], { kind: "device" }>["deviceId"];

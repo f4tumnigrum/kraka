@@ -4,6 +4,7 @@ import { editQueue, input } from "./inputs";
 import { lifecycle, rename, roundControl } from "./threads";
 import { git, subscription } from "./subscriptions";
 import { todo } from "./todos";
+import { executor } from "./executor";
 import { settings } from "./settings";
 import type { Request, RequestContext } from "./context";
 import type { CommandReceipt } from "@kraka/protocol";
@@ -41,6 +42,11 @@ const routes = new Map<
   route("checkpoint.retryFiles", rollback),
   route("checkpoint.rollback", rollback),
   route("checkpoint.rollbackDialogue", rollback),
+  route("executor.cancelLogin", executor),
+  route("executor.configure", executor),
+  route("executor.readLogin", executor),
+  route("executor.refresh", executor),
+  route("executor.startLogin", executor),
   route("git.readStatus", git),
   route("git.subscribeStatus", git),
   route("history.pageSaved", subscription),
@@ -64,6 +70,7 @@ const routes = new Map<
   route("thread.readEarlierSettled", subscription),
   route("thread.readHistory", subscription),
   route("thread.rename", rename),
+  route("thread.start", executor),
   route("todo.answer", todo),
   route("todo.decide", todo),
   route("todo.readAnswer", todo),

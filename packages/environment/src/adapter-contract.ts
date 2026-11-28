@@ -165,10 +165,31 @@ type Service<C extends AdapterCapability, R extends { kind: string }> = {
   deliveryId: DeliveryId;
   request: R;
 };
+export type LoginObserver = {
+  signal: AbortSignal;
+  authorize: (action?: "cancel") => boolean;
+  completed: (nativeLoginId: string, success: boolean) => void;
+  disconnected: () => void;
+  track: (closed: Promise<void>) => void;
+};
 type ServiceCommand =
-  | Service<"startLogin", { kind: "login"; flow: LoginFlow }>
-  | Service<"checkAuthentication", { kind: "checkAuthentication" }>
-  | Service<"listModels", { kind: "listModels" }>
+  | Service<
+      "startLogin",
+      | { kind: "login"; flow: LoginFlow; observer: LoginObserver }
+      | { kind: "cancelLogin"; flow: LoginFlow; nativeLoginId: string }
+    >
+  | Service<"checkAuthentication", { kind: "checkAuthentication"; authorize?: () => boolean }>
+  | Service<
+      "listModels",
+      {
+        kind: "listModels";
+        verifiedAccount?: {
+          expectedAccount: string;
+          authorize: () => boolean;
+          authenticationPermit: ActionPermit<AdapterFamily, "checkAuthentication">;
+        };
+      }
+    >
   | Service<"generateText", { kind: "generateText"; prompt: string }>
   | Service<"changeModel", { kind: "changeModel"; model: SessionSetup["model"] }>
   | Service<
