@@ -14,6 +14,7 @@ import {
   type ExecutorRefreshed,
 } from "@kraka/protocol";
 import type { CapabilityDeclaration, ExecutorRegistration, SessionSetup } from "@kraka/environment";
+import { verifiedQuotaAccount } from "./account-usage";
 import { CodexConnection, type Launch } from "./stdio";
 import { NativeError, object } from "./native";
 
@@ -21,6 +22,7 @@ type Catalog = NonNullable<ExecutorRefreshed["models"]>;
 export type CodexProbe = {
   declaration: CapabilityDeclaration<"codex">;
   accountContext: string | null;
+  quotaAccount?: string | null;
   nativeHome: string | null;
   historyRoot: string | null;
   models: Catalog | null;
@@ -342,7 +344,7 @@ async function basicMethods(launch: Launch) {
     const server = (await Bun.file(join(dir, "ServerRequest.json")).exists())
       ? await methods("ServerRequest.json")
       : new Set<string>();
-    return { requests, server };
+    return { requests, server, notices };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -376,6 +378,7 @@ export async function probeCodex(
     model: unknown,
     operation: unknown,
   };
+  let quotaAccount: string | null = null;
   let accountContext: string | null = null,
     nativeHome: string | null = null;
   let binaryVersion: string | null = null,
@@ -388,6 +391,7 @@ export async function probeCodex(
   const result = () => ({
     binaryVersion,
     accountContext,
+    quotaAccount,
     nativeHome,
     historyRoot: reg.driver.historyRoot,
     models,
@@ -433,6 +437,7 @@ export async function probeCodex(
     if (a.account !== null && typeof object(a.account).type !== "string")
       throw new Error("Invalid Codex account");
     accountContext = accountFingerprint(a);
+    quotaAccount = verifiedQuotaAccount(a);
     readiness.authenticated = verified(
       a.account === null ? (a.requiresOpenaiAuth === false ? "yes" : "no") : "yes",
     );
@@ -452,6 +457,10 @@ export async function probeCodex(
     readiness.operation = verified("yes");
     for (const id of basic) supported.add(id);
     supported.add("readHistory");
+    if (quotaAccount && methods.requests.has("account/rateLimits/read"))
+      supported.add("reportQuota");
+    if (quotaAccount && methods.requests.has("account/usage/read")) supported.add("reportCost");
+    if (methods.notices.has("thread/tokenUsage/updated")) supported.add("reportTokenUsage");
     if (methods.requests.has("thread/resume")) {
       supported.add("resumeSessionAfterProcessExit");
       supported.add("resumeSessionAfterHostRestart");

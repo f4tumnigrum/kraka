@@ -1,3 +1,4 @@
+import { threadUsage } from "./account-usage";
 import { checkpoint } from "./checkpoint";
 import { editQueue, input } from "./inputs";
 import { lifecycle, rename, roundControl } from "./threads";
@@ -55,6 +56,7 @@ const routes = new Map<
   route("thread.markRead", subscription),
   route("thread.readEarlierSettled", subscription),
   route("thread.readHistory", subscription),
+  route("thread.readUsage", threadUsage),
   route("thread.rename", rename),
   route("todo.answer", todo),
   route("todo.decide", todo),

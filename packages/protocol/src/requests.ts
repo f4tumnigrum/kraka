@@ -6,6 +6,7 @@ import {
   ThreadSummarySchema,
 } from "./thread-list";
 import { TextReturnResultSchema } from "./handoffs";
+import { AccountQuotaSnapshotSchema, UsageReadSchema } from "./account-usage";
 import { ContextOperationReceiptSchema } from "./context-operations";
 import { ToolActivityReadResultSchema } from "./tool-activity";
 import {
@@ -749,6 +750,24 @@ export const REQUEST_METHODS = {
     "thread",
     AttentionReadSchema,
   ),
+  readQuota: defineRequestMethod(
+    "executor.readQuota",
+    "thread.view",
+    "environment",
+    v.strictObject({ instanceId: ExecutorInstanceIdSchema, subscribe: v.optional(v.boolean()) }),
+  ),
+  refreshQuota: defineRequestMethod(
+    "executor.refreshQuota",
+    "thread.view",
+    "environment",
+    v.strictObject({ instanceId: ExecutorInstanceIdSchema }),
+  ),
+  readUsage: defineRequestMethod(
+    "thread.readUsage",
+    "thread.view",
+    "thread",
+    v.strictObject({ threadId: ThreadIdSchema }),
+  ),
   configureExecutor: defineRequestMethod(
     "executor.configure",
     "settings.change",
@@ -1127,6 +1146,8 @@ export const StopResultSchema = v.strictObject({
 });
 export type StopResult = v.InferOutput<typeof StopResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
+  v.strictObject({ kind: v.literal("accountQuota"), snapshot: AccountQuotaSnapshotSchema }),
+  UsageReadSchema,
   StopResultSchema,
   ToolActivityReadResultSchema,
   ExecutorRefreshedSchema,

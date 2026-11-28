@@ -175,7 +175,7 @@ type ServiceCommand =
       { kind: "setModelOptions"; options: SessionSetup["model"]["options"] }
     >
   | Service<"reportTokenUsage", { kind: "usage"; scope: "round" | "session" }>
-  | Service<"reportQuota", { kind: "quota" }>
+  | Service<"reportQuota", { kind: "quota"; signal?: AbortSignal }>
   | Service<"reportCost", { kind: "cost"; scope: "round" | "session" }>
   | Service<"compactContext", { kind: "compact"; instructions: string | null }>
   | Service<"startSession", { kind: "handoff" } & HandoffContext>
@@ -187,9 +187,21 @@ type ServiceCommand =
 export type ServiceRequest = ServiceCommand["request"];
 export type InstanceServiceCommand = Extract<
   ServiceCommand,
-  { capability: "generateText" | "startLogin" | "checkAuthentication" | "listModels" }
+  {
+    capability:
+      | "reportQuota"
+      | "generateText"
+      | "startLogin"
+      | "checkAuthentication"
+      | "listModels";
+  }
 >;
 type InstanceResults = {
+  reportQuota: {
+    account: string;
+    mode: "full" | "partial";
+    windows: import("@kraka/protocol").QuotaWindow[];
+  };
   startLogin: LoginResult;
   checkAuthentication: AuthenticationResult;
   listModels: ModelCatalog;
@@ -352,6 +364,7 @@ export type AdapterEventPayload =
     }
   | {
       kind: "usageUpdated";
+      sourceId?: string;
       attemptId: AttemptId;
       scope: "step" | "round" | "session";
       counters: Readonly<Record<string, number | null>>;

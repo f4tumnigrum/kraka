@@ -1,3 +1,5 @@
+import { ModelRatesSchema } from "./account-usage";
+import { canonicalJson } from "./canonical-json";
 import * as v from "valibot";
 import {
   DeviceIdSchema,
@@ -170,6 +172,11 @@ export const deviceSettings = [
 
 /** Each entry defines both the writable locations and the read-only inputs for one field. */
 export const remoteSettings = [
+  remoteField("modelRates", ModelRatesSchema, { kind: "modelRates", models: {} }, [environment], {
+    repository: false,
+    lockable: false,
+    organizationDefault: false,
+  }),
   remoteField(
     "directoryMode",
     v.picklist(["local", "worktree"]),
@@ -290,6 +297,8 @@ export function sameSettingChoice(
   if (a === b) return true;
   if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
   switch (a.kind) {
+    case "modelRates":
+      return b.kind === "modelRates" && canonicalJson(a) === canonicalJson(b);
     case "default":
     case "generated":
       return a.kind === b.kind;

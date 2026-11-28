@@ -15,6 +15,7 @@ import type {
   SessionInvocationResult,
   SessionSetup,
 } from "@kraka/environment";
+import { QuotaAccountChanged, readCodexQuota, readSessionFee } from "./account-usage";
 import { Callbacks, serverRequest } from "./requests";
 import type { AdapterEventPayload } from "@kraka/environment";
 import { CodexConnection, type Launch } from "./stdio";
@@ -272,6 +273,18 @@ export function createCodexAdapter(
     )
       return denied("unsupported");
     if (!("handle" in target)) {
+      if (cmd.capability === "reportQuota" && probe.quotaAccount) {
+        try {
+          return ok({
+            kind: "service",
+            result: await readCodexQuota(launch, probe.quotaAccount, cmd.request.signal),
+          });
+        } catch (error) {
+          return error instanceof QuotaAccountChanged
+            ? denied("invalidCapabilitySnapshot", "Quota account changed")
+            : denied("invalidState", "Quota probe failed");
+        }
+      }
       if (cmd.capability === "listModels" && probe.models)
         return ok({ kind: "service", result: probe.models });
       if (cmd.capability === "checkAuthentication")
@@ -283,6 +296,13 @@ export function createCodexAdapter(
     }
     if (!owns(target) || target.handle.closed) return denied("invalidState");
     const h = target.handle;
+    if (cmd.capability === "reportCost" && cmd.request.scope === "session") {
+      try {
+        return ok({ kind: "service", result: await readSessionFee(h.rpc, h.nativeSessionId) });
+      } catch {
+        return denied("invalidState", "Session cost unavailable");
+      }
+    }
     if (cmd.kind === "deliverAnswer")
       return h.callbacks.replyToNative(cmd, (id, body) => h.rpc.respond(id, body));
     if (cmd.kind === "nativeAction" && cmd.action === "readHistory" && cmd.target) {

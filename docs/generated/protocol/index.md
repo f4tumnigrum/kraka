@@ -63,6 +63,9 @@ Supply a fresh public nonce in the upgrade query and verify its signed echo with
 | `settings.read` | `thread.view` | authorizationTarget |
 | `settings.write` | `settings.change` | authorizationTarget |
 | `attention.read` | `thread.view` | thread |
+| `executor.readQuota` | `thread.view` | environment |
+| `executor.refreshQuota` | `thread.view` | environment |
+| `thread.readUsage` | `thread.view` | thread |
 | `executor.configure` | `settings.change` | environment |
 | `executor.refresh` | `thread.view` | project |
 | `project.register` | `workspace.change` | environment |
@@ -175,6 +178,278 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 {
   "type": "string",
   "minLength": 1
+}
+```
+
+## AccountQuotaSnapshot
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "credentialVersion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "account": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "instanceId",
+        "credentialVersion",
+        "account",
+        "endpoint"
+      ],
+      "additionalProperties": false
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "lastSuccessAt": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastAttemptAt": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "enum": [
+                "unsupported",
+                "probeFailed"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "success"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "neverObserved"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "fresh"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "stale"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unsupported",
+                    "probeFailed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "const": "resetReached"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "unsupported",
+                "probeFailed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "unit": {
+            "const": "percent"
+          },
+          "durationMinutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resetAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "unit",
+          "durationMinutes",
+          "used",
+          "remaining",
+          "resetAt",
+          "observedAt",
+          "stale"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "source",
+    "version",
+    "lastSuccessAt",
+    "lastAttemptAt",
+    "outcome",
+    "state",
+    "windows"
+  ],
+  "additionalProperties": false
 }
 ```
 
@@ -3827,6 +4102,86 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "result": {
           "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "accountQuota"
+                },
+                "snapshot": {
+                  "$ref": "#/$defs/AccountQuotaSnapshot"
+                }
+              },
+              "required": [
+                "kind",
+                "snapshot"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "threadUsage"
+                },
+                "threadId": {
+                  "$ref": "#/$defs/ThreadId"
+                },
+                "buckets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/UsageBucket"
+                  }
+                },
+                "limits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "roundId": {
+                        "$ref": "#/$defs/RoundId"
+                      },
+                      "failure": {
+                        "const": "usageLimit"
+                      },
+                      "resetAt": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "autoResume": {
+                        "type": "boolean"
+                      },
+                      "recovery": {
+                        "const": "waitingForManualRetry"
+                      }
+                    },
+                    "required": [
+                      "roundId",
+                      "failure",
+                      "resetAt",
+                      "autoResume",
+                      "recovery"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "threadId",
+                "buckets",
+                "limits"
+              ],
+              "additionalProperties": false
+            },
             {
               "type": "object",
               "properties": {
@@ -17266,6 +17621,80 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "type": "object",
       "properties": {
         "field": {
+          "const": "modelRates"
+        },
+        "source": {
+          "not": {}
+        },
+        "version": {
+          "$ref": "#/$defs/ObjectVersion"
+        },
+        "value": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "modelRates"
+            },
+            "models": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "currency": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "uncachedInput": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1.7976931348623157e+308
+                  },
+                  "cacheRead": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1.7976931348623157e+308
+                  },
+                  "cacheWrite": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1.7976931348623157e+308
+                  },
+                  "output": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1.7976931348623157e+308
+                  }
+                },
+                "required": [
+                  "currency"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "models"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "field",
+        "source",
+        "version",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "field": {
           "const": "directoryMode"
         },
         "source": {
@@ -17554,6 +17983,72 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 ```json
 {
   "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "field": {
+          "const": "modelRates"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "environment"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "checkout"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                },
+                "projectId": {
+                  "$ref": "#/$defs/ProjectId"
+                },
+                "worktreeId": {
+                  "$ref": "#/$defs/WorktreeId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId",
+                "projectId",
+                "worktreeId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "target",
+        "checkout"
+      ],
+      "additionalProperties": false,
+      "description": "Built-in value {\"kind\":\"modelRates\",\"models\":{}}. Writable at environment. Repository declarations: false. Administrator lock: false."
+    },
     {
       "type": "object",
       "properties": {
@@ -18069,6 +18564,333 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 ```json
 {
   "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "field": {
+          "const": "modelRates"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "environment"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "checkout"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                },
+                "projectId": {
+                  "$ref": "#/$defs/ProjectId"
+                },
+                "worktreeId": {
+                  "$ref": "#/$defs/WorktreeId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId",
+                "projectId",
+                "worktreeId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "atLayer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "absent"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "set"
+                },
+                "value": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "modelRates"
+                    },
+                    "models": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "currency": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uncachedInput": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheRead": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheWrite": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          }
+                        },
+                        "required": [
+                          "currency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "models"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "fieldVersion": {
+          "$ref": "#/$defs/ObjectVersion"
+        },
+        "effective": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "modelRates"
+                    },
+                    "models": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "currency": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uncachedInput": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheRead": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheWrite": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          }
+                        },
+                        "required": [
+                          "currency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "models"
+                  ],
+                  "additionalProperties": false
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "builtin"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                "sourceVersion": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "value",
+                "source",
+                "sourceVersion"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "modelRates"
+                    },
+                    "models": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "currency": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uncachedInput": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheRead": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheWrite": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          }
+                        },
+                        "required": [
+                          "currency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "models"
+                  ],
+                  "additionalProperties": false
+                },
+                "source": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "environment"
+                        },
+                        "environmentId": {
+                          "$ref": "#/$defs/EnvironmentId"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "environmentId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "sourceVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                }
+              },
+              "required": [
+                "value",
+                "source",
+                "sourceVersion"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "readVersion": {
+          "$ref": "#/$defs/ObjectVersion"
+        }
+      },
+      "required": [
+        "field",
+        "target",
+        "checkout",
+        "atLayer",
+        "fieldVersion",
+        "effective",
+        "readVersion"
+      ],
+      "additionalProperties": false
+    },
     {
       "type": "object",
       "properties": {
@@ -19503,6 +20325,126 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "type": "object",
       "properties": {
         "field": {
+          "const": "modelRates"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "environment"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "version": {
+          "$ref": "#/$defs/ObjectVersion"
+        },
+        "explicit": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "absent"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "set"
+                },
+                "value": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "modelRates"
+                    },
+                    "models": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "currency": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uncachedInput": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheRead": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheWrite": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          }
+                        },
+                        "required": [
+                          "currency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "models"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "target",
+        "version",
+        "explicit"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "field": {
           "const": "directoryMode"
         },
         "target": {
@@ -20246,6 +21188,158 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 ```json
 {
   "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "field": {
+          "const": "modelRates"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "environment"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "checkout"
+                },
+                "environmentId": {
+                  "$ref": "#/$defs/EnvironmentId"
+                },
+                "projectId": {
+                  "$ref": "#/$defs/ProjectId"
+                },
+                "worktreeId": {
+                  "$ref": "#/$defs/WorktreeId"
+                }
+              },
+              "required": [
+                "kind",
+                "environmentId",
+                "projectId",
+                "worktreeId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseVersion": {
+          "$ref": "#/$defs/ObjectVersion"
+        },
+        "change": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "absent"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "set"
+                },
+                "value": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "modelRates"
+                    },
+                    "models": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "currency": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uncachedInput": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheRead": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "cacheWrite": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1.7976931348623157e+308
+                          }
+                        },
+                        "required": [
+                          "currency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "models"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "target",
+        "checkout",
+        "baseVersion",
+        "change"
+      ],
+      "additionalProperties": false
+    },
     {
       "type": "object",
       "properties": {
@@ -21256,6 +22350,15 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
     },
     {
       "$ref": "#/$defs/attention.read"
+    },
+    {
+      "$ref": "#/$defs/executor.readQuota"
+    },
+    {
+      "$ref": "#/$defs/executor.refreshQuota"
+    },
+    {
+      "$ref": "#/$defs/thread.readUsage"
     },
     {
       "$ref": "#/$defs/executor.configure"
@@ -26589,6 +27692,241 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## UsageBucket
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "instanceId": {
+      "$ref": "#/$defs/ExecutorInstanceId"
+    },
+    "threadId": {
+      "$ref": "#/$defs/ThreadId"
+    },
+    "nativeSessionId": {
+      "$ref": "#/$defs/NativeSessionId"
+    },
+    "sourceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "round"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            }
+          },
+          "required": [
+            "kind",
+            "roundId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "session"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "step"
+            },
+            "roundId": {
+              "$ref": "#/$defs/RoundId"
+            },
+            "stepId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "roundId",
+            "stepId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "counters": {
+      "type": "object",
+      "properties": {
+        "uncachedInput": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheRead": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheWrite": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "uncachedInput",
+        "cacheRead",
+        "cacheWrite",
+        "output",
+        "reasoning",
+        "total"
+      ],
+      "additionalProperties": false
+    },
+    "amount": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1.7976931348623157e+308
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "currency": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "priceSource": {
+      "enum": [
+        "unknown",
+        "custom",
+        "reported",
+        "providerEstimated",
+        "catalog"
+      ],
+      "type": "string"
+    },
+    "priceVersion": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ObjectVersion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unpricedRecords": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "instanceId",
+    "threadId",
+    "nativeSessionId",
+    "sourceId",
+    "scope",
+    "model",
+    "observedAt",
+    "counters",
+    "amount",
+    "currency",
+    "priceSource",
+    "priceVersion",
+    "unpricedRecords"
+  ],
+  "additionalProperties": false
+}
+```
+
 ## WorkNodeId
 
 ```json
@@ -31173,6 +32511,123 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## executor.readQuota
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "executor.readQuota"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "subscribe": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "instanceId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
 ## executor.refresh
 
 ```json
@@ -31288,6 +32743,120 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
   ],
   "additionalProperties": false,
   "description": "Requires thread.view on project. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
+## executor.refreshQuota
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "executor.refreshQuota"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ExecutorInstanceId"
+        }
+      },
+      "required": [
+        "instanceId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
 }
 ```
 
@@ -36927,6 +38496,120 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "threadId",
         "anchor",
         "streamId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
+## thread.readUsage
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "thread.readUsage"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": [
+        "threadId"
       ],
       "additionalProperties": false
     },

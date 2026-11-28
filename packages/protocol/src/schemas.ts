@@ -144,6 +144,7 @@ import {
   WorktreeSchema,
 } from "./objects";
 
+import { AccountQuotaSnapshotSchema, UsageBucketSchema } from "./account-usage";
 import { settingSchemas } from "./settings";
 import { attentionSchemas } from "./attention";
 import { checkpointSchemas } from "./checkpoints";
@@ -219,6 +220,8 @@ export const protocolSchemas = {
   ...checkpointSchemas,
   ...terminalSchemas,
   ...worktreeSchemas,
+  AccountQuotaSnapshot: AccountQuotaSnapshotSchema,
+  UsageBucket: UsageBucketSchema,
   ...settingSchemas,
   ...attentionSchemas,
   ExecutorCapabilities: ExecutorCapabilitiesSchema,
