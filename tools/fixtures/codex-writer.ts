@@ -10,7 +10,35 @@ if (process.argv[2] === worktreeWorkerCommand) {
 }
 const state = process.argv[2];
 if (!state) throw new Error("Missing state directory");
+const replies = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
+if (process.send)
+  process.on("message", (raw) => {
+    const r = v.parse(v.object({ token: v.string(), fail: v.boolean() }), raw);
+    const pending = replies.get(r.token);
+    if (!pending) return;
+    replies.delete(r.token);
+    if (r.fail) pending.reject(Error("fixtureSummaryFailed"));
+    else pending.resolve();
+  });
 const writer = await startWriter(state, null, {
+  ...(process.send
+    ? {
+        async capture(stage, boundary, s) {
+          const token = crypto.randomUUID(),
+            done = Promise.withResolvers<void>();
+          replies.set(token, done);
+          process.send?.({
+            stage,
+            boundary,
+            id: s.key.id,
+            thread: s.key.threadId,
+            round: s.key.roundId,
+            token,
+          });
+          await done.promise;
+        },
+      }
+    : {}),
   opened(store) {
     for (const key of ["marker", "replacement"])
       new WriterExecutorRegistry(store).storeSecret(

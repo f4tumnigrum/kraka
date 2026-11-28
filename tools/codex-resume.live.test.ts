@@ -147,7 +147,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     const db = openReceiptReader(s.state);
     try {
       expect(readRound(db, first.roundId)?.attempt.phase).toMatchObject({
-        kind: "closing",
+        kind: "finished",
         endTimeEvidence: "endTimeEvidence" in ended ? ended.endTimeEvidence : null,
       });
     } finally {
@@ -201,7 +201,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     });
     expect(
       (await s.client.readInputHistory(r.threadId, r.roundId)).rounds[0]?.attempt,
-    ).toMatchObject({ attemptId: r.attemptId, phase: { kind: "closing" } });
+    ).toMatchObject({ attemptId: r.attemptId, phase: { kind: "finished" } });
     expect(s.events.items.filter((e) => e.event === "turn")).toHaveLength(1);
   });
 }, 45000);

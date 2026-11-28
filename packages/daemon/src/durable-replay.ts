@@ -56,6 +56,8 @@ export async function dispatchReplay<H extends object>(
       signal,
       persisted: {
         todos: store.todos,
+        baseline: () => store.captures.before(initial),
+        captureId: () => store.captures.id(initial),
         thread,
         round: initial,
         directory,

@@ -35,7 +35,6 @@ import {
   advanceQueue,
   type FirstSendStore,
   firstPending,
-  frozenInput,
   inputMethods,
   loadQueue,
   openStore,
@@ -47,7 +46,6 @@ import {
   readRound,
   readThread,
   GitStatusCache,
-  recordInputEvidence,
   registerProject,
   settingCommand,
   renameThread,
@@ -57,7 +55,6 @@ import {
   InboundSettingWriteSchema,
   settingReceiptForVersion,
   SETTING_GENERATION_MINOR,
-  CheckpointCaptureSchema,
   type CommandId,
   CommandIdSchema,
   AttemptIdSchema,
@@ -127,6 +124,7 @@ export async function startWriter<H extends object>(
     settingReply?: FixtureSettingReply;
     beforeDispatch?: (thread: ThreadId) => Promise<void>;
     locked?: () => void;
+    capture?: import("@kraka/environment").CaptureHook;
     opened?: (store: FirstSendStore) => void;
     committed?: (request: SignedRequest, receipt: CommandReceipt) => void | "disconnect";
     update?: (event: ReplayTurnUpdate) => void;
@@ -146,6 +144,8 @@ export async function startWriter<H extends object>(
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease, replay?.recovery);
     store = transaction;
+    if (lifecycle?.capture) transaction.captures.hook = lifecycle.capture;
+    transaction.captures.cleanSettled();
     lifecycle?.opened?.(transaction);
     const codex = new CodexInstances(transaction);
     const stops = new OrdinaryStops(transaction);
@@ -170,6 +170,7 @@ export async function startWriter<H extends object>(
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
     const turns = new Map<string, Promise<void>>();
     const controller = new AbortController();
+    transaction.captures.signal = controller.signal;
     const sweep = () =>
       transaction.db.run("DELETE FROM worktree_selections WHERE expires<=?", [Date.now()]);
     sweep();
@@ -368,38 +369,10 @@ export async function startWriter<H extends object>(
           const head = firstPending(queue.rows);
           if (!head) return;
           const phase = head.attempt.phase;
-          if (
-            phase.kind === "closing" &&
-            queue.rows.some((r) => r.attempt.phase.kind === "filed")
-          ) {
-            const thread = readThread(transaction.db, threadId);
-            const frozen = frozenInput(transaction, head.attempt.deliveryId);
-            if (!thread || !frozen) return;
-            const capture = v.parse(CheckpointCaptureSchema, {
-              id: phase.captureId,
-              roundId: head.id,
-              attemptId: head.attempt.attemptId,
-              version: "1",
-              result: {
-                kind: "missing",
-                reason: thread.worktreeId ? "captureMissing" : "noWorktree",
-              },
-            });
-            const settled = transaction.db.transaction(() => {
-              const evidence = recordInputEvidence(transaction, frozen.target, {
-                ...head.attempt,
-                kind: "captureSettled",
-                capture,
-              });
-              if (evidence.kind === "ok")
-                transaction.db.run("INSERT OR REPLACE INTO turn_work VALUES(?,?,?)", [
-                  head.id,
-                  "capture",
-                  JSON.stringify(capture),
-                ]);
-              return evidence;
-            })();
-            if (settled.kind === "rejected") return;
+          if (phase.kind === "closing") {
+            const round = readRound(transaction.db, head.id);
+            if (!round) return;
+            await transaction.captures.finish(round, true);
             continue;
           }
           if (phase.kind === "unobserved" && phase.seen.kind === "root") {
@@ -472,6 +445,9 @@ export async function startWriter<H extends object>(
               steers,
             );
           } else return;
+          const ended = readRound(transaction.db, round.id);
+          if (ended?.attempt.phase.kind === "closing")
+            await transaction.captures.finish(ended, false);
           recipients.delete(round.id);
           if (readRound(transaction.db, head.id)?.version === round.version) return;
         }
@@ -799,6 +775,15 @@ export async function startWriter<H extends object>(
     });
     let instance: ReturnType<typeof lock.publish>;
     try {
+      await transaction.captures.recoverBaselines();
+      for (const { data } of transaction.db
+        .query<{ data: string }, []>(
+          "SELECT data FROM rounds WHERE json_extract(data,'$.attempt.phase.kind')='closing'",
+        )
+        .all()) {
+        const r = v.parse(RoundSchema, JSON.parse(data));
+        schedule(r.threadId, v.parse(CommandIdSchema, r.attempt.deliveryId));
+      }
       const pending = transaction.db
         .query<{ data: string }, []>(
           "SELECT r.data FROM deliveries d JOIN rounds r ON r.id=d.round WHERE (d.pending=1 OR (json_extract(r.data,'$.attempt.phase.kind')='unobserved' AND json_extract(d.frozen,'$.target.family')='codex' AND d.id=json_extract(r.data,'$.attempt.deliveryId'))) AND d.round NOT IN (SELECT round FROM ready_dispatch)",

@@ -473,7 +473,7 @@ test(
           git(m.directory.realPath, "config", "--file", "setup.cfg", "--get", "kraka.setup"),
         ).toBe("completed");
         expect(git(m.directory.realPath, "rev-parse", "HEAD")).toBe(repo.base);
-        expect(roundInfo(stateDir, m).round?.attempt.phase.kind).toBe("closing");
+        expect(roundInfo(stateDir, m).round?.attempt.phase.kind).toBe("finished");
       } finally {
         await writer.close();
       }

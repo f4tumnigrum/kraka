@@ -12,6 +12,8 @@ export type Profile = {
   absent?: boolean;
   gate?: string;
   control?: string;
+  capture?: (raw: unknown) => void;
+  historyDirectory?: string;
 };
 export async function buildPeer(dir: string, root = productRoot) {
   const exe = join(dir, process.platform === "win32" ? "codex-peer.exe" : "codex-peer");
@@ -80,7 +82,13 @@ export async function codexFixture(
     "settings.change",
     "thread.view",
   ]);
-  const launch = launchWriter(stateDir, root, hostSecret ? "codex" : "codex-cli");
+  const launch = launchWriter(
+    stateDir,
+    root,
+    hostSecret ? "codex" : "codex-cli",
+    undefined,
+    profile.capture,
+  );
   try {
     const { instance } = await launch.ready();
     const events = new Journal<ExecutorTurnUpdate>();
@@ -97,6 +105,9 @@ export async function codexFixture(
       const instanceId = "codex-test",
         credential = { ownerId: fixtureActor, namespace: instanceId, key: "marker", version: "1" };
       const variables = {
+        ...(profile.historyDirectory
+          ? { PEER_HISTORY_DIRECTORY: { kind: "literal", value: profile.historyDirectory } }
+          : {}),
         ...(profile.control ? { PEER_CONTROL: { kind: "literal", value: profile.control } } : {}),
         PEER_LEDGER: { kind: "literal", value: ledgerPath },
         PEER_PROFILE: { kind: "literal", value: profile.kind ?? "ready" },

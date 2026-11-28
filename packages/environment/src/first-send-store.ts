@@ -1,9 +1,11 @@
+import { RoundCaptures } from "./capture-store";
 import { TodoLedger } from "./todo-ledger";
 import { ThreadJournal } from "./thread-journal";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import {
   type CommandId,
+  type CheckpointCapture,
   CommandReceiptSchema,
   canonicalJson,
   type DeliveryId,
@@ -159,6 +161,7 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
 }
 export class FirstSendStore {
   readonly sync: ThreadJournal;
+  readonly captures: RoundCaptures;
   readonly todos: TodoLedger;
   onQueueChanged?: (thread: Thread["id"]) => void;
   beforeCommit?: (method: string) => void;
@@ -171,6 +174,7 @@ export class FirstSendStore {
     );
     this.sync = new ThreadJournal(db, writer.environmentId);
     this.todos = new TodoLedger(this);
+    this.captures = new RoundCaptures(this);
   }
   projectDirectory(id: string) {
     const row = this.db
@@ -202,7 +206,7 @@ export class FirstSendStore {
     const physical = path ? physicalDirectory(path) : null;
     return physical?.identity === saved.identity && physical.realPath === path ? path : null;
   }
-  setPhase(round: Round, phase: RoundPhase) {
+  setPhase(round: Round, phase: RoundPhase, capture?: CheckpointCapture) {
     if (phase.kind === "filed" && phase.gate === "eligible") {
       const thread = readThread(this.db, round.threadId);
       if (thread?.worktreeId) {
@@ -226,7 +230,13 @@ export class FirstSendStore {
       );
     const saved = v.parse(RoundSchema, updated);
     this.db.transaction(() => {
-      this.sync.record([{ objectType: "round", value: saved }]);
+      this.sync.record(
+        [
+          { objectType: "round", value: saved },
+          ...(capture ? [{ objectType: "checkpointCapture" as const, value: capture }] : []),
+        ],
+        { captureThread: round.threadId },
+      );
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(saved), round.id]);
       if (phase.kind !== "filed" || phase.gate !== "eligible")
         this.db.run("DELETE FROM ready_dispatch WHERE round=?", [round.id]);

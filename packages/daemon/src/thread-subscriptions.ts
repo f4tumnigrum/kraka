@@ -63,6 +63,7 @@ type Access = {
   permissions?: (thread: ThreadId) => PermissionItem[];
   canRead: (thread: ThreadId) => boolean;
   timelineItems: boolean;
+  directoryDiff?: boolean;
   protocolMinor: number;
 };
 export class ThreadSubscriptions {
@@ -92,6 +93,7 @@ export class ThreadSubscriptions {
         return granted;
       },
       timelineItems: this.access.timelineItems,
+      directoryDiff: this.access.directoryDiff ?? false,
       protocolMinor: this.access.protocolMinor,
     };
   }

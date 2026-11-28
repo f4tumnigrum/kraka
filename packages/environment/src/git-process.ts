@@ -1,3 +1,9 @@
+import { physicalDirectory } from "./project-directory";
+export function gitRepositoryIdentity(directory: string) {
+  const r = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  return r.exitCode === 0 ? physicalDirectory(r.stdout.toString().trimEnd()) : null;
+}
+
 export type GitProcessResult = {
   exitCode: number | null;
   stdout: Buffer;
@@ -31,17 +37,22 @@ export function runGit(
   options: {
     env?: Record<string, string>;
     timeout?: number;
-    input?: Uint8Array;
+    input?: Uint8Array | number;
+    outputFd?: number;
     maxBuffer?: number;
   } = {},
 ): GitProcessResult {
   const result = Bun.spawnSync(["git", "-C", directory, ...args], {
-    stdout: "pipe",
+    stdout: options.outputFd ?? "pipe",
     stderr: "pipe",
     stdin: options.input ?? "ignore",
     maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
     env: gitEnvironment(options.env),
     timeout: options.timeout ?? 10_000,
   });
-  return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  return {
+    exitCode: result.exitCode,
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.alloc(0),
+    stderr: result.stderr,
+  };
 }

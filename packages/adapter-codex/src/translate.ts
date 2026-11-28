@@ -118,6 +118,7 @@ export function translateCodexFrame(
           const destination = change.kind.type === "update" ? (change.kind.movePath ?? null) : null;
           events.push({
             kind: "fileChanged",
+            itemId: item.id,
             attemptId,
             path: change.path,
             destination,

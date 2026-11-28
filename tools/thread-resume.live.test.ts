@@ -85,8 +85,9 @@ test(
     threadFixture(async (f) => {
       await f.start();
       const reveal = Promise.withResolvers<void>();
-      const d = await f.connect("desktop", { timeline: false }),
+      const d = await f.connect("desktop", { directoryDiff: false, timeline: false }),
         tablet = await f.connect("tablet", {
+          directoryDiff: false,
           timeline: false,
           pageStaged: (page) => (page.through.through === "2" ? reveal.promise : undefined),
         });
@@ -116,6 +117,7 @@ test(
       const entered = Promise.withResolvers<void>(),
         release = Promise.withResolvers<void>();
       const back = await f.connect("desktop", {
+        directoryDiff: false,
         timeline: false,
         pageStaged() {
           entered.resolve();
@@ -129,7 +131,7 @@ test(
       release.resolve();
       await back.at("4");
       checkedPass(back, "desktop", "resume-from-one", "4");
-      const cold = await f.connect("cold", { timeline: false });
+      const cold = await f.connect("cold", { directoryDiff: false, timeline: false });
       await op(cold, f.threadId);
       await cold.at("4");
       expect(visible(back)).toEqual(visible(cold));
@@ -363,7 +365,7 @@ test(
           v.parse(ToolActivityHistoryItemSchema, ended),
         );
       expect(cachedHistory(d.cache.read(), page.anchor, null)?.verified).toBe(false);
-      const legacy = await f.connect("legacy", { timeline: false });
+      const legacy = await f.connect("legacy", { directoryDiff: false, timeline: false });
       await op(legacy, child);
       const l = await legacy.at("17");
       const old = await legacy.client.history(l, null, () => true);
@@ -451,7 +453,7 @@ test(
         visible(client).find((r) => r.objectType === "round" && r.value.id === roundId);
       await until(() => {
         const record = readRound(reader);
-        return record?.objectType === "round" && record.value.attempt.phase.kind === "closing";
+        return record?.objectType === "round" && record.value.attempt.phase.kind === "finished";
       }, "queue dispatch and installation");
       const rows = await f.f.client.subscribedRounds(threadId);
       const expected = rows.find((r) => r.id === roundId);

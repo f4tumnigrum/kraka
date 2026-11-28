@@ -1,4 +1,5 @@
-import { isolatedFixture, readClaim, setupPolicy, idle } from "./fixtures/isolated-start";
+import { retainedCaptureBytes } from "./fixtures/round-patch";
+import { seedGit, isolatedFixture, readClaim, setupPolicy, idle } from "./fixtures/isolated-start";
 import { managedView } from "@kraka/environment";
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -107,7 +108,8 @@ async function startup(
             try {
               const phase = readRound(db, ids.roundId)?.attempt.phase;
               verifyObservation(
-                phase?.kind === "closing" && phase.endTimeEvidence?.source === "executorReported",
+                (phase?.kind === "closing" || phase?.kind === "finished") &&
+                  phase.endTimeEvidence?.source === "executorReported",
                 "Incomplete Codex turn",
               );
             } finally {
@@ -195,7 +197,7 @@ async function restart(base: ReportBase, root: string, nextBlock: () => Promise<
           try {
             const row = db
               .query<{ count: number }, []>(
-                "SELECT count(*) count FROM rounds WHERE json_extract(data,'$.attempt.phase.kind')='closing'",
+                "SELECT count(*) count FROM rounds WHERE json_extract(data,'$.attempt.phase.kind') IN ('closing','finished')",
               )
               .get();
             verifyObservation(row?.count === size, "Seeded completed thread count changed");
@@ -421,6 +423,9 @@ async function rename(base: ReportBase, root: string, nextBlock: () => Promise<v
   return { single: 1250, eight: 4000 };
 }
 async function growth(base: ReportBase, root: string, nextBlock: () => Promise<void>) {
+  const captures = await Bun.file(
+    join(root, "packages/environment/src/capture-boundary.ts"),
+  ).exists();
   const input = "I".repeat(28),
     answer = "A".repeat(34),
     tool = "x".repeat(140),
@@ -430,6 +435,8 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
   base.expected = { databases: 3, turns: 60, workRecords: 180, checkpoints: 6 };
   for (let trial = 0; trial < 3; trial++)
     await withState(async (dir) => {
+      const repo = seedGit(dir, "project");
+      const retained = [];
       const opts = options(dir, root),
         recording = join(dir, "budget-turn.jsonl");
       const template = readFileSync(join(root, fixture), "utf8");
@@ -482,7 +489,7 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
           const round = readRound(db, ids.roundId),
             message = readMessage(db, ids.messageId);
           verifyObservation(
-            round?.attempt.phase.kind === "closing" &&
+            round?.attempt.phase.kind === (captures ? "finished" : "closing") &&
               round.threadId === threadId &&
               round.attempt.attemptId === ids.attemptId &&
               round.messageId === ids.messageId &&
@@ -524,7 +531,18 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
               "P10 WAL did not settle",
             );
             const wal = existsSync(dbFile + "-wal") ? statSync(dbFile + "-wal").size : 0;
-            const bytes = statSync(dbFile).size + wal;
+            const storage = retainedCaptureBytes(repo.path, opts.stateDir);
+            verifyObservation(
+              storage.refs === (captures ? turn * 2 : 0) && storage.scratchBytes === 0,
+              "Missing settled P10 refs or retained scratch",
+            );
+            retained.push({ turn, ...storage });
+            const bytes =
+              statSync(dbFile).size +
+              wal +
+              storage.objectBytes +
+              storage.refBytes +
+              storage.scratchBytes;
             if (turn === 1) first = bytes;
             else last = bytes;
             counts.checkpoints++;
@@ -538,7 +556,7 @@ async function growth(base: ReportBase, root: string, nextBlock: () => Promise<v
           last,
           bytesPerTurn,
           turns: seen.size,
-          checkpointObjectBytes: 0,
+          retained,
         });
         sample(base, "growth", bytesPerTurn, "B/turn");
         counts.databases++;

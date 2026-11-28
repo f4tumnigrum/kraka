@@ -216,7 +216,7 @@ test("4. effective ask policy, early root, original tool and assistant frames, a
     const db = openReceiptReader(f.stateDir);
     try {
       expect(readRound(db, ids.roundId)?.attempt.phase).toMatchObject({
-        kind: "closing",
+        kind: "finished",
         receipt: null,
         endedAt: 1767225603000,
         endTimeEvidence: {
@@ -273,7 +273,11 @@ test("existing-thread input uses its original Codex registration and records one
     expect((await f.client.send("input.send", payload, "second-input")).receipt).toEqual(receipt);
     const history = await f.client.readInputHistory(first.threadId, second.roundId);
     expect(history.rounds[0]?.attempts).toMatchObject([
-      { attemptId: second.attemptId, deliveryId: second.deliveryId, phase: { kind: "closing" } },
+      {
+        attemptId: second.attemptId,
+        deliveryId: second.deliveryId,
+        phase: { kind: expect.stringMatching(/^(closing|finished)$/) },
+      },
     ]);
     expect(
       f.ledger

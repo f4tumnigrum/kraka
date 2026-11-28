@@ -1,3 +1,4 @@
+import { git, seedGit } from "../../../tools/fixtures/isolated-start";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -347,5 +348,99 @@ test("a shallow commit retains its verified right endpoint when its actual first
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("both capture and attempt identities must match; a conflicting baseline cannot replace the first publication", () => {
+  const before = beginCapture(key),
+    report = { ...key, kind: "baselinePublished" as const, point: point(key, "before", "1") };
+  expect(transitionCapture(before, { ...report, id: v.parse(CaptureIdSchema, "other") })).toEqual({
+    kind: "rejected",
+    reason: "wrongCapture",
+  });
+  expect(
+    transitionCapture(before, { ...report, attemptId: v.parse(AttemptIdSchema, "other") }),
+  ).toEqual({ kind: "rejected", reason: "wrongAttempt" });
+  expect(
+    transitionCapture(step(before, report), { ...report, point: point(key, "before", "2") }),
+  ).toEqual({ kind: "rejected", reason: "idConflict" });
+});
+
+test("a range cursor keeps the first before and the fixed last after across pages", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kraka-capture-pages-")),
+    service = new LocalDiffService();
+  try {
+    const repo = seedGit(dir),
+      left = v.parse(GitObjectIdSchema, repo.base);
+    writeFileSync(join(repo.path, "large"), "x".repeat(10_001_000) + "fixed end\n");
+    git(repo.path, "add", "large");
+    git(repo.path, "commit", "-qm", "last");
+    const right = v.parse(GitObjectIdSchema, git(repo.path, "rev-parse", "HEAD"));
+    const query = {
+      kind: "roundRange" as const,
+      threadId: key.threadId,
+      worktreeId: key.worktreeId,
+      fromCaptureId: key.id,
+      toCaptureId: v.parse(CaptureIdSchema, "last"),
+    };
+    const pair = {
+      from: {
+        kind: "round" as const,
+        captureId: key.id,
+        boundary: "before" as const,
+        commit: left,
+      },
+      to: {
+        kind: "round" as const,
+        captureId: query.toCaptureId,
+        boundary: "after" as const,
+        commit: right,
+      },
+      fromTree: v.parse(GitObjectIdSchema, git(repo.path, "rev-parse", left + "^{tree}")),
+      toTree: v.parse(GitObjectIdSchema, git(repo.path, "rev-parse", right + "^{tree}")),
+    };
+    const input = {
+      actor: { scope: "viewer", directoryDiff: true },
+      query,
+      resolvedDirectory: {
+        path: repo.path,
+        address: {
+          kind: "managedWorktree" as const,
+          threadId: key.threadId,
+          worktreeId: key.worktreeId,
+          directoryId: "dir",
+          generation: v.parse(WorktreeGenerationSchema, "1"),
+        },
+      },
+      captureRange: () => ({ pair }),
+    };
+    const page = service.readLocalDiff({ ...input, cursor: null });
+    if (page.kind !== "changed" || !page.next) throw Error("Missing range cursor");
+    expect(Buffer.byteLength(page.patch)).toBe(10_000_000);
+    expect(page.truncated).toBe(true);
+    writeFileSync(join(repo.path, "large"), "later version\n");
+    git(repo.path, "commit", "-qam", "later");
+    expect(
+      service.readLocalDiff({
+        ...input,
+        query: { ...query, toCaptureId: key.id },
+        cursor: page.next,
+      }).kind,
+    ).toBe("unavailable");
+    const end = service.readLocalDiff({
+      ...input,
+      cursor: page.next,
+      captureRange: () => {
+        throw Error("recomputed endpoints");
+      },
+    });
+    if (end.kind !== "changed") throw Error("Lost range");
+    expect(end.to).toEqual(pair.to);
+    expect(end.patch).toContain("fixed end");
+    expect(end.truncated).toBe(false);
+    expect(end.next).toBeNull();
+  } finally {
+    service.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -23,6 +23,8 @@ export * from "./adapter-contract";
 export * from "./settings";
 export * from "./setting-store";
 export * from "./checkpoints";
+export * from "./capture-boundary";
+export * from "./directory-lease";
 export * from "./terminal";
 export * from "./worktrees";
 export * from "./git-status";

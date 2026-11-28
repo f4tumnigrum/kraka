@@ -7,6 +7,7 @@ import {
   SyncCursorSchema,
   REQUEST_METHODS,
   HistoryPageSchema,
+  CheckpointCaptureSchema,
   roundForProtocol,
   type SynchronizedObjectSchema,
 } from "@kraka/protocol";
@@ -47,6 +48,20 @@ export function inputReads(store: FirstSendStore, actor: LocalActor) {
         value: roundForProtocol(round, minor),
       })),
     ];
+    for (const round of history.rounds) {
+      const phase = round.attempt.phase;
+      if (phase.kind !== "finished") continue;
+      const saved = store.db
+        .query<{ payload: string }, [string, string]>(
+          "SELECT payload FROM sync_rows WHERE source=? AND key=?",
+        )
+        .get(threadId, JSON.stringify(["checkpointCapture", phase.captureId]));
+      if (!saved) continue;
+      const value = v.parse(CheckpointCaptureSchema, JSON.parse(saved.payload).value);
+      if (value.result.kind === "ready" && "directoryId" in value.result)
+        value.result = { kind: "missing", reason: "directoryDiffUnsupported" };
+      rows.push({ objectType: "checkpointCapture", value });
+    }
     return { cursor, rows };
   }
   function publish(socket: Socket, subscriptionId: string, sub: Subscription) {

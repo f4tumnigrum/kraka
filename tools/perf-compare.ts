@@ -26,6 +26,7 @@ const metadata = {
       "worktree.recovery",
       "browserTLS",
       "codex.recovery",
+      "capture.recovery",
     ]),
   ),
   role: v.picklist(["candidate", "baseline"]),

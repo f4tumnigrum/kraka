@@ -305,6 +305,7 @@ export function recordAdapterActivity(
   if (p.attemptId !== binding.attemptId) throw Error("Foreign activity attempt");
   if (p.kind === "fileChanged") {
     journal.recordUnattributedToolChange({
+      ...(p.itemId ? { itemId: p.itemId } : {}),
       threadId: binding.threadId,
       attemptId: p.attemptId,
       eventId: JSON.stringify([event.instanceId, event.sessionId, event.epoch, event.eventId]),
