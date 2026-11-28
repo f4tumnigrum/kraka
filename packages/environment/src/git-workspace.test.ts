@@ -40,7 +40,7 @@ function repository() {
   const root = mkdtempSync(join(tmpdir(), "kraka-s15-git-"));
   const path = join(root, "checkout");
   const db = new Database(":memory:");
-  const cleanup = new DiffCleanup(db, root);
+  const cleanup = new DiffCleanup(db, root, "git-fixture");
   const close = () => {
     db.close(true);
     rmSync(root, { recursive: true, force: true });
@@ -379,7 +379,7 @@ test("retries partial cleanup without deleting a changed endpoint or following a
     const intent = repo.cleanup.begin(cwd);
     if (!intent) throw Error("Missing comparison intent");
     expect(await repo.cleanup.pin(intent.id, base, base)).toBe(true);
-    const prefix = "refs/kraka/diffs/" + intent.id;
+    const prefix = repo.cleanup.namespace + intent.id;
     git(cwd, "update-ref", prefix + "/from", other, base);
     const exists = () => !!repo.db.query("SELECT id FROM diff_cleanup WHERE id=?").get(intent.id);
     repo.cleanup.release(intent.id);

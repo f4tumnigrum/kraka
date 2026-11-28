@@ -1,15 +1,15 @@
-import { Database } from "bun:sqlite";
-import { lstatSync, mkdirSync, rmSync } from "node:fs";
+import type { Database } from "bun:sqlite";
+import { lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import * as v from "valibot";
 import { GitObjectIdSchema, type GitObjectId } from "@kraka/protocol";
 import { gitEnvironment, runGit } from "./git-process";
 import { physicalDirectory } from "./project-directory";
-import { readManaged } from "./worktree-storage";
+import { hashId, readManaged } from "./worktree-storage";
 import type { FirstSendStore } from "./first-send-store";
 
-const namespace = "refs/kraka/diffs/";
+const diffRefs = "refs/kraka/diffs/";
 const uuid = v.pipe(v.string(), v.uuid());
 type Repository = NonNullable<ReturnType<typeof physicalDirectory>>;
 type Row = {
@@ -47,12 +47,14 @@ function refs(common: string, prefix: string) {
       return { name, oid, symbolic };
     });
 }
-function updateArgs(common: string) {
-  // No repository hooks run for the service's private refs.
+function updateArgs(emptyHooks: string) {
+  mkdirSync(emptyHooks, { recursive: true, mode: 0o700 });
+  if (!lstatSync(emptyHooks).isDirectory() || readdirSync(emptyHooks).length)
+    throw Error("Comparison hooks directory must be empty");
   return [
     "--git-dir=.",
     "-c",
-    `core.hooksPath=${join(common, "kraka-diff-owners.sqlite", "hooks")}`,
+    `core.hooksPath=${emptyHooks}`,
     "-c",
     "core.filesRefLockTimeout=5000",
     "update-ref",
@@ -60,11 +62,11 @@ function updateArgs(common: string) {
     "--stdin",
   ];
 }
-function updateRefs(common: string, commands: string) {
-  return runGit(common, updateArgs(common), { input: Buffer.from(commands) }).exitCode === 0;
+function updateRefs(common: string, emptyHooks: string, commands: string) {
+  return runGit(common, updateArgs(emptyHooks), { input: Buffer.from(commands) }).exitCode === 0;
 }
-async function publishPair(common: string, commands: string) {
-  const child = Bun.spawn(["git", "-C", common, ...updateArgs(common)], {
+async function publishPair(common: string, emptyHooks: string, commands: string) {
+  const child = Bun.spawn(["git", "-C", common, ...updateArgs(emptyHooks)], {
     env: gitEnvironment(),
     stdin: "pipe",
     stdout: "pipe",
@@ -93,29 +95,19 @@ async function publishPair(common: string, commands: string) {
   }
 }
 
-/** Worktrees and independent environment writers can share one Git ref database. Serialize orphan scans with pin registration. */
-function withOwners<T>(common: string, work: (db: Database) => T) {
-  const path = join(common, "kraka-diff-owners.sqlite");
-  for (const suffix of ["", "-journal", "-wal", "-shm"]) {
-    const st = lstatSync(path + suffix, { throwIfNoEntry: false });
-    if (st && (!st.isFile() || st.nlink !== 1)) throw Error("Invalid comparison owner database");
-  }
-  const db = new Database(path, { create: true, strict: true });
-  try {
-    db.exec(
-      "PRAGMA busy_timeout=5000; PRAGMA trusted_schema=OFF; CREATE TABLE IF NOT EXISTS owners(id TEXT PRIMARY KEY, owner TEXT NOT NULL)",
-    );
-    return db.transaction(() => work(db)).immediate();
-  } finally {
-    db.close(true);
-  }
-}
-
 export class DiffCleanup {
+  readonly namespace: string;
+  private readonly scratchRoot: string;
+  private readonly emptyHooks: string;
   constructor(
     private readonly db: Database,
-    private readonly state: string,
+    stateDirectory: string,
+    environmentId: string,
   ) {
+    const state = realpathSync.native(stateDirectory);
+    this.namespace = `${diffRefs}w-${hashId(JSON.stringify([environmentId, state]))}/`;
+    this.scratchRoot = join(state, "diff-scratch");
+    this.emptyHooks = join(state, "diff-empty-hooks");
     db.exec(
       "CREATE TABLE IF NOT EXISTS diff_cleanup(id TEXT PRIMARY KEY,scratch TEXT NOT NULL,common TEXT NOT NULL,identity TEXT NOT NULL,leftOid TEXT,rightOid TEXT)",
     );
@@ -124,9 +116,11 @@ export class DiffCleanup {
   begin(cwd: string) {
     const repo = repository(cwd);
     if (!repo) return null;
+    mkdirSync(this.scratchRoot, { recursive: true, mode: 0o700 });
+    if (!lstatSync(this.scratchRoot).isDirectory()) throw Error("Invalid comparison scratch root");
     const id = crypto.randomUUID(),
-      scratch = join(tmpdir(), `kraka-diff-${id}`);
-    // This committed ID names both refs. Record the actual temp path even if TMPDIR changes on restart.
+      scratch = join(this.scratchRoot, `kraka-diff-${id}`);
+    // Commit the cleanup intent before creating scratch or publishing either endpoint.
     this.db.run("INSERT INTO diff_cleanup(id,scratch,common,identity) VALUES(?,?,?,?)", [
       id,
       scratch,
@@ -148,57 +142,59 @@ export class DiffCleanup {
     const row = this.row(id);
     if (!row || physicalDirectory(row.common)?.identity !== row.identity) return false;
     this.db.run("UPDATE diff_cleanup SET leftOid=?,rightOid=? WHERE id=?", [left, right, id]);
-    // Commit the shared reservation before Git can publish either endpoint.
-    withOwners(row.common, (db) => db.run("INSERT INTO owners VALUES(?,?)", [id, this.state]));
-    const prefix = namespace + id;
-    return publishPair(row.common, `create ${prefix}/from ${left}\ncreate ${prefix}/to ${right}\n`);
+    const prefix = this.namespace + id;
+    return publishPair(
+      row.common,
+      this.emptyHooks,
+      `create ${prefix}/from ${left}\ncreate ${prefix}/to ${right}\n`,
+    );
   }
   release(id: string) {
     const row = this.row(id);
     if (!row) return;
     try {
-      if (!isAbsolute(row.scratch) || basename(row.scratch) !== `kraka-diff-${v.parse(uuid, id)}`)
-        throw Error("Unrecognized scratch path");
+      const name = `kraka-diff-${v.parse(uuid, id)}`;
+      const legacy = row.scratch === join(tmpdir(), name);
+      if (!legacy && row.scratch !== join(this.scratchRoot, name))
+        throw Error("Unrecognized comparison scratch path");
+      if (!legacy && lstatSync(this.scratchRoot, { throwIfNoEntry: false })?.isSymbolicLink())
+        throw Error("Invalid comparison scratch root");
       rmSync(row.scratch, { recursive: true, force: true });
       if ((row.leftOid === null) !== (row.rightOid === null))
         throw Error("Incomplete comparison endpoints");
-      if (row.leftOid !== null && row.rightOid !== null) {
+      if (!legacy && row.leftOid !== null && row.rightOid !== null) {
         if (physicalDirectory(row.common)?.identity !== row.identity)
           throw Error("Git directory unavailable or replaced");
-        const done = withOwners(row.common, (db) => {
-          const owner = db
-            .query<{ owner: string }, [string]>("SELECT owner FROM owners WHERE id=?")
-            .get(id);
-          if (owner && owner.owner !== this.state) return false;
-          let complete = true;
-          const prefix = namespace + id + "/";
-          for (const [side, expected] of [
-            ["from", row.leftOid],
-            ["to", row.rightOid],
-          ] as const) {
-            const name = prefix + side;
-            if (!expected || !v.is(GitObjectIdSchema, expected)) return false;
-            const present = runGit(row.common, [
-              "--git-dir=.",
-              "show-ref",
-              "--exists",
-              name,
-            ]).exitCode;
-            if (
-              present === 2 &&
-              updateRefs(row.common, `verify ${name} ${"0".repeat(expected.length)}\n`)
+        let complete = true;
+        const prefix = this.namespace + id + "/";
+        for (const [side, expected] of [
+          ["from", row.leftOid],
+          ["to", row.rightOid],
+        ] as const) {
+          const name = prefix + side;
+          if (!v.is(GitObjectIdSchema, expected)) throw Error("Invalid pinned object ID");
+          const present = runGit(row.common, [
+            "--git-dir=.",
+            "show-ref",
+            "--exists",
+            name,
+          ]).exitCode;
+          if (
+            present === 2 &&
+            updateRefs(
+              row.common,
+              this.emptyHooks,
+              `verify ${name} ${"0".repeat(expected.length)}\n`,
             )
-              continue;
-            const direct =
-              runGit(row.common, ["--git-dir=.", "symbolic-ref", "--quiet", "--no-recurse", name])
-                .exitCode === 1;
-            if (!direct || !updateRefs(row.common, `delete ${name} ${expected}\n`))
-              complete = false;
-          }
-          if (complete) db.run("DELETE FROM owners WHERE id=? AND owner=?", [id, this.state]);
-          return complete;
-        });
-        if (!done) throw Error("A pinned ref changed or is still locked");
+          )
+            continue;
+          const direct =
+            runGit(row.common, ["--git-dir=.", "symbolic-ref", "--quiet", "--no-recurse", name])
+              .exitCode === 1;
+          if (!direct || !updateRefs(row.common, this.emptyHooks, `delete ${name} ${expected}\n`))
+            complete = false;
+        }
+        if (!complete) throw Error("A pinned ref changed or is still locked");
       }
       this.db.run("DELETE FROM diff_cleanup WHERE id=?", [id]);
     } catch (error) {
@@ -233,39 +229,42 @@ export class DiffCleanup {
     for (const repo of repositories.values()) {
       try {
         const common = repo.realPath;
-        // Do not create a repository-side database just to discover an empty namespace.
-        if (!refs(common, namespace).length) continue;
-        withOwners(common, (db) => {
-          const registered = new Set(
-            db
-              .query<{ id: string }, []>("SELECT id FROM owners")
-              .all()
-              .map((r) => r.id),
+        const legacy = runGit(common, [
+          "--git-dir=.",
+          "for-each-ref",
+          "--count=1",
+          "--format=%(refname)",
+          `--exclude=${diffRefs}w-*/*`,
+          `${diffRefs}*/*`,
+        ]);
+        if (legacy.exitCode !== 0) throw Error("Cannot inspect legacy comparison refs");
+        if (legacy.stdout.length)
+          console.warn(
+            "Preserved legacy comparison refs",
+            common,
+            legacy.stdout.toString().trimEnd(),
           );
-          for (const r of this.db
+        const registered = new Set(
+          this.db
             .query<{ id: string }, [string]>("SELECT id FROM diff_cleanup WHERE common=?")
-            .all(common))
-            registered.add(r.id);
-          for (const ref of refs(common, namespace)) {
-            const parts = ref.name.slice(namespace.length).split("/");
-            if (
-              parts.length === 2 &&
-              (parts[1] === "from" || parts[1] === "to") &&
-              registered.has(parts[0] ?? "")
-            )
-              continue;
-            if (
-              updateRefs(
-                common,
-                ref.symbolic
-                  ? `symref-delete ${ref.name} ${ref.symbolic}\n`
-                  : `delete ${ref.name} ${ref.oid}\n`,
-              )
-            )
-              console.warn("Removed orphan comparison ref", common, ref.name, ref.oid);
-            else console.warn("Orphan comparison ref needs inspection", common, ref.name);
-          }
-        });
+            .all(common)
+            .map((row) => row.id),
+        );
+        for (const ref of refs(common, this.namespace)) {
+          const parts = ref.name.slice(this.namespace.length).split("/");
+          if (
+            parts.length === 2 &&
+            (parts[1] === "from" || parts[1] === "to") &&
+            registered.has(parts[0] ?? "")
+          )
+            continue;
+          const command = ref.symbolic
+            ? `symref-delete ${ref.name} ${ref.symbolic}\n`
+            : `delete ${ref.name} ${ref.oid}\n`;
+          if (updateRefs(common, this.emptyHooks, command))
+            console.warn("Removed orphan comparison ref", common, ref.name, ref.oid);
+          else console.warn("Orphan comparison ref needs inspection", common, ref.name);
+        }
       } catch (error) {
         console.warn("Comparison ref scan deferred", repo.realPath, String(error));
       }

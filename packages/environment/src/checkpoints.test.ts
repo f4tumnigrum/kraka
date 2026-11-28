@@ -326,7 +326,7 @@ test("a shallow commit retains its verified right endpoint when its actual first
       threadId: key.threadId,
       worktreeId: key.worktreeId,
     });
-    const service = new LocalDiffService(new DiffCleanup(db, root));
+    const service = new LocalDiffService(new DiffCleanup(db, root, "shallow-fixture"));
     const diff = await service.readLocalDiff({
       actor: { scope: "viewer", directoryDiff: false },
       query,

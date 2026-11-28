@@ -172,7 +172,7 @@ export class FirstSendStore {
     db.exec(
       "CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));",
     );
-    this.diffCleanup = new DiffCleanup(db, writer.stateDirectory);
+    this.diffCleanup = new DiffCleanup(db, writer.stateDirectory, writer.environmentId);
     this.sync = new ThreadJournal(db, writer.environmentId);
     this.todos = new TodoLedger(this);
   }
