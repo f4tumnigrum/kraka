@@ -1,3 +1,4 @@
+import { compact } from "./context-operations";
 import { rollback } from "./rollback";
 import { checkpoint } from "./checkpoint";
 import { editQueue, input } from "./inputs";
@@ -66,6 +67,7 @@ const routes = new Map<
   route("subscription.openThread", subscription),
   route("subscription.pageSaved", subscription),
   route("thread.changeLifecycle", lifecycle),
+  route("thread.compact", compact),
   route("thread.markRead", subscription),
   route("thread.readEarlierSettled", subscription),
   route("thread.readHistory", subscription),

@@ -286,6 +286,26 @@ export class RollbackOperationStore {
       { kind: "thread", threadId: target.threadId },
       (): RequestResult | CommandReceipt => {
         if (this.read(commandId)) return reject(commandId, "idConflict");
+        if (mode === "dialogue") {
+          const round = readRound(this.store.db, target.roundId);
+          if (
+            !round ||
+            round.threadId !== target.threadId ||
+            round.attempt.attemptId !== target.attemptId
+          )
+            return reject(commandId, "notFound");
+          if ("nativeSessionId" in target) {
+            const phase = round.attempt.phase;
+            if (
+              !("root" in phase) ||
+              phase.root.id !== target.nativeRootTurnId ||
+              phase.root.sessionId !== target.nativeSessionId
+            )
+              return reject(commandId, "invalidState");
+            if (this.runtime?.support(target) === "unsupported")
+              return reject(commandId, "unsupported");
+          }
+        }
         const resolved = targetIdentity(this.store, target);
         if (!resolved || resolved.round.rolledBackBy) return reject(commandId, "invalidState");
         if (
