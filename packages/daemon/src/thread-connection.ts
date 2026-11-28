@@ -372,7 +372,7 @@ export async function threadConnection(
             startThread,
             loginSession: {
               id: session.environmentSessionId,
-              owner: actor.principal.ownerId,
+              owner: device.principal.ownerId,
               signal: sessionLifetime.signal,
               active: () => session !== null && !!usable(m.signer),
             },

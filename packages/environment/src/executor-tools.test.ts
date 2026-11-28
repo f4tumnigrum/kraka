@@ -298,6 +298,32 @@ test("changing the instance version expires cached checkout receipts", async () 
   });
 });
 
+test("recovery preserves legacy rows without a verified parent address", async () => {
+  using f = await fixture();
+  const data = JSON.stringify({
+    taskId: "legacy",
+    state: { kind: "completed", result: "unverified" },
+  });
+  f.store.db.run(
+    "INSERT INTO delegated_children(task,transfer,parent,command,data) VALUES(?,?,?,?,?)",
+    ["legacy", "old-return", "unknown", "old-launch", data],
+  );
+  f.store.db.run("INSERT INTO child_result_transfers VALUES(?,?)", [
+    "old-return",
+    JSON.stringify({ state: { kind: "pending" } }),
+  ]);
+  f.close(f.store);
+  const reopened = f.open(),
+    returns = reopened.services.childTransfers;
+  for (const id of returns.pending()) expect(await returns.returnToParent(id)).toBeNull();
+  expect(
+    reopened.db.query("SELECT data FROM delegated_children WHERE task='legacy'").get(),
+  ).toEqual({ data });
+  expect(reopened.db.query("SELECT count(*) AS n FROM parent_result_messages").get()).toEqual({
+    n: 0,
+  });
+});
+
 for (const stop of ["childSettled", "parentMessageCommitted", "returnCommitted"] as const) {
   test("resumes on the original parent round after " + stop, async () => {
     using f = await fixture();
