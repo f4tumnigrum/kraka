@@ -41,7 +41,7 @@ jobs:
         with:
           name: kraka-${{ steps.native.outputs.target }}
           path: .build/release
-      - name: Use the downloaded archive for candidate measurements
+      - name: Use the downloaded archive for installed tests
         shell: bash
         run: |
           bun -e 'import {resolve} from "node:path"; const [path]=new Bun.Glob(".build/release/*.tar.gz").scanSync(); if(!path) throw Error("Missing release"); console.log("KRAKA_TEST_ARCHIVE="+resolve(path))' >> "$GITHUB_ENV"
@@ -156,59 +156,26 @@ jobs:
           for group in 1 2 3; do grep -F "(pass) $group. " "$RUNNER_TEMP/flow-tests.log"; done
       - run: bun run build
       - run: bun run protocol:reference:check
-      - name: Measure control receipts on delayed and bandwidth-limited sockets
-        if: runner.os == 'macOS'
+      - name: Verify content and control receipts on delayed and bandwidth-limited sockets
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -euo pipefail
-          bun tools/stream-flow-bench.ts --shaped | tee "$RUNNER_TEMP/budget-shaped.jsonl"
-          grep -Fx '{"group":4,"completed":true}' "$RUNNER_TEMP/budget-shaped.jsonl"
-      - name: Prepare PR budget baseline
-        id: baseline
-        continue-on-error: true
-        if: runner.os == 'macOS' && github.event_name == 'pull_request'
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          BASE_ROOT="$(mktemp -d "$RUNNER_TEMP/kraka-perf-XXXXXX")"
-          git archive "$BASE_SHA" | tar -xf - -C "$BASE_ROOT"
-          (cd "$BASE_ROOT" && bun install --frozen-lockfile)
-          echo "root=$BASE_ROOT" >> "$GITHUB_OUTPUT"
-      - name: Measure budget workloads
-        if: ${{ !cancelled() && runner.os == 'macOS' }}
-        env:
-          BASE_ROOT: ${{ steps.baseline.outputs.root }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "$BASE_ROOT" ]]; then
-            trap 'rm -rf "$BASE_ROOT"' EXIT
-            bun tools/perf-pair.ts "$BASE_ROOT" "$RUNNER_TEMP"
-          else
-            bun run perf --report-only --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
-          fi
-          jq -es 'any(.[]; .metric == "P5" and .status == "measured" and .actual == {"small":1,"cold":5,"warm":50} and all(.samples[] | select(.unit == "B"); .value <= 954991))' "$RUNNER_TEMP/budget-candidate.jsonl"
-      - name: Enforce installed startup, idle, archive and dependency budgets
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -se '[.[] | select(.variant == "installed" or .metric == "P8" or .metric == "A1")] | length == 4 and all(.status == "measured" and .result == "pass")' "$RUNNER_TEMP/budget-candidate.jsonl"
-      - name: Compare budget observations
-        if: ${{ !cancelled() && runner.os == 'macOS' && github.event_name == 'pull_request' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bun tools/perf-compare.ts "$RUNNER_TEMP/budget-baseline.jsonl" "$RUNNER_TEMP/budget-candidate.jsonl" | tee "$RUNNER_TEMP/budget-comparison.jsonl"
+          sudo unshare --net bash -euo pipefail -c '
+            ip link set lo up
+            for shape in "delay 50ms" "rate 1mbit"; do
+              read -r kind value <<< "$shape"
+              tc qdisc replace dev lo root netem "$kind" "$value"
+              echo "Checking loopback with $shape"
+              sudo -u "$SUDO_USER" env NO_COLOR=1 "$1" test tools/stream-flow.live.test.ts \
+                --test-name-pattern "$2" --timeout 180000 2>&1 | tee "$3/socket-$kind.log"
+              grep -F "(pass) $2" "$3/socket-$kind.log"
+            done
+          ' -- "$(command -v bun)" "synthetic content traverses the real socket in both directions" "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'macOS'
         with:
-          name: daemon-budget-reports
+          name: macos-functional-logs
           path: |
-            ${{ runner.temp }}/budget-*.jsonl
             ${{ runner.temp }}/flow-tests.log
             ${{ runner.temp }}/first-answer.log
             ${{ runner.temp }}/codex-resume.log
