@@ -85,6 +85,7 @@ import {
   WorktreeRetainedSchema,
 } from "./worktrees";
 import * as v from "valibot";
+import { StartLoginSchema, LoginTargetSchema, InstanceLoginResultSchema } from "./instance-login";
 import {
   RemoteSettingTargetSchema,
   SettingCheckoutSchema,
@@ -749,6 +750,24 @@ export const REQUEST_METHODS = {
     "thread",
     AttentionReadSchema,
   ),
+  startLogin: defineRequestMethod(
+    "executor.startLogin",
+    "settings.change",
+    "environment",
+    StartLoginSchema,
+  ),
+  readLogin: defineRequestMethod(
+    "executor.readLogin",
+    "settings.change",
+    "environment",
+    LoginTargetSchema,
+  ),
+  cancelLogin: defineRequestMethod(
+    "executor.cancelLogin",
+    "settings.change",
+    "environment",
+    LoginTargetSchema,
+  ),
   configureExecutor: defineRequestMethod(
     "executor.configure",
     "settings.change",
@@ -1130,6 +1149,7 @@ export const RequestResultSchema = v.variant("kind", [
   StopResultSchema,
   ToolActivityReadResultSchema,
   ExecutorRefreshedSchema,
+  InstanceLoginResultSchema,
   v.strictObject({
     kind: v.literal("executorConfigured"),
     instanceId: ExecutorInstanceIdSchema,

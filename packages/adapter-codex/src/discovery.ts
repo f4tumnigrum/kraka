@@ -21,6 +21,8 @@ type Catalog = NonNullable<ExecutorRefreshed["models"]>;
 export type CodexProbe = {
   declaration: CapabilityDeclaration<"codex">;
   accountContext: string | null;
+  authenticationReason: string | null;
+  attemptedAt: number;
   nativeHome: string | null;
   historyRoot: string | null;
   models: Catalog | null;
@@ -99,11 +101,16 @@ const pageSchema = v.object({
     }),
   ),
 });
-export async function listModels(rpc: CodexConnection): Promise<Catalog> {
+export async function listModels(
+  rpc: CodexConnection,
+  now = Date.now,
+  beforePage = () => {},
+): Promise<Catalog> {
   const models: Catalog["models"] = [],
     seen = new Set<string>();
   let cursor: string | null = null;
   do {
+    beforePage();
     const page: v.InferOutput<typeof pageSchema> = v.parse(
       pageSchema,
       await rpc.request("model/list", { cursor, limit: 100 }),
@@ -135,7 +142,7 @@ export async function listModels(rpc: CodexConnection): Promise<Catalog> {
       seen.add(cursor);
     }
   } while (cursor !== null);
-  return { checkedAt: Date.now(), models };
+  return { checkedAt: now(), models };
 }
 export function selectedModel(models: Catalog | null, selection: SessionSetup["model"] | null) {
   const m = selection
@@ -338,11 +345,10 @@ async function basicMethods(launch: Launch) {
         "item/agentMessage/delta",
         "item/commandExecution/outputDelta",
       ].every((m) => notices.has(m));
-    if (!basic) return false;
     const server = (await Bun.file(join(dir, "ServerRequest.json")).exists())
       ? await methods("ServerRequest.json")
       : new Set<string>();
-    return { requests, server };
+    return { basic, requests, server, notices };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -366,9 +372,12 @@ export async function probeCodex(
   reg: ExecutorRegistration,
   launch: Launch,
   previous?: CodexProbe,
+  now = Date.now,
 ): Promise<CodexProbe> {
+  const attemptedAt = now();
+  let authenticationReason: string | null = null;
   const unknown = { state: "unknown", verifiedAt: null } as const;
-  const verified = (state: "yes" | "no" | "unknown") => ({ state, verifiedAt: Date.now() });
+  const verified = (state: "yes" | "no" | "unknown") => ({ state, verifiedAt: now() });
   const readiness: ExecutorRefreshed["readiness"] = {
     configured: verified(reg.enabled ? "yes" : "no"),
     installed: unknown,
@@ -382,12 +391,14 @@ export async function probeCodex(
     models: Catalog | null = null,
     compatibilityAdvisory: CodexProbe["compatibilityAdvisory"] = null,
     versionAdvisory: string | null = null;
-  let retryAt = Date.now() + 300000;
+  let retryAt = now() + 300000;
   let transient = false;
   const supported = new Set<CapabilityId>();
   const result = () => ({
     binaryVersion,
     accountContext,
+    attemptedAt,
+    authenticationReason,
     nativeHome,
     historyRoot: reg.driver.historyRoot,
     models,
@@ -397,7 +408,7 @@ export async function probeCodex(
     transient,
     declaration: declaration(
       Number(reg.version),
-      Date.now(),
+      now(),
       readiness,
       supported,
       reg.permission.selected,
@@ -428,6 +439,18 @@ export async function probeCodex(
     nativeHome = await rpc.initialize();
     supported.add("declareTransport");
     supported.add("negotiateProtocol");
+    const methods = await basicMethods(launch).catch(() => false as const);
+    if (
+      methods &&
+      methods.requests.has("account/login/start") &&
+      methods.requests.has("account/login/cancel") &&
+      methods.notices.has("account/login/completed") &&
+      methods.requests.has("account/read")
+    ) {
+      supported.add("startLogin");
+      supported.add("checkAuthentication");
+      if (methods.requests.has("model/list")) supported.add("listModels");
+    }
     const a = object(await rpc.request("account/read", { refreshToken: false }));
     if (!Object.hasOwn(a, "account")) throw new Error("Missing Codex account");
     if (a.account !== null && typeof object(a.account).type !== "string")
@@ -438,14 +461,13 @@ export async function probeCodex(
     );
     supported.add("checkAuthentication");
     if (readiness.authenticated.state !== "yes") return result();
-    models = await listModels(rpc);
+    models = await listModels(rpc, now);
     supported.add("listModels");
     const model = selectedModel(models, reg.model);
     readiness.model = verified(model ? "yes" : "no");
     if (!model) return result();
     await openThread(rpc, launch.cwd, model, true, reg.permission.selected);
-    const methods = await basicMethods(launch);
-    if (!methods) {
+    if (!methods || !methods.basic) {
       readiness.operation = verified("no");
       return result();
     }
@@ -468,19 +490,23 @@ export async function probeCodex(
         supported.add("answerApprovalChoices");
       }
   } catch (error) {
+    if (rpc && readiness.authenticated.state === "unknown")
+      authenticationReason = "Account probe inconclusive";
     if (!models && error instanceof NativeError && error.reason === "notAuthenticated") {
+      authenticationReason = "Signed out";
       readiness.authenticated = verified("no");
       models = null;
     } else if (
       !models &&
       previous?.models &&
+      (accountContext === null || previous.accountContext === accountContext) &&
       !previous.transient &&
       previous.declaration.readiness.authenticated.state === "yes"
     ) {
       transient = true;
       models = previous.models;
       readiness.model = { state: "unknown", verifiedAt: models.checkedAt };
-      retryAt = Date.now() + 30000;
+      retryAt = now() + 30000;
     }
     if (rpc && readiness.operation.verifiedAt === null) readiness.operation = verified("unknown");
   } finally {

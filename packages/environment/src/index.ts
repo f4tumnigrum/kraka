@@ -17,6 +17,7 @@ export * from "./directory-lease";
 export * from "./environment-identity";
 export * from "./executor-records";
 export * from "./executor-registry";
+export { InstanceLogins } from "./instance-login";
 export * from "./first-send";
 export * from "./first-send-store";
 export * from "./forge";
