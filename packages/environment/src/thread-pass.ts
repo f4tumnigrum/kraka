@@ -146,7 +146,17 @@ function threadWindow(threadId: ThreadId, rows: readonly ReadRow[], requested: r
         for (const id of state.route.questions) related("message", id);
     }
   }
-  for (const item of boundedEntries(historyEntries(rows))) add(item);
+  const inactive = new Set(
+    rows.flatMap((item) =>
+      item.row.objectType === "round" && item.row.value.rolledBackBy
+        ? [item.row.value.id as string]
+        : [],
+    ),
+  );
+  for (const item of boundedEntries(
+    historyEntries(rows.filter((r) => r.round === null || !inactive.has(r.round))),
+  ))
+    add(item);
   for (const item of rows) {
     const row = item.row;
     if (item.source !== threadId) continue;

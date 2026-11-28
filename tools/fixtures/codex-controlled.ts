@@ -180,6 +180,18 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
     },
     async request(method: string, id: number, p: Record<string, unknown>) {
       if (p.threadId !== session) throw Error("Foreign native thread");
+      if (method === "thread/rollback") {
+        const h = saved();
+        const count = v.parse(
+          v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(h.turns.length)),
+          p.numTurns,
+        );
+        h.turns.splice(-count);
+        writeFileSync(statePath, JSON.stringify(h));
+        note("rewound");
+        write({ id, result: { thread: { id: session, turns: h.turns } } });
+        return;
+      }
       if (method === "thread/read") {
         write({ id, result: { thread: { id: session, turns: saved().turns } } });
         note("history-read");

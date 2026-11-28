@@ -26,7 +26,7 @@ const observation = v.looseObject({
   root: v.string(),
 });
 const stageSchema = v.object({
-  stage: v.picklist(["sealed", "published", "summary", "settled"]),
+  stage: v.picklist(["sealed", "published", "summary", "settled", "dialogueCommitted"]),
   boundary: v.picklist(["before", "after"]),
   id: v.string(),
   thread: v.string(),
@@ -34,6 +34,23 @@ const stageSchema = v.object({
   token: v.string(),
 });
 export class CaptureBarriers {
+  private readonly fences = new Map<
+    string,
+    ReturnType<
+      typeof Promise.withResolvers<{ rewinds: number; writes: number; publications: number }>
+    >
+  >();
+  async rollbackFence() {
+    const token = crypto.randomUUID(),
+      done = Promise.withResolvers<{ rewinds: number; writes: number; publications: number }>();
+    this.fences.set(token, done);
+    this.writer?.child.send({ kind: "rollbackFence", token });
+    try {
+      return await within(done.promise, 5000, "Rollback ledger fence");
+    } finally {
+      this.fences.delete(token);
+    }
+  }
   readonly events = new Journal<v.InferOutput<typeof stageSchema>>();
   hold: v.InferOutput<typeof stageSchema>["stage"] | null = null;
   holdBoundary: "before" | "after" = "after";
@@ -41,8 +58,23 @@ export class CaptureBarriers {
   failSummary = false;
   writer?: ReturnType<typeof launchWriter>;
   receive = (raw: unknown) => {
+    const fence = v.safeParse(
+      v.object({
+        kind: v.literal("rollbackFence"),
+        token: v.string(),
+        rewinds: v.number(),
+        writes: v.number(),
+        publications: v.number(),
+      }),
+      raw,
+    );
+    if (fence.success) {
+      this.fences.get(fence.output.token)?.resolve(fence.output);
+      return;
+    }
     const e = v.parse(stageSchema, raw);
     this.events.push(e);
+    if (e.stage === "dialogueCommitted") return;
     if (
       e.boundary !== this.holdBoundary ||
       e.stage !== this.hold ||
@@ -140,6 +172,7 @@ async function setup(
     accepted((await f.configure(null, reg)).receipt, "executorConfigured");
     const refresh = accepted((await f.refresh()).receipt, "executorRefreshed");
     assert.equal(refresh.snapshot?.matrix.resumeSessionAfterHostRestart.kind, "native");
+    let writer: Pick<typeof f, "kill" | "stop"> = f;
     let client = f.client,
       endpoint = f.instance.endpoint;
     const event = (name: string, since = 0) =>
@@ -207,10 +240,10 @@ async function setup(
       } while (performance.now() < deadline);
       throw Error(`No committed interrupt acknowledgement for ${stopCommandId}`);
     }
-    async function restart(abrupt = false, barriers?: CaptureBarriers) {
+    async function restart(abrupt = false, barriers = patch?.barriers) {
       client.close();
-      if (abrupt) await f.kill();
-      else await f.stop();
+      if (abrupt) await writer.kill();
+      else await writer.stop();
       const next = launchWriter(
         state,
         root,
@@ -218,6 +251,7 @@ async function setup(
         undefined,
         barriers?.receive,
       );
+      writer = next;
       if (barriers) barriers.writer = next;
       writers.push(next.stderrTail);
       clean.push(next.stop);
@@ -229,6 +263,34 @@ async function setup(
     }
     return {
       f,
+      dir,
+      pair,
+      rollbackFence: () => {
+        if (!patch) throw Error("Missing ledger pipe");
+        return patch.barriers.rollbackFence();
+      },
+      async rollbackReader(threadId: ThreadId, device = pair.owner, directoryDiff = true) {
+        const cache = new SqliteThreadCache(join(dir, crypto.randomUUID() + ".sqlite"), "rollback");
+        clean.push(() => cache.close());
+        const states = new Journal<import("@kraka/protocol").RollbackProgress>();
+        const socket = await connectReplica(endpoint, pair.identity, device, cache, {
+          minor: 1,
+          directoryDiff,
+          installed() {
+            for (const scope of Object.values(cache.read().scopes))
+              for (const progress of Object.values(scope.rollbacks ?? {})) states.push(progress);
+          },
+        });
+        clean.push(socket.close);
+        assert.equal((await (await socket.client.open(threadId, null)).receipt).kind, "accepted");
+        return {
+          states,
+          rpc: socket.client.rpc.bind(socket.client),
+          close: socket.close,
+          cache,
+          client: socket.client,
+        };
+      },
       stderrTails: () => writers.map((tail) => tail()),
       async patchReader(threadId: ThreadId, directoryDiff = true) {
         const cache = new SqliteThreadCache(

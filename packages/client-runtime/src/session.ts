@@ -177,6 +177,7 @@ type OnlineReadMethod = Extract<
   | "host.listDirectory"
   | "todo.readSecretReceipt"
   | "checkpoint.diff"
+  | "checkpoint.previewRollback"
   | "checkpoint.readRollbackPart"
   | "forge.operation"
   | "forge.fileReading"

@@ -181,7 +181,7 @@ export class ThreadJournal {
     }
     for (const wake of this.listeners) wake();
   }
-  private advanceClock() {
+  advanceClock() {
     const meta = this.meta();
     if (!meta) throw Error("Missing sync clock");
     const position = String(BigInt(meta.head) + 1n);

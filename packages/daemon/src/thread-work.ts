@@ -5,6 +5,7 @@ import {
   type FixtureThreadCommand,
   type FixtureSettingReply,
 } from "./thread-connection";
+import { rollbackRuntime } from "./rollback-native";
 import { CodexInstances } from "./codex-instances";
 import {
   bindingContext,
@@ -94,6 +95,7 @@ export function threadWork<H extends object>(
   lifecycle?: WriterLifecycle,
   stops = new OrdinaryStops(transaction),
 ) {
+  transaction.services.rollbacks.runtime = rollbackRuntime(transaction, codex, actor, authHost);
   const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
   const turns = new Map<string, Promise<void>>();
   const controller = new AbortController();
