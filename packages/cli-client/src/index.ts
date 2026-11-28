@@ -10,3 +10,5 @@ export * from "./settings";
 export * from "./thread-list";
 
 export { openLocalInputs } from "@kraka/client-runtime/sqlite";
+
+export { followThread } from "./thread-follow";

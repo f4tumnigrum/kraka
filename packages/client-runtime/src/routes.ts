@@ -53,6 +53,7 @@ export type RouteEvent =
 type Options = RoutePlatform & {
   expectedIdentity: EnvironmentIdentity;
   orderedRoutes: readonly Route[];
+  features?: ServerHello["features"];
   activeEpoch: number;
   observe?(event: RouteEvent): void;
 };
@@ -187,7 +188,7 @@ export function selectRoute(options: Options) {
             attempts.delete(other);
           }
         verified.clear();
-        void attempt.authenticate();
+        void attempt.authenticate(options.features);
         return;
       }
     }

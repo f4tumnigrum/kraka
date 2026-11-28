@@ -13,10 +13,13 @@
   },
   "exports": "./src/index.ts",
   "scripts": {
-    "build": "bun build --target=node src/index.ts --outfile ../../.build/desktop-main.js"
+    "build": "bun build.ts"
   },
   "dependencies": {
     "@kraka/client-runtime": "workspace:*",
     "@kraka/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "38.0.0"
   }
 }

@@ -106,6 +106,12 @@ export function controlledTurn(url: string, basic: string, write: (frame: unknow
       end("completed", true);
       return;
     }
+    if (action === "handoff-approval") {
+      callbackId = 4002;
+      write({ ...bound("command-approval", 7), id: callbackId });
+      note("callback-opened", { id: callbackId });
+      return;
+    }
     if (action === "callback") {
       const f = bound("command-approval", 7),
         params = object(f.params);

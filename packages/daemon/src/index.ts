@@ -1,6 +1,6 @@
 import { listenBrowserDaemon } from "./browser-daemon";
 import { accessCli } from "./access";
-import { identityCommand, threadListCli } from "@kraka/cli-client";
+import { identityCommand, threadListCli, followThread } from "@kraka/cli-client";
 import { startForeground } from "./foreground";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
@@ -13,7 +13,7 @@ import {
   runReplayTurn,
   type ProviderAdapter,
 } from "@kraka/environment";
-import { ReplayRunRequestSchema } from "@kraka/protocol";
+import { ReplayRunRequestSchema, ThreadIdSchema } from "@kraka/protocol";
 import * as v from "valibot";
 import { startWriter } from "./first-send";
 
@@ -204,7 +204,41 @@ if ((typeof KRAKA_DAEMON_ENTRY !== "undefined" && KRAKA_DAEMON_ENTRY) || import.
     const [command, ...args] = process.argv.slice(2);
     if (command === worktreeWorkerCommand) await runWorktreeWorker(args[0]);
     else if (command === "thread" && args[0] === "list") await threadListCli(args.slice(1));
-    else if (command === "daemon") {
+    else if (command === "thread" && args[0] === "follow") {
+      const { values } = parseArgs({
+        args: args.slice(1),
+        options: {
+          "state-dir": { type: "string" },
+          thread: { type: "string" },
+          jsonl: { type: "boolean" },
+        },
+        allowPositionals: false,
+      });
+      if (!values["state-dir"] || !values.jsonl)
+        throw Error("Expected thread follow --state-dir DIR --thread T --jsonl");
+      const thread = v.parse(ThreadIdSchema, values.thread);
+      const publication = await readInstancePublication(resolve(values["state-dir"]));
+      if (!publication) throw Error("Environment unavailable");
+      const scope = new AbortController();
+      const cancel = () => scope.abort();
+      process.once("SIGINT", cancel);
+      process.once("SIGTERM", cancel);
+      try {
+        await followThread(publication.environmentId, publication.endpoint, thread, scope.signal);
+      } finally {
+        process.off("SIGINT", cancel);
+        process.off("SIGTERM", cancel);
+      }
+    } else if (command === "instance") {
+      const { values } = parseArgs({
+        args,
+        options: { "state-dir": { type: "string" }, json: { type: "boolean" } },
+        allowPositionals: false,
+      });
+      if (!values["state-dir"] || !values.json)
+        throw Error("Expected instance --state-dir DIR --json");
+      console.log(JSON.stringify(await readInstancePublication(resolve(values["state-dir"]))));
+    } else if (command === "daemon") {
       const { values } = parseArgs({
         args,
         options: {

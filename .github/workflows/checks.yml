@@ -360,3 +360,87 @@ jobs:
           name: installed-${{ matrix.target }}
           path: .build/installed.log
           if-no-files-found: error
+
+  desktop:
+    name: Desktop launch ${{ matrix.os }}
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: linux-x64-glibc }
+          - { os: macos-15, target: darwin-arm64 }
+          - { os: windows-2025, target: win32-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: kraka-${{ matrix.target }}
+          path: .build/release
+      - name: Download and verify pinned Electron
+        run: bun tools/fixtures/ci-electron.ts
+      - run: bun run --filter @kraka/desktop build
+      - name: Verify installed window, IPC and CLI identity
+        shell: bash
+        env:
+          KRAKA_DESKTOP_CASES: native
+          NO_COLOR: "1"
+        run: |
+          set -euo pipefail
+          archive=(.build/release/*.tar.gz)
+          export KRAKA_TEST_ARCHIVE="${archive[0]}"
+          run=(bun test tools/desktop-handoff.live.test.ts)
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            run=(xvfb-run -a "${run[@]}")
+          fi
+          "${run[@]}" 2>&1 | tee .build/desktop.log
+          grep -F '(pass) installed desktop launches' .build/desktop.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-launch-${{ matrix.os }}
+          path: .build/desktop.log
+
+  desktop-handoff:
+    name: Desktop handoff routed
+    runs-on: ubuntu-24.04
+    env:
+      KRAKA_BROWSER: chromium
+      KRAKA_BROWSER_ROUTED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-compose-action@v1
+        with:
+          version: v2.32.4
+      - name: Build the installed desktop and verify its runtime
+        shell: bash
+        run: |
+          run_id="kraka-handoff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker compose -p "$run_id" -f tools/fixtures/browser-network.compose.yml build --build-arg KRAKA_INSTALL_DESKTOP=1 router
+      - name: Verify four handoff cases on the private route
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="kraka-handoff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          compose=(docker compose -p "$run_id" -f tools/fixtures/browser-network.compose.yml -f tools/fixtures/desktop-network.compose.yml)
+          trap '"${compose[@]}" down --volumes --remove-orphans' EXIT
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          "${compose[@]}" up -d --wait
+          "${compose[@]}" exec -T desktop chown pwuser /fixture/leaf.key /fixture/mobile.sock /fixture/cdp.sock
+          "${compose[@]}" exec -T -u pwuser -e HOME=/home/pwuser -e KRAKA_DESKTOP_CASES=routed -e NO_COLOR=1 desktop xvfb-run -a bun test tools/desktop-handoff.live.test.ts 2>&1 | tee "$RUNNER_TEMP/desktop-handoff.log"
+          for group in 1 2 3 4; do grep -F "(pass) routed installed desktop handoff > handoff $group." "$RUNNER_TEMP/desktop-handoff.log"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-handoff-routed
+          path: ${{ runner.temp }}/desktop-handoff.log

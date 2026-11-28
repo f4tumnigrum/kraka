@@ -1,7 +1,13 @@
 import { randomInt } from "node:crypto";
 import { createInterface } from "node:readline";
 import { clientDeviceFile, openDeviceCredentials, ownedDirectory } from "@kraka/cli-client";
-import { createPairingInvite, openStore, openWriter, registerProject } from "@kraka/environment";
+import {
+  createPairingInvite,
+  openStore,
+  openWriter,
+  readManaged,
+  registerProject,
+} from "@kraka/environment";
 import {
   CommandIdSchema,
   DEFAULT_DEVICE_PERMISSIONS,
@@ -15,6 +21,7 @@ import * as v from "valibot";
 import { openAccessHost } from "./access";
 import { browserAssets, preflight } from "./browser-listener";
 import { CodexInstances } from "./codex-instances";
+import { threadWork } from "./thread-work";
 import { listenIdentity } from "./identity";
 
 const emit = (record: unknown) => process.stdout.write(JSON.stringify(record) + "\n");
@@ -103,6 +110,21 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
     );
     if ((await host.store.create(invite)) !== "created")
       throw Error("Cannot create pairing invitation");
+    const work = threadWork(
+      store,
+      host,
+      {
+        get id() {
+          const owner = host.store.registeredOwner(local.deviceId, local.keyId, local.publicKey);
+          if (!owner) throw Error("Foreground owner unavailable");
+          return owner.principal.id;
+        },
+      },
+      codex,
+      null,
+    );
+    cleanup.push(() => work.close());
+    host.port.openThread = (nonce) => work.openThread(nonce, true);
     const access = host.port.request;
     host.port.request = (device, r) => {
       const actor = {
@@ -114,6 +136,20 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
         ) => Boolean(host.store.ceiling(device.principal.id, object, right)),
       };
       const context = { actor, transaction: store, commandId: r.commandId };
+      if (r.method === "thread.start")
+        return work.startThread(actor, r).then((receipt) => {
+          if (receipt.kind === "accepted" && receipt.result.kind === "threadStarted") {
+            const id = r.payload.worktreeId;
+            const claim = id && readManaged(store.db, id);
+            if (
+              claim &&
+              (claim.claim.phase.kind === "building" || claim.claim.phase.kind === "preparing")
+            )
+              void work.resume(claim);
+            else work.schedule(receipt.result.threadId, r.commandId);
+          }
+          return receipt;
+        });
       if (r.method === "executor.configure") return codex.registry.configure(context, r.payload);
       if (r.method === "executor.refresh") return codex.refresh(context, r.payload);
       if (r.method === "project.register") {
@@ -140,7 +176,7 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
         emit(v.parse(PairingCompletedSchema, result));
     };
     host.port.confirmInstance = (nonce) =>
-      nonce.endsWith("?idle") && codex.active.size ? null : lock.confirm(nonce);
+      nonce.endsWith("?idle") && (codex.active.size || work.busy) ? null : lock.confirm(nonce);
     host.port.configuration.description = {
       owner: "foreground",
       platform:
@@ -152,14 +188,17 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
       onLastWindow: "keepRunning",
       onDesktopQuit: "keepRunning",
     };
-    const listener = listenIdentity(host.port, 0, [], undefined, {
+    const browserOrigin = process.env.KRAKA_BROWSER_ORIGIN;
+    if (browserOrigin && !browserOrigin.startsWith("https://"))
+      throw Error("Private browser route requires HTTPS");
+    const listener = listenIdentity(host.port, 0, browserOrigin ? [browserOrigin] : [], undefined, {
       binding: await preflight({ host: "127.0.0.1", port: 0 }),
       asset: await browserAssets(),
     });
     cleanup.push(listener.close);
     const endpoint = new URL("/ws", listener.origin);
     endpoint.protocol = "ws:";
-    emit({ kind: "ready", publication: lock.publish(endpoint.href) });
+    work.recover(() => emit({ kind: "ready", publication: lock.publish(endpoint.href) }));
     process.once("SIGINT", close);
     process.once("SIGTERM", close);
     const url = new URL("/", listener.origin);

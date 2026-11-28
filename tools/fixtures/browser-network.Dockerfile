@@ -23,3 +23,8 @@ COPY packages/environment/package.json packages/environment/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
 RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
 COPY . .
+ARG KRAKA_INSTALL_DESKTOP=0
+RUN if [ "$KRAKA_INSTALL_DESKTOP" = "1" ]; then \
+    apt-get update && apt-get install -y --no-install-recommends xvfb xauth libgtk-3-0t64 libasound2t64 && rm -rf /var/lib/apt/lists/* && \
+    CI=true bun tools/fixtures/ci-electron.ts && bun run --filter @kraka/desktop build && \
+    bun tools/package-release.ts --host --out .build/release; fi

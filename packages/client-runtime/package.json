@@ -15,7 +15,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./sqlite": "./hosts/sqlite.ts"
+    "./sqlite": "./hosts/sqlite.ts",
+    "./native-thread": "./hosts/native-thread.ts"
   },
   "scripts": {
     "build": "bun build src/index.ts --outfile ../../.build/packages/client-runtime.js"
