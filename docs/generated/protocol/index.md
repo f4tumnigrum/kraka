@@ -37296,6 +37296,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "instanceId": {
           "$ref": "#/$defs/ExecutorInstanceId"
         },
+        "permission": {
+          "$ref": "#/$defs/PermissionMode"
+        },
         "model": {
           "type": "object",
           "properties": {

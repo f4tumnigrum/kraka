@@ -88,7 +88,12 @@ export const ExecutorRefreshedSchema = v.strictObject({
   readiness: ReadinessSchema,
   models: v.nullable(ModelCatalogSchema),
   binaryVersion: v.nullable(text),
-  sessionPolicy: v.optional(v.strictObject({supportedModes:v.array(PermissionModeSchema),enforcement:v.picklist(["native","adapter","unknown"])})),
+  sessionPolicy: v.optional(
+    v.strictObject({
+      supportedModes: v.array(PermissionModeSchema),
+      enforcement: v.picklist(["native", "adapter", "unknown"]),
+    }),
+  ),
   variables: v.array(v.strictObject({ name: text, kind: v.picklist(["secret", "literal"]) })),
   compatibilityAdvisory: v.nullable(v.picklist(["broken", "unsupported"])),
   versionAdvisory: v.nullable(text),

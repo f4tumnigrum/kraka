@@ -1,4 +1,4 @@
-import { ContextOperationSchema,type ContextOperation } from "@kraka/protocol";
+import { ContextOperationSchema, type ContextOperation } from "@kraka/protocol";
 import { decodeJournalRow, encodeJournalRow } from "./journal-row";
 import { markStartupDetail } from "./capture-timing";
 import { ListIndex } from "./list-index";
@@ -228,13 +228,19 @@ export class ThreadJournal {
     extras: {
       removed?: readonly { source: ThreadId; key: ObjectKey; version: string }[];
       returns?: readonly TextReturnedEvent[];
-      context?:ContextOperation;
+      context?: ContextOperation;
       captureThread?: ThreadId;
       activity?: { item: ToolActivityHistoryItem; round: string | null };
     } = {},
   ) {
     if (!this.db.inTransaction) throw Error("Sync index must share the object write transaction");
-    if (!extras.context && !extras.activity && !rows.length && !extras.removed?.length && !extras.returns?.length)
+    if (
+      !extras.context &&
+      !extras.activity &&
+      !rows.length &&
+      !extras.removed?.length &&
+      !extras.returns?.length
+    )
       return;
     const position = this.advanceClock();
     const put =
@@ -295,7 +301,13 @@ export class ThreadJournal {
         [position, item.version, item.source, keyString(item.key)],
       );
     }
-    if(extras.context)this.db.run("INSERT OR REPLACE INTO sync_context_operations VALUES(?,?,?,?)",[extras.context.threadId,extras.context.deliveryId,position,JSON.stringify(extras.context)]);
+    if (extras.context)
+      this.db.run("INSERT OR REPLACE INTO sync_context_operations VALUES(?,?,?,?)", [
+        extras.context.threadId,
+        extras.context.deliveryId,
+        position,
+        JSON.stringify(extras.context),
+      ]);
     for (const event of extras.returns ?? [])
       this.db.run(
         "INSERT INTO sync_returns VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET changed=excluded.changed,data=excluded.data",
@@ -522,7 +534,17 @@ export class ThreadJournal {
               event: v.parse(TextReturnedEventSchema, JSON.parse(r.data)),
             }))
         : [];
-      const operations=scope.canRead(scope.threadId)?this.db.query<{changed:string;data:string},[string]>("SELECT changed,data FROM sync_context_operations WHERE source=?").all(scope.threadId).map(r=>({changed:v.parse(SyncPositionSchema,r.changed),operation:v.parse(ContextOperationSchema,JSON.parse(r.data))})):[]; 
+      const operations = scope.canRead(scope.threadId)
+        ? this.db
+            .query<{ changed: string; data: string }, [string]>(
+              "SELECT changed,data FROM sync_context_operations WHERE source=?",
+            )
+            .all(scope.threadId)
+            .map((r) => ({
+              changed: v.parse(SyncPositionSchema, r.changed),
+              operation: v.parse(ContextOperationSchema, JSON.parse(r.data)),
+            }))
+        : [];
       return { ...result, rows, deletions, returns, operations };
     })();
   }

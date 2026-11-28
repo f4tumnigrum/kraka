@@ -1,9 +1,11 @@
+import { PermissionModeSchema } from "@kraka/protocol";
 import * as v from "valibot";
 
 import type { ActiveSteers } from "./durable-replay";
 import { DeliveryIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
+  turnContent,
   savedBinding,
   replaceBinding,
   latestFrozenSession,
@@ -192,6 +194,7 @@ export async function dispatchExecutor(
     (await resumeBinding(selection, saved, previous?.epoch ?? legacy?.epoch ?? 0, attemptId));
   if (opened.kind === "rejected") return failed(opened.reason, opened.message);
   const session = opened.value;
+  const content = turnContent(store, initial, reg.instanceId);
   const todos = session.todos(store.todos, initial, selection.probe.declaration);
   let closing: ReturnType<typeof session.close> | undefined;
   const release = () => {
@@ -246,6 +249,53 @@ export async function dispatchExecutor(
       return claim;
     })();
     if (claim.kind === "rejected") return;
+    if (reg.family === "acp") {
+      const current = readRound(store.db, roundId);
+      if (current)
+        store.setPhase(
+          {
+            ...current,
+            executor: {
+              nativeSessionId: sessionId,
+              selectedMode: snapshot.permission.selected,
+              supportedModes: v.parse(
+                v.array(PermissionModeSchema),
+                selection.probe.declaration.permission.modes,
+              ),
+              enforcement: selection.probe.declaration.permission.enforcement,
+            },
+          },
+          current.attempt.phase,
+        );
+    }
+    const compact = snapshot.matrix.compactContext;
+    store.services.context.live.set(thread.id, {
+      binding,
+      support: compact,
+      current: isCurrent,
+      async invoke(id, instructions) {
+        if (compact.kind === "unsupported") throw Error("Compact unavailable");
+        const result = await session.invoke(
+          { support: compact, capabilityVersion: snapshot.version },
+          {
+            kind: "service",
+            capability: "compactContext",
+            deliveryId: id,
+            request: { kind: "compact", threadId: thread.id, instructions },
+          },
+        );
+        if (result.kind === "ok") return result.value.result;
+        return {
+          action: "compact",
+          threadId: thread.id,
+          deliveryId: id,
+          state:
+            result.reason === "unsafeToRetry"
+              ? { kind: "unknown", observedAt: Date.now() }
+              : { kind: "failed", failedAt: Date.now(), reason: result.reason },
+        };
+      },
+    });
     await store.captures.before(initial);
     signal.throwIfAborted();
     if (!isCurrent() || store.directory(thread) !== cwd)
@@ -261,6 +311,20 @@ export async function dispatchExecutor(
     if (written.value.kind !== "written" || written.value.deliveryId !== deliveryId)
       throw new Error("Unmatched delivery");
     report({ kind: "written", ...ticket, at: Date.now() });
+    const pendingRoot = session.view.pendingRoot?.();
+    const stopSupport = snapshot.matrix.stopRound;
+    if (pendingRoot && stopSupport.kind === "native")
+      stops.endpoints.set(attemptId, {
+        root: pendingRoot,
+        interrupt: async (id) =>
+          (
+            await session.invoke(
+              { capabilityVersion: snapshot.version, support: stopSupport },
+              { kind: "stop", capability: "stopRound", deliveryId: id, attemptId },
+            )
+          ).kind === "ok",
+        inspect: async () => {},
+      });
     let root: import("@kraka/protocol").NativeRootTurnId | null = null;
     let next = await first;
     while (!next.done) {
@@ -272,6 +336,12 @@ export async function dispatchExecutor(
         matchesAdapterEvent(binding, event)
       )
         store.sync.observeQuota(initial, { resetAt: p.failure.resetAt });
+      if (p.kind === "contextOperation" && matchesAdapterEvent(binding, event)) {
+        const endpoint = store.services.context.live.get(thread.id);
+        if (endpoint?.binding === binding) store.services.context.observe(p.result, endpoint);
+        next = await events.next();
+        continue;
+      }
       if (todos.event(event)) {
         next = await events.next();
         continue;
@@ -373,6 +443,8 @@ export async function dispatchExecutor(
           break;
         }
         case "contentDelta":
+          if (reg.family === "acp" && p.role === "assistant")
+            content(p.itemId, p.text, p.finalText);
           emit({
             kind: p.finalText === null ? "assistant.delta" : "assistant.final",
             ...ids,
@@ -393,6 +465,11 @@ export async function dispatchExecutor(
               endedAt: p.endedAt,
               endTimeEvidence: p.endTimeEvidence,
               nativeReason: p.outcome.nativeReason,
+              ...(reg.family === "acp" &&
+              p.outcome.reason === "failed" &&
+              "message" in p.outcome.failure
+                ? { failure: { kind: p.outcome.failure.kind, message: p.outcome.failure.message } }
+                : {}),
               ...(p.outcome.reason === "completed"
                 ? ({
                     outcome: "completed",
@@ -407,7 +484,10 @@ export async function dispatchExecutor(
               kind: "executor.failed",
               ...ids,
               reason: p.outcome.failure.kind,
-              message: p.outcome.nativeReason,
+              message:
+                reg.family === "acp" && "message" in p.outcome.failure
+                  ? p.outcome.failure.message
+                  : p.outcome.nativeReason,
             });
           emit({
             kind: "round.ended",
@@ -432,6 +512,11 @@ export async function dispatchExecutor(
   } finally {
     stops.endpoints.delete(attemptId);
     steers.delete(attemptId);
+    const endpoint = store.services.context.live.get(thread.id);
+    if (endpoint && endpoint.binding === binding) {
+      store.services.context.detach(endpoint);
+      store.services.context.live.delete(thread.id);
+    }
     todos.close();
     signal.removeEventListener("abort", release);
     await (closing ?? session.close("finished"));

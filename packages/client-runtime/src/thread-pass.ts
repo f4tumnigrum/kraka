@@ -230,7 +230,7 @@ export interface ThreadCache {
   history: Record<string, SavedPage>;
   accepted: Record<string, AcceptedInput>;
   returns: Record<string, TextReturnedEvent>;
-  contextOperations?: Record<string,import("@kraka/protocol").ContextOperation>;
+  contextOperations?: Record<string, import("@kraka/protocol").ContextOperation>;
   summaries: Record<string, Extract<ObjectChange, { kind: "thread.summary" }>["summary"]>;
 }
 export function emptyThreadCache(): ThreadCache {
@@ -375,9 +375,11 @@ export async function installThreadPass(
             saveRow(cache, { objectType: "timelineItem", value: change.observation });
             break;
           case "context.operation": {
-            const op=change.operation,key=JSON.stringify([op.threadId,op.deliveryId]);
-            const prior=cache.contextOperations?.[key];
-            if(!prior || comparePositions(op.version, prior.version)>0)cache.contextOperations={...cache.contextOperations,[key]:op};
+            const op = change.operation,
+              key = JSON.stringify([op.threadId, op.deliveryId]);
+            const prior = cache.contextOperations?.[key];
+            if (!prior || comparePositions(op.version, prior.version) > 0)
+              cache.contextOperations = { ...cache.contextOperations, [key]: op };
             break;
           }
           case "handoff.textReturned": {

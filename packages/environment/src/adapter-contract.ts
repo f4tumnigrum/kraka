@@ -177,7 +177,14 @@ type ServiceCommand =
   | Service<"reportTokenUsage", { kind: "usage"; scope: "round" | "session" }>
   | Service<"reportQuota", { kind: "quota" }>
   | Service<"reportCost", { kind: "cost"; scope: "round" | "session" }>
-  | Service<"compactContext", { kind: "compact"; instructions: string | null; threadId?: import("@kraka/protocol").ThreadId }>
+  | Service<
+      "compactContext",
+      {
+        kind: "compact";
+        instructions: string | null;
+        threadId?: import("@kraka/protocol").ThreadId;
+      }
+    >
   | Service<"startSession", { kind: "handoff" } & HandoffContext>
   | Service<
       "provideTools",

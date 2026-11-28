@@ -35348,6 +35348,9 @@
             "instanceId": {
               "$ref": "#/$defs/ExecutorInstanceId"
             },
+            "permission": {
+              "$ref": "#/$defs/PermissionMode"
+            },
             "model": {
               "type": "object",
               "properties": {

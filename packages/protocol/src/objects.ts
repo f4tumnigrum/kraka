@@ -109,7 +109,14 @@ export const MessageSchema = v.strictObject({
 });
 
 export const RoundSchema = v.strictObject({
-  executor: v.optional(v.strictObject({nativeSessionId: NativeSessionIdSchema,selectedMode: PermissionModeSchema,supportedModes:v.array(PermissionModeSchema),enforcement:v.picklist(["adapter","native","unknown"])})),
+  executor: v.optional(
+    v.strictObject({
+      nativeSessionId: NativeSessionIdSchema,
+      selectedMode: PermissionModeSchema,
+      supportedModes: v.array(PermissionModeSchema),
+      enforcement: v.picklist(["adapter", "native", "unknown"]),
+    }),
+  ),
   id: RoundIdSchema,
   threadId: ThreadIdSchema,
   messageId: MessageIdSchema,

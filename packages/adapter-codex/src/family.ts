@@ -6,7 +6,7 @@ import { probeCodex, selectedModel, type CodexProbe } from "./discovery";
 
 export const codexFamily: ExecutorFamily = {
   family: "codex",
-  supports: (reg) => reg.driver.endpoint === null,
+  supports: (reg) => reg.driver.endpoint === null && !reg.driver.args?.length,
   async probe(reg, cwd, env) {
     const executable = reg.driver.executable ?? "codex";
     if (reg.driver.configurationRoot) env.CODEX_HOME = reg.driver.configurationRoot;

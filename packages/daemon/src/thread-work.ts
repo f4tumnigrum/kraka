@@ -447,7 +447,12 @@ export function threadWork<H extends object>(
       entry = await executors.lookup(id, actor.id, projectId);
     if (!accepting) throw Error("Writer closed");
     const model = req.payload.model;
-    const chosen = executors.select(entry, model);
+    const selected = executors.select(entry, model);
+    const chosen =
+      selected &&
+      (!req.payload.permission || req.payload.permission === selected.snapshot.permission.selected)
+        ? selected
+        : null;
     return acceptFirstInput({
       verifiedActor: actor,
       commandId: req.commandId,
@@ -459,6 +464,7 @@ export function threadWork<H extends object>(
             ? null
             : "unsupported"
           : replay &&
+              (!req.payload.permission || req.payload.permission === "ask") &&
               (!model || (model.id === replay.modelId && !Object.keys(model.options).length))
             ? null
             : "unsupported",
