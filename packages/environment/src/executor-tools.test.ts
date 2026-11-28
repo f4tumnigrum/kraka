@@ -22,6 +22,7 @@ import {
   type ThreadId,
 } from "@kraka/protocol";
 import { verifyP256 } from "@kraka/protocol/web-crypto";
+import { replaceBinding } from "./executor-bindings";
 import { openWriter } from "./writer";
 import { openStore, readMessage } from "./first-send-store";
 import { acceptFirstInput, registerProject } from "./first-send";
@@ -134,13 +135,14 @@ async function fixture(
       ).toString("base64url");
     const binding = {
       family: registration.family,
+      context: "fixture",
       threadId: parent.threadId,
       attemptId: parent.attemptId,
       instanceId: registration.instanceId,
       nativeSessionId: v.parse(NativeSessionIdSchema, native?.nativeSessionId ?? "native-parent"),
       epoch: 1,
     };
-    expect(await session.replace(null, binding)).toBe(true);
+    expect(replaceBinding(store, null, binding)).toBe(true);
     const grant = session.register({
       binding,
       roundId: parent.roundId,
@@ -216,7 +218,7 @@ test("a replaced binding expires the old grant", async () => {
   f.invoke(previous);
   const next = { ...f.binding, epoch: 2 };
   const sessions = f.store.services.executorTools;
-  expect(await sessions.replace(f.binding, next)).toBe(true);
+  expect(replaceBinding(f.store, f.binding, next)).toBe(true);
   expect(f.invoke(previous)).toEqual({
     kind: "rejected",
     commandId: previous.commandId,

@@ -35,7 +35,11 @@ export interface ThreadReadView {
   floor: SyncPosition;
   rows: readonly ReadRow[];
   deletions: readonly ReadDeletion[];
-  returns: readonly { source: ThreadId; event: TextReturnedEvent; changed: SyncPosition }[];
+  returns: readonly {
+    source: ThreadId;
+    event: TextReturnedEvent | Extract<ObjectChange, { kind: "child.resultTransfer" }>;
+    changed: SyncPosition;
+  }[];
 }
 export interface AuthorizedScope {
   threadId: ThreadId;

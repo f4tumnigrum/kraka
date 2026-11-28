@@ -4788,31 +4788,161 @@
                   "additionalProperties": false
                 },
                 {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "const": "todoAnswerRead"
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "todoAnswerRead"
+                        },
+                        "todoRequestId": {
+                          "$ref": "#/$defs/TodoRequestId"
+                        },
+                        "messageId": {
+                          "$ref": "#/$defs/MessageId"
+                        },
+                        "authorId": {
+                          "$ref": "#/$defs/PrincipalId"
+                        },
+                        "deviceId": {
+                          "$ref": "#/$defs/DeviceId"
+                        },
+                        "at": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "content": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "question"
+                                },
+                                "answers": {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "questionKey": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 256
+                                        },
+                                        "answer": {
+                                          "type": "string",
+                                          "maxLength": 8192
+                                        }
+                                      },
+                                      "required": [
+                                        "questionKey",
+                                        "answer"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "questionKey": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256
+                                      },
+                                      "answer": {
+                                        "type": "string",
+                                        "maxLength": 8192
+                                      }
+                                    },
+                                    "required": [
+                                      "questionKey",
+                                      "answer"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "answers"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "approval"
+                                },
+                                "choiceKey": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256
+                                },
+                                "decision": {
+                                  "enum": [
+                                    "allow",
+                                    "deny",
+                                    "allowEdited"
+                                  ],
+                                  "type": "string"
+                                },
+                                "scope": {
+                                  "enum": [
+                                    "once",
+                                    "session",
+                                    "project",
+                                    "persistent"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "choiceKey",
+                                "decision",
+                                "scope"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "todoRequestId",
+                        "messageId",
+                        "authorId",
+                        "deviceId",
+                        "at",
+                        "content"
+                      ],
+                      "additionalProperties": false
                     },
-                    "todoRequestId": {
-                      "$ref": "#/$defs/TodoRequestId"
-                    },
-                    "messageId": {
-                      "$ref": "#/$defs/MessageId"
-                    },
-                    "authorId": {
-                      "$ref": "#/$defs/PrincipalId"
-                    },
-                    "deviceId": {
-                      "$ref": "#/$defs/DeviceId"
-                    },
-                    "at": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "content": {
-                      "oneOf": [
-                        {
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "executorAnswerRead"
+                        },
+                        "todoRequestId": {
+                          "$ref": "#/$defs/TodoRequestId"
+                        },
+                        "messageId": {
+                          "$ref": "#/$defs/MessageId"
+                        },
+                        "executor": {
+                          "$ref": "#/$defs/ExecutorPrincipal"
+                        },
+                        "at": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "content": {
                           "type": "object",
                           "properties": {
                             "kind": {
@@ -4868,57 +4998,19 @@
                             "answers"
                           ],
                           "additionalProperties": false
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "const": "approval"
-                            },
-                            "choiceKey": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 256
-                            },
-                            "decision": {
-                              "enum": [
-                                "allow",
-                                "deny",
-                                "allowEdited"
-                              ],
-                              "type": "string"
-                            },
-                            "scope": {
-                              "enum": [
-                                "once",
-                                "session",
-                                "project",
-                                "persistent"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "choiceKey",
-                            "decision",
-                            "scope"
-                          ],
-                          "additionalProperties": false
                         }
-                      ]
+                      },
+                      "required": [
+                        "kind",
+                        "todoRequestId",
+                        "messageId",
+                        "executor",
+                        "at",
+                        "content"
+                      ],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "todoRequestId",
-                    "messageId",
-                    "authorId",
-                    "deviceId",
-                    "at",
-                    "content"
-                  ],
-                  "additionalProperties": false
+                  ]
                 },
                 {
                   "type": "object",

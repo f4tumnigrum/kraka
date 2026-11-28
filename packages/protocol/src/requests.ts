@@ -112,6 +112,7 @@ import {
   P256SignatureSchema,
   ActivePrincipalSchema,
   DevicePrincipalSchema,
+  ExecutorPrincipalSchema,
   DEFAULT_DEVICE_PERMISSIONS,
   type PermissionItem,
 } from "./access";
@@ -290,7 +291,7 @@ export const TodoReplyContentSchema = v.variant("kind", [
   TodoDecisionSchema.options[0],
 ]);
 export type TodoReplyContent = v.InferOutput<typeof TodoReplyContentSchema>;
-export const TodoReplyRecordSchema = v.strictObject({
+const DeviceReplyRecordSchema = v.strictObject({
   kind: v.literal("todoAnswerRead"),
   todoRequestId: TodoRequestIdSchema,
   messageId: MessageIdSchema,
@@ -299,6 +300,18 @@ export const TodoReplyRecordSchema = v.strictObject({
   at: unixMilliseconds,
   content: TodoReplyContentSchema,
 });
+const ExecutorReplyRecordSchema = v.strictObject({
+  kind: v.literal("executorAnswerRead"),
+  todoRequestId: TodoRequestIdSchema,
+  messageId: MessageIdSchema,
+  executor: ExecutorPrincipalSchema,
+  at: unixMilliseconds,
+  content: TodoReplyContentSchema.options[0],
+});
+export const TodoReplyRecordSchema = v.variant("kind", [
+  DeviceReplyRecordSchema,
+  ExecutorReplyRecordSchema,
+]);
 export type TodoReplyRecord = v.InferOutput<typeof TodoReplyRecordSchema>;
 
 export const MethodTargetSchema = v.picklist([

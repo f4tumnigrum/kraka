@@ -467,6 +467,7 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
         );
       const answer = v.parse(TodoReplyRecordSchema, resolved.receipt.result);
       expect(answer.todoRequestId).toBe(id);
+      if (answer.kind !== "todoAnswerRead") throw Error("Expected a signed phone reply");
       expect(answer.deviceId).toBe(phoneDevice);
       expect(answer.at).toBeGreaterThan(0);
       expect(

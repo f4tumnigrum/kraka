@@ -14,6 +14,7 @@ import {
 import {
   REQUEST_METHODS,
   ChildModelSchema,
+  InstancePermissionSchema,
   ExecutorInstanceIdSchema,
   type Thread,
   type ThreadId,
@@ -76,7 +77,20 @@ export class ExecutorInstances {
       thread.worktreeId ? () => this.store.directory(thread) : undefined,
     );
     if (entry?.reg.version !== saved.version) return null;
-    return this.select(entry, v.parse(ChildModelSchema, JSON.parse(saved.model)));
+    const choice = this.select(entry, v.parse(ChildModelSchema, JSON.parse(saved.model)));
+    const child = this.store.db
+      .query<{ mode: "ask" | "edits" | "open" }, [string]>(
+        "SELECT json_extract(data,'$.effectiveMode') AS mode FROM delegated_children WHERE json_extract(data,'$.childThreadId')=? LIMIT 1",
+      )
+      .get(thread.id);
+    if (!choice || !child) return choice;
+    return {
+      ...choice,
+      sessionPermission: v.parse(InstancePermissionSchema, {
+        ceiling: child.mode,
+        selected: child.mode,
+      }),
+    };
   }
   async close() {
     this.closed = true;
@@ -122,7 +136,7 @@ export class ExecutorInstances {
     )
       return null;
     const model = entry.probe.selectModel(selection ?? entry.reg.model);
-    return model ? { ...entry, model } : null;
+    return model ? { ...entry, model, sessionPermission: entry.snapshot.permission } : null;
   }
   async probe(
     reg: ExecutorRegistration,

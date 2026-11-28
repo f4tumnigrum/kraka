@@ -14,6 +14,8 @@ import {
   hasMethodPermissions,
   withinPrincipalCeiling,
   type CommandReceipt,
+  REQUEST_METHODS,
+  type RequestResult,
   type EnvironmentId,
   type ExecutorPrincipal,
   type ObjectVersion,
@@ -25,9 +27,13 @@ import {
   type ThreadId,
 } from "@kraka/protocol";
 import { readReceipt, readRound, readThread, type FirstSendStore } from "./first-send-store";
+import { savedBinding } from "./executor-bindings";
+import { applyInputCommand } from "./input-command";
+import { acceptTodoReply } from "./todo-command";
+import { commandIntent, type LocalActor } from "./command-receipts";
 import type { ThreadBindingStore, ThreadSessionBinding } from "./executor-records";
 
-const bindingSchema = v.strictObject({
+const bindingSchema = v.object({
   family: AdapterFamilySchema,
   instanceId: ExecutorInstanceIdSchema,
   nativeSessionId: NativeSessionIdSchema,
@@ -48,45 +54,32 @@ export type ExecutorToolGrant = {
   readonly methods: ReadonlySet<ToolName>;
 };
 
-export class ExecutorTools implements ThreadBindingStore {
+export class ExecutorTools implements Pick<ThreadBindingStore, "current"> {
   private readonly live = new Map<ThreadId, ExecutorToolGrant>();
   constructor(private readonly store: FirstSendStore) {}
 
-  private latest(id: ThreadId) {
-    const row = this.store.db
-      .query<{ data: string }, [string]>(
-        "SELECT data FROM executor_tool_bindings WHERE thread=? ORDER BY epoch DESC LIMIT 1",
-      )
-      .get(id);
-    return row ? v.parse(bindingSchema, JSON.parse(row.data)) : null;
-  }
-
   async current(id: ThreadId) {
-    return this.latest(id);
-  }
-  async history(id: ThreadId) {
-    return this.store.db
-      .query<{ data: string }, [string]>(
-        "SELECT data FROM executor_tool_bindings WHERE thread=? ORDER BY epoch",
-      )
-      .all(id)
-      .map((row) => v.parse(bindingSchema, JSON.parse(row.data)));
+    return savedBinding(this.store, id);
   }
 
-  async replace(expected: ThreadSessionBinding | null, next: ThreadSessionBinding) {
-    if (!v.is(bindingSchema, next) || next.epoch !== (expected?.epoch ?? 0) + 1) return false;
-    return this.store.db
-      .transaction(() => {
-        if (!Bun.deepEquals(this.latest(next.threadId), expected)) return false;
-        this.live.delete(next.threadId);
-        this.store.db.run("INSERT INTO executor_tool_bindings(thread,epoch,data) VALUES(?,?,?)", [
-          next.threadId,
-          next.epoch,
-          JSON.stringify(next),
-        ]);
-        return true;
-      })
-      .immediate();
+  private matchingBinding(binding: BoundSession) {
+    const current = savedBinding(this.store, binding.threadId);
+    return (
+      current &&
+      current.attemptId === binding.attemptId &&
+      current.instanceId === binding.instanceId &&
+      current.family === binding.family &&
+      current.nativeSessionId === binding.nativeSessionId &&
+      current.epoch === binding.epoch
+    );
+  }
+
+  lookup(signer: SignedRequest["signer"]) {
+    if (signer.kind === "executor")
+      for (const grant of this.live.values()) {
+        if (signer.keyId === grant.keyId && signer.principalId === grant.principal.id) return grant;
+      }
+    return null;
   }
 
   register({
@@ -102,14 +95,14 @@ export class ExecutorTools implements ThreadBindingStore {
     publicKey: ExecutorToolGrant["publicKey"];
     methods: readonly ToolName[];
   }) {
-    if (!v.is(bindingSchema, binding) || this.live.has(binding.threadId)) return null;
+    if (!v.is(bindingSchema, binding)) return null;
     const { db } = this.store;
     const grant = db
       .transaction(() => {
-        if (!Bun.deepEquals(this.latest(binding.threadId), binding)) return null;
+        if (!this.matchingBinding(binding)) return null;
         const previous = db
           .query<{ principal: string }, [string, string]>(
-            "SELECT principal FROM executor_tool_bindings WHERE thread=? AND json_extract(data,'$.attemptId')=? AND principal IS NOT NULL ORDER BY epoch DESC LIMIT 1",
+            "SELECT principal FROM executor_tool_grants WHERE thread=? AND attempt=? ORDER BY epoch DESC LIMIT 1",
           )
           .get(binding.threadId, binding.attemptId);
         const grant: ExecutorToolGrant = {
@@ -131,9 +124,9 @@ export class ExecutorTools implements ThreadBindingStore {
         if (!this.attemptMatches(grant)) return null;
         const write = db
           .query(
-            "UPDATE executor_tool_bindings SET principal=? WHERE thread=? AND epoch=? AND principal IS NULL",
+            "INSERT OR IGNORE INTO executor_tool_grants(principal,thread,epoch,attempt) VALUES(?,?,?,?)",
           )
-          .run(grant.principal.id, binding.threadId, binding.epoch);
+          .run(grant.principal.id, binding.threadId, binding.epoch, binding.attemptId);
         return write.changes ? grant : null;
       })
       .immediate();
@@ -145,10 +138,14 @@ export class ExecutorTools implements ThreadBindingStore {
     if (this.live.get(grant.binding.threadId) === grant) this.live.delete(grant.binding.threadId);
   }
 
+  authorizes(signer: SignedRequest["signer"], principal: ExecutorPrincipal) {
+    const grant = this.lookup(signer);
+    return !!grant && Bun.deepEquals(grant.principal, principal) && this.isCurrent(grant);
+  }
   isCurrent(grant: ExecutorToolGrant) {
     return (
       this.live.get(grant.binding.threadId) === grant &&
-      Bun.deepEquals(this.latest(grant.binding.threadId), grant.binding) &&
+      !!this.matchingBinding(grant.binding) &&
       this.attemptMatches(grant)
     );
   }
@@ -173,11 +170,11 @@ export class ExecutorTools implements ThreadBindingStore {
     return !!this.store.db
       .query(
         `SELECT 1 FROM round_executors choice JOIN executor_registrations reg ON reg.id=choice.instance
-       WHERE choice.round=? AND choice.instance=? AND choice.version=?
+       WHERE choice.round=(SELECT id FROM rounds WHERE json_extract(data,'$.threadId')=? ORDER BY rowid LIMIT 1) AND choice.instance=? AND choice.version=?
          AND json_extract(reg.data,'$.version')=choice.version AND json_extract(reg.data,'$.family')=?
          AND json_extract(reg.data,'$.enabled')=1`,
       )
-      .get(round.id, grant.binding.instanceId, grant.instanceVersion, grant.binding.family);
+      .get(round.threadId, grant.binding.instanceId, grant.instanceVersion, grant.binding.family);
   }
 }
 
@@ -199,7 +196,14 @@ export function invokeExecutorTool({
   grant,
   transaction: store,
   allows,
+  handleChild,
+  observe = false,
 }: {
+  observe?: boolean;
+  handleChild?: (
+    request: Extract<SignedRequest, { method: "thread.launchChildren" | "thread.cancelChild" }>,
+    actor: LocalActor,
+  ) => CommandReceipt | RequestResult;
   request: SignedRequest;
   grant: ExecutorToolGrant;
   transaction: FirstSendStore;
@@ -222,8 +226,12 @@ export function invokeExecutorTool({
       const tool = [...grant.methods].find(
         (name) => EXECUTOR_TOOL_METHODS[name].method === request.method,
       );
-      if (!tool) return refuse("unsupported");
-      const operation: RequestMethodDefinition = EXECUTOR_TOOL_METHODS[tool];
+      const operation: RequestMethodDefinition | undefined = tool
+        ? EXECUTOR_TOOL_METHODS[tool]
+        : request.method === "todo.readAnswer" && grant.methods.has("answerQuestion")
+          ? REQUEST_METHODS.readAnswer
+          : undefined;
+      if (!operation) return refuse("unsupported");
       const target =
         request.method === "attachment.upload"
           ? request.payload.target
@@ -248,17 +256,83 @@ export function invokeExecutorTool({
           failure: { kind: "missingPermission", target, permission: missing },
         };
       }
-      if (request.method !== "thread.inspectCheckout") return refuse("unsupported");
+      const actor: LocalActor = {
+        id: grant.principal.id,
+        executor: grant.principal,
+        environmentId: grant.environmentId,
+        allows: (right, actual) =>
+          actual.kind === "thread" &&
+          actual.threadId === target.threadId &&
+          withinPrincipalCeiling(grant.principal, actual, right) &&
+          allows(actual.threadId, right),
+      };
+      const prior = readReceipt(store.db, grant.principal.id, commandId);
+      if (prior && !allows(target.threadId, "thread.view"))
+        return {
+          kind: "rejected",
+          commandId,
+          failure: { kind: "missingPermission", target, permission: "thread.view" },
+        };
+      if (request.method === "todo.answer" || request.method === "todo.readAnswer")
+        return acceptTodoReply({
+          verifiedActor: { ...actor, executor: grant.principal },
+          signedCommand: request,
+          writer: store,
+        });
+      if (request.method === "input.send")
+        return applyInputCommand({ actor, command: request, transaction: store });
       const thread = readThread(store.db, target.threadId);
       if (!thread) return refuse("notFound");
-      const intent = canonicalJson({
-        method: request.method,
-        target,
-        attemptId: grant.principal.attemptId,
-        payload: request.payload,
-      });
-      const prior = readReceipt(store.db, grant.principal.id, commandId);
+      const intent = commandIntent(actor, request.method, target, request.payload);
       if (prior && prior.intent !== intent) return refuse("idConflict");
+      if (request.method !== "thread.inspectCheckout") {
+        if (request.method === "thread.readChild" || request.method === "thread.cancelChild") {
+          const child = store.services.childTransfers.status(request.payload.taskId, thread.id);
+          if (!child) return refuse("notFound");
+          if (prior) return prior.receipt;
+          if (request.method === "thread.readChild") {
+            const receipt: CommandReceipt = {
+              kind: "accepted",
+              commandId,
+              result: { kind: "childStatus", child },
+            };
+            if (!observe)
+              store.db.run("INSERT INTO receipts(actor,command,intent,data) VALUES(?,?,?,?)", [
+                actor.id,
+                commandId,
+                intent,
+                JSON.stringify(receipt),
+              ]);
+            return receipt;
+          }
+        }
+        if (prior) return prior.receipt;
+        let result: RequestResult | CommandReceipt;
+        if (
+          (request.method === "thread.launchChildren" || request.method === "thread.cancelChild") &&
+          handleChild
+        )
+          result = handleChild(request, actor);
+        else if (request.method === "attachment.upload") {
+          const { attachmentId, transferId } = request.payload;
+          const row = store.db
+            .query<{ stream: number }, [string, string, string, string, string]>(
+              "INSERT OR IGNORE INTO executor_uploads(transfer,attachment,actor,thread,request) VALUES(?,?,?,?,?) RETURNING stream",
+            )
+            .get(transferId, attachmentId, actor.id, thread.id, canonicalJson(request.payload));
+          if (!row || row.stream > 2147483647) return refuse("idConflict");
+          result = { kind: "contentTransferOpened", transferId, streamId: row.stream };
+        } else return refuse("unsupported");
+        const receipt: CommandReceipt =
+          "commandId" in result ? result : { kind: "accepted", commandId, result };
+        store.db.run("INSERT INTO receipts(actor,command,intent,data) VALUES(?,?,?,?)", [
+          actor.id,
+          commandId,
+          intent,
+          JSON.stringify(receipt),
+        ]);
+        return receipt;
+      }
       const path = store.directory(thread);
       if (prior) {
         const original = prior.receipt;

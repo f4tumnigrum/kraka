@@ -6,6 +6,7 @@ import {
   type CommandId,
   type CommandReceipt,
   type EnvironmentId,
+  type ExecutorPrincipal,
   type PrincipalId,
   type PermissionItem,
   type RequestMethodDefinition,
@@ -14,6 +15,7 @@ import {
 import { type FirstSendStore, readReceipt } from "./first-send-store";
 export type LocalActor = {
   id: PrincipalId;
+  executor?: ExecutorPrincipal;
   environmentId: EnvironmentId;
   allows: (permission: PermissionItem, target: AuthorizationTarget) => boolean;
 };
@@ -28,6 +30,19 @@ export function reject(
 ): CommandReceipt {
   return { kind: "rejected", commandId, failure: { kind } };
 }
+export function commandIntent(
+  actor: LocalActor,
+  method: string,
+  target: AuthorizationTarget,
+  payload: unknown,
+) {
+  return canonicalJson({
+    method,
+    target,
+    payload,
+    ...(actor.executor && { attemptId: actor.executor.attemptId }),
+  });
+}
 export function checkCommand(
   context: FirstSendContext,
   operation: RequestMethodDefinition,
@@ -40,7 +55,7 @@ export function checkCommand(
     (right) =>
       actor.environmentId !== transaction.writer.environmentId || !actor.allows(right, target),
   );
-  const intent = canonicalJson({ method: operation.method, target, payload });
+  const intent = commandIntent(actor, operation.method, target, payload);
   if (missing)
     return {
       intent,

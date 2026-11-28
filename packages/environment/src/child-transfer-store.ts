@@ -3,6 +3,9 @@ import {
   ChildResultTransferSchema,
   DelegatedChildRecordSchema,
   MessageSchema,
+  TodoRequestIdSchema,
+  type ThreadId,
+  type RoundId,
   type ChildResultTransfer,
   type DelegatedChildRecord,
   type MessageId,
@@ -23,6 +26,8 @@ CREATE TABLE IF NOT EXISTS delegated_children (
   task TEXT PRIMARY KEY, transfer TEXT NOT NULL UNIQUE, parent TEXT NOT NULL,
   command TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(parent,command)
 );
+CREATE TABLE IF NOT EXISTS child_launches(parent TEXT NOT NULL,command TEXT NOT NULL,intent TEXT NOT NULL,owner TEXT NOT NULL,child TEXT UNIQUE,receipt TEXT NOT NULL,PRIMARY KEY(parent,command));
+CREATE UNIQUE INDEX IF NOT EXISTS delegated_child_round ON delegated_children(json_extract(data,'$.childRoundId'));
 CREATE TABLE IF NOT EXISTS child_result_transfers (
   id TEXT PRIMARY KEY, data TEXT NOT NULL
 );
@@ -33,6 +38,7 @@ CREATE TABLE IF NOT EXISTS parent_result_messages (
 );`;
 
 export class ChildTransfers implements ChildResultTransferStore {
+  beforeRecovery?: () => Promise<void>;
   afterCommit?: (event: CommitEvent) => void | Promise<void>;
   constructor(private readonly store: FirstSendStore) {}
 
@@ -40,14 +46,80 @@ export class ChildTransfers implements ChildResultTransferStore {
     const row = this.store.db
       .query<{ data: string }, [string]>("SELECT data FROM delegated_children WHERE task=?")
       .get(task);
-    return row ? v.parse(DelegatedChildRecordSchema, JSON.parse(row.data)) : null;
+    const parsed = row && v.safeParse(DelegatedChildRecordSchema, JSON.parse(row.data));
+    return parsed?.success ? parsed.output : null;
   }
 
   private transfer(id: TransferId) {
     const row = this.store.db
       .query<{ data: string }, [string]>("SELECT data FROM child_result_transfers WHERE id=?")
       .get(id);
-    return row ? v.parse(ChildResultTransferSchema, JSON.parse(row.data)) : null;
+    const parsed = row && v.safeParse(ChildResultTransferSchema, JSON.parse(row.data));
+    return parsed?.success ? parsed.output : null;
+  }
+
+  forParent(task: TaskId, parent: ThreadId) {
+    const record = this.child(task);
+    return record?.parentThreadId === parent ? record : null;
+  }
+  byRound(round: RoundId) {
+    const row = this.store.db
+      .query<{ data: string }, [string]>(
+        "SELECT data FROM delegated_children WHERE json_extract(data,'$.childRoundId')=?",
+      )
+      .get(round);
+    const parsed = row && v.safeParse(DelegatedChildRecordSchema, JSON.parse(row.data));
+    return parsed?.success ? parsed.output : null;
+  }
+
+  status(task: TaskId, parent: ThreadId) {
+    const record = this.child(task);
+    if (!record || record.parentThreadId !== parent) return null;
+    let state = record.state;
+    if (state.kind === "working" || state.kind === "queued" || state.kind === "waitingApproval") {
+      const round = readRound(this.store.db, record.childRoundId);
+      const phase = round?.attempt.phase;
+      const pending = this.store.db
+        .query<{ id: string }, [string, string]>(
+          "SELECT id FROM todo_requests WHERE json_extract(data,'$.roundId')=? AND json_extract(data,'$.threadId')=? AND json_extract(data,'$.body.kind')='approval' AND json_extract(data,'$.state.kind')='open' LIMIT 1",
+        )
+        .get(record.childRoundId, record.childThreadId);
+      if (pending)
+        state = {
+          kind: "waitingApproval",
+          roundId: record.childRoundId,
+          requestId: v.parse(TodoRequestIdSchema, pending.id),
+        };
+      else if (phase?.kind === "endedEarly")
+        state =
+          phase.reason === "stopped"
+            ? { kind: "cancelled" }
+            : { kind: "failed", reason: phase.reason };
+      else if (phase?.kind === "notDelivered") state = { kind: "failed", reason: phase.reason };
+      else if (phase && phase.kind !== "filed") state = { kind: "working" };
+    }
+    return {
+      taskId: task,
+      childCommandId: record.childCommandId,
+      threadId: record.childThreadId,
+      state,
+    };
+  }
+  cancelQueued(task: TaskId, parent: ThreadId) {
+    const record = this.child(task);
+    if (!record || record.parentThreadId !== parent || record.state.kind !== "queued") return false;
+    const round = readRound(this.store.db, record.childRoundId);
+    if (round?.attempt.phase.kind !== "filed") return false;
+    this.store.setPhase(round, {
+      kind: "notDelivered",
+      reason: "Parent cancelled",
+      lateReceipt: null,
+    });
+    this.store.db.run("UPDATE delegated_children SET data=? WHERE task=?", [
+      JSON.stringify({ ...record, state: { kind: "cancelled" } }),
+      task,
+    ]);
+    return true;
   }
 
   async read(task: TaskId) {
@@ -88,7 +160,11 @@ export class ChildTransfers implements ChildResultTransferStore {
       .immediate();
   }
 
-  async settle(record: DelegatedChildRecord, transfer: ChildResultTransfer) {
+  async settle(
+    record: DelegatedChildRecord,
+    transfer: ChildResultTransfer,
+    finishRound?: () => void,
+  ) {
     const prepared = prepareChildResultTransfer(record);
     if (prepared.kind !== "ok" || !Bun.deepEquals(prepared.value, transfer)) return "conflict";
     const { db } = this.store;
@@ -113,6 +189,7 @@ export class ChildTransfers implements ChildResultTransferStore {
           original.state.kind === "failed"
         )
           return "conflict";
+        finishRound?.();
         db.run("UPDATE delegated_children SET data=? WHERE task=?", [
           JSON.stringify(record),
           record.taskId,
@@ -121,6 +198,7 @@ export class ChildTransfers implements ChildResultTransferStore {
           transfer.id,
           JSON.stringify(transfer),
         ]);
+        this.store.sync.record([], { childTransfer: transfer });
         return "stored";
       })
       .immediate();
@@ -130,6 +208,7 @@ export class ChildTransfers implements ChildResultTransferStore {
         taskId: record.taskId,
         transferId: transfer.id,
       });
+    if (result === "stored") this.store.sync.notify();
     return result;
   }
 
@@ -174,6 +253,7 @@ export class ChildTransfers implements ChildResultTransferStore {
           JSON.stringify(next.value),
           id,
         ]);
+        this.store.sync.record([], { childTransfer: next.value });
         return "returned";
       })
       .immediate();
@@ -190,15 +270,21 @@ export class ChildTransfers implements ChildResultTransferStore {
       .transaction(() => {
         const transfer = this.transfer(id);
         if (!transfer) return null;
-        const prior = this.parentMessage(transfer);
-        if (prior) return { facts: prior, inserted: false, version: transfer.version };
         const child = this.child(transfer.taskId);
         if (
-          transfer.state.kind !== "pending" ||
           child?.state.kind !== "completed" ||
+          child.returnTransferId !== transfer.id ||
+          child.parentRoundId !== transfer.parentRoundId ||
+          child.parentThreadId !== transfer.parentThreadId ||
+          child.childRoundId !== transfer.childRoundId ||
+          child.childThreadId !== transfer.childThreadId ||
+          child.state.result !== transfer.result ||
           readRound(db, transfer.parentRoundId)?.threadId !== transfer.parentThreadId
         )
           return null;
+        const prior = this.parentMessage(transfer);
+        if (prior) return { facts: prior, inserted: false, version: transfer.version };
+        if (transfer.state.kind !== "pending") return null;
         const message = v.parse(MessageSchema, {
           id: crypto.randomUUID(),
           threadId: transfer.parentThreadId,

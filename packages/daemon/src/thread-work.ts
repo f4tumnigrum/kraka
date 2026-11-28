@@ -1,3 +1,4 @@
+import { ExecutorToolHost } from "./executor-tool-host";
 import { registerRecovery, draining } from "./writer-features/lifecycle";
 import { openAccessHost } from "./access";
 import {
@@ -60,6 +61,7 @@ export type ReplayWriter<H extends object> = {
   confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
 } | null;
 export type WriterLifecycle = {
+  executorFamilies?: readonly import("@kraka/environment").ExecutorFamily[];
   accessHost?: Awaited<ReturnType<typeof openAccessHost>>;
   queueChanged?: (threadId: ThreadId) => void;
   preparation?: PreparationHook;
@@ -93,6 +95,14 @@ export function threadWork<H extends object>(
   lifecycle?: WriterLifecycle,
   stops = new OrdinaryStops(transaction),
 ) {
+  const toolHost = new ExecutorToolHost(
+    transaction,
+    authHost.store,
+    executors,
+    stops,
+    schedule,
+    (m) => resume(m),
+  );
   const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
   const turns = new Map<string, Promise<void>>();
   const controller = new AbortController();
@@ -383,6 +393,7 @@ export function threadWork<H extends object>(
             stops,
             steers,
             ready,
+            toolHost,
           );
         } else if (replay) {
           await dispatchReplay(
@@ -428,6 +439,7 @@ export function threadWork<H extends object>(
       lifecycle?.settingReply,
       reportPermissions,
       lifecycle?.beforeInputReceipt,
+      toolHost,
     );
 
   async function startThread(
@@ -517,6 +529,7 @@ export function threadWork<H extends object>(
       return startupRecoveryPending || !!turns.size || !!preparing.size;
     },
     async close() {
+      toolHost.close();
       accepting = false;
       clearInterval(timer);
       gitStatusCache.close();

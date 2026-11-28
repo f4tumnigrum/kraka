@@ -22,7 +22,9 @@ export const todo: Handler<
       m.method === "todo.submitSecret" ? m.payload.target.threadId : m.payload.threadId;
     if (
       result.kind === "accepted" &&
-      (result.result.kind === "todoAnswerRead" || result.result.kind === "secretReceipt")
+      (result.result.kind === "todoAnswerRead" ||
+        result.result.kind === "executorAnswerRead" ||
+        result.result.kind === "secretReceipt")
     ) {
       const right = result.result.kind === "secretReceipt" ? "owner.decide" : "thread.view";
       disclosures.set(m.commandId, { stream, allowed: () => allows(thread, right) });

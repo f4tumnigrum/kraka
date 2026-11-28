@@ -5,6 +5,7 @@ export const children = {
     const children = store.services.childTransfers;
     for (const id of children.pending()) {
       store.recovery.register("child-return:" + id, async () => {
+        await children.beforeRecovery?.();
         await children.returnToParent(id);
       });
     }

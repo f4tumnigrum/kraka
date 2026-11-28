@@ -1,9 +1,11 @@
 import * as v from "valibot";
 
+import type { ExecutorToolHost } from "./executor-tool-host";
 import type { ActiveSteers } from "./durable-replay";
 import { DeliveryIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
+  prepareChildResultTransfer,
   savedBinding,
   replaceBinding,
   latestFrozenSession,
@@ -37,7 +39,7 @@ export async function resumeBinding(
     additionalDirectories: [],
     environment: {},
     model: s.model,
-    permission: s.snapshot.permission,
+    permission: s.sessionPermission,
   });
   return { opened };
 }
@@ -131,6 +133,7 @@ export async function dispatchExecutor(
   stops: OrdinaryStops,
   steers: ActiveSteers,
   prepared?: PreparedSession,
+  toolHost?: ExecutorToolHost,
 ) {
   const thread = readThread(store.db, initial.threadId),
     message = readMessage(store.db, initial.messageId);
@@ -193,8 +196,10 @@ export async function dispatchExecutor(
   if (opened.kind === "rejected") return failed(opened.reason, opened.message);
   const session = opened.value;
   const todos = session.todos(store.todos, initial, selection.probe.declaration);
+  let revokeTools: (() => void) | undefined;
   let closing: ReturnType<typeof session.close> | undefined;
   const release = () => {
+    revokeTools?.();
     closing ??= session.close("shutdown");
     void closing.catch(() => {});
   };
@@ -246,10 +251,12 @@ export async function dispatchExecutor(
       return claim;
     })();
     if (claim.kind === "rejected") return;
+    revokeTools = await toolHost?.install(session, binding, initial, selection);
     await store.captures.before(initial);
     signal.throwIfAborted();
     if (!isCurrent() || store.directory(thread) !== cwd)
       return failed("invalidState", "Directory changed before delivery");
+    const assistantParts = new Map<string, string>();
     const events = session.events()[Symbol.asyncIterator]();
     const first = events.next();
     void first.catch(() => {});
@@ -373,6 +380,11 @@ export async function dispatchExecutor(
           break;
         }
         case "contentDelta":
+          if (p.role === "assistant")
+            assistantParts.set(
+              p.itemId,
+              p.finalText ?? (assistantParts.get(p.itemId) ?? "") + p.text,
+            );
           emit({
             kind: p.finalText === null ? "assistant.delta" : "assistant.final",
             ...ids,
@@ -383,7 +395,7 @@ export async function dispatchExecutor(
 
         case "roundEnded": {
           const root = { id: p.nativeRootTurnId, sessionId, beganAt: null };
-          store.db.transaction(() => {
+          const finishRound = () => {
             if (p.outcome.reason === "failed" && p.outcome.failure.kind === "usageLimit")
               store.sync.observeQuota(initial, { resetAt: p.outcome.failure.resetAt });
             report({
@@ -400,7 +412,30 @@ export async function dispatchExecutor(
                   } as const)
                 : { outcome: p.outcome.reason }),
             });
-          })();
+          };
+          revokeTools?.();
+          const child =
+            p.outcome.reason === "completed" && store.services.childTransfers.byRound(initial.id);
+          if (child) {
+            const completed = {
+              ...child,
+              state: {
+                kind: "completed" as const,
+                result: [...assistantParts.values()].join("\n"),
+              },
+            };
+            const prepared = prepareChildResultTransfer(completed);
+            if (
+              prepared.kind !== "ok" ||
+              (await store.services.childTransfers.settle(
+                completed,
+                prepared.value,
+                finishRound,
+              )) === "conflict"
+            )
+              throw Error("Conflicting child completion");
+            await store.services.childTransfers.returnToParent(prepared.value.id);
+          } else store.db.transaction(finishRound)();
           stops.ended(attemptId);
           if (p.outcome.reason === "failed")
             emit({
@@ -432,6 +467,7 @@ export async function dispatchExecutor(
   } finally {
     stops.endpoints.delete(attemptId);
     steers.delete(attemptId);
+    revokeTools?.();
     todos.close();
     signal.removeEventListener("abort", release);
     await (closing ?? session.close("finished"));
