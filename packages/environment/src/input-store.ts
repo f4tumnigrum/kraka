@@ -110,7 +110,7 @@ export function advanceQueue(store: FirstSendStore, thread: ThreadId) {
   store.onQueueChanged?.(thread);
 }
 const unfinishedRows =
-  "json_extract(data,'$.attempt.phase.kind') NOT IN ('finished','endedEarly','notDelivered')";
+  "json_extract(data,'$.attempt.phase.kind') NOT IN ('finished','endedEarly','notDelivered') AND json_extract(data,'$.attempt.phase.kind') NOT IN ('handled','interrupted')";
 export function threadRounds(store: FirstSendStore, thread: ThreadId, unfinishedOnly = false) {
   const rows = store.db
     .query<{ id: string; source: "person" | "automation" }, [string]>(

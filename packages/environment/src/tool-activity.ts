@@ -1,3 +1,4 @@
+import { promoteSessionObservation } from "./session-observations";
 import type {
   EnvironmentId,
   ObjectVersion,
@@ -270,6 +271,26 @@ export function recordAdapterActivity(
 ) {
   const p = event.payload;
   if (!matchesAdapterEvent(binding, event)) throw Error("Foreign activity handle");
+  if (p.kind === "sessionObservationLinked") {
+    if (p.attemptId !== binding.attemptId) throw Error("Foreign observation attempt");
+    const source = {
+      instanceId: event.instanceId,
+      nativeSessionId: event.sessionId,
+      epoch: event.epoch,
+      ...p.observation,
+    };
+    return journal.saveObservation(binding.threadId, source, (prior) => {
+      if (!prior) throw Error("Unknown observation source");
+      const linked = promoteSessionObservation(prior, {
+        kind: "attempt",
+        source,
+        attemptId: p.attemptId,
+        relationship: p.relationship,
+      });
+      if (linked.kind !== "ok") throw Error(linked.reason);
+      return linked.value;
+    });
+  }
   if (p.kind === "sessionObservation") {
     const { kind, sourceId, ...payload } = p;
     const source = {

@@ -9038,7 +9038,11 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
           }
         },
         "enforcement": {
-          "const": "native"
+          "enum": [
+            "native",
+            "adapter"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -16348,6 +16352,130 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "lateReceipt"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "handled"
+        },
+        "handledAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "handledAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "interrupted"
+        },
+        "root": {
+          "$ref": "#/$defs/NativeRoot"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReceiptProof"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "unexpectedExit"
+                },
+                "code": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "signal": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "code",
+                "signal"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "transportError"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "protocolError"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "root",
+        "receipt",
+        "observedAt",
+        "failure"
+      ],
+      "additionalProperties": false
     }
   ]
 }
@@ -22612,6 +22740,130 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                   "type": "object",
                                                   "properties": {
                                                     "kind": {
+                                                      "const": "handled"
+                                                    },
+                                                    "handledAt": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "handledAt"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "const": "interrupted"
+                                                    },
+                                                    "root": {
+                                                      "$ref": "#/$defs/NativeRoot"
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/ReceiptProof"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "observedAt": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "failure": {
+                                                      "oneOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "unexpectedExit"
+                                                            },
+                                                            "code": {
+                                                              "anyOf": [
+                                                                {
+                                                                  "type": "integer",
+                                                                  "minimum": -9007199254740991,
+                                                                  "maximum": 9007199254740991
+                                                                },
+                                                                {
+                                                                  "type": "null"
+                                                                }
+                                                              ]
+                                                            },
+                                                            "signal": {
+                                                              "anyOf": [
+                                                                {
+                                                                  "type": "string"
+                                                                },
+                                                                {
+                                                                  "type": "null"
+                                                                }
+                                                              ]
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "code",
+                                                            "signal"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "transportError"
+                                                            },
+                                                            "message": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "message"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "kind": {
+                                                              "const": "protocolError"
+                                                            },
+                                                            "message": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "kind",
+                                                            "message"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "root",
+                                                    "receipt",
+                                                    "observedAt",
+                                                    "failure"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
                                                       "const": "notDelivered"
                                                     },
                                                     "reason": {
@@ -23515,6 +23767,130 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                       "root",
                                                       "endedAt",
                                                       "reason"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "handled"
+                                                      },
+                                                      "handledAt": {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "handledAt"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "const": "interrupted"
+                                                      },
+                                                      "root": {
+                                                        "$ref": "#/$defs/NativeRoot"
+                                                      },
+                                                      "receipt": {
+                                                        "anyOf": [
+                                                          {
+                                                            "$ref": "#/$defs/ReceiptProof"
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ]
+                                                      },
+                                                      "observedAt": {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      "failure": {
+                                                        "oneOf": [
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "unexpectedExit"
+                                                              },
+                                                              "code": {
+                                                                "anyOf": [
+                                                                  {
+                                                                    "type": "integer",
+                                                                    "minimum": -9007199254740991,
+                                                                    "maximum": 9007199254740991
+                                                                  },
+                                                                  {
+                                                                    "type": "null"
+                                                                  }
+                                                                ]
+                                                              },
+                                                              "signal": {
+                                                                "anyOf": [
+                                                                  {
+                                                                    "type": "string"
+                                                                  },
+                                                                  {
+                                                                    "type": "null"
+                                                                  }
+                                                                ]
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "code",
+                                                              "signal"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          },
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "transportError"
+                                                              },
+                                                              "message": {
+                                                                "type": "string"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "message"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          },
+                                                          {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "kind": {
+                                                                "const": "protocolError"
+                                                              },
+                                                              "message": {
+                                                                "type": "string"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "kind",
+                                                              "message"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          }
+                                                        ]
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "root",
+                                                      "receipt",
+                                                      "observedAt",
+                                                      "failure"
                                                     ],
                                                     "additionalProperties": false
                                                   },

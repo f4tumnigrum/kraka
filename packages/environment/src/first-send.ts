@@ -1,3 +1,4 @@
+import { isTerminalRoundPhase } from "@kraka/protocol";
 import { changeThreadLifecycle } from "./thread-lifecycle";
 import * as v from "valibot";
 import {
@@ -259,12 +260,7 @@ export function applyThreadChange(
       const blocked =
         old.facts.requests.some(
           (r) => r.request.state.kind === "open" && r.request.body.kind === "approval",
-        ) ||
-        old.facts.rounds.some(
-          (r) =>
-            !r.quota &&
-            !["finished", "endedEarly", "notDelivered"].includes(r.round.attempt.phase.kind),
-        );
+        ) || old.facts.rounds.some((r) => !r.quota && !isTerminalRoundPhase(r.round.attempt.phase));
       const lifecycle = changeThreadLifecycle(old.summary.lifecycle, change, Date.now(), blocked);
       if (!lifecycle) return reject(commandId, "invalidState");
       const updated = v.parse(ThreadSchema, {

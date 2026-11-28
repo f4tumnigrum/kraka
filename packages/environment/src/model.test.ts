@@ -84,9 +84,23 @@ const phases = {
   closing: { kind: "closing", ...closed, captureId },
   finished: { kind: "finished", ...closed, captureId },
   endedEarly: { kind: "endedEarly", ...closed, reason: "failed" },
+  handled: { kind: "handled", handledAt: 10 },
+  interrupted: {
+    kind: "interrupted",
+    ...execution,
+    observedAt: 11,
+    failure: { kind: "unexpectedExit", code: 7, signal: null },
+  },
   notDelivered: { kind: "notDelivered", reason: "userAbandoned", lateReceipt: null },
 } satisfies Record<RoundPhase["kind"], RoundPhase>;
 const reports = {
+  handled: { ...ticket, kind: "handled", at: 10 },
+  sessionLost: {
+    ...ticket,
+    kind: "sessionLost",
+    at: 11,
+    failure: { kind: "unexpectedExit", code: 7, signal: null },
+  },
   written: { ...ticket, kind: "written", at: 9 },
   received: { ...ticket, kind: "received", proof },
   unknown: { ...ticket, kind: "unknown" },
@@ -117,6 +131,7 @@ type Destinations<S extends string, E extends string> = Record<S, Partial<Record
 const roundDestinations: Destinations<RoundPhase["kind"], RoundReport["kind"]> = {
   filed: {},
   armed: {
+    handled: "handled",
     written: "handed",
     received: "received",
     unknown: "uncertain",
@@ -125,6 +140,7 @@ const roundDestinations: Destinations<RoundPhase["kind"], RoundReport["kind"]> =
     rootEnded: "closing",
   },
   handed: {
+    handled: "handled",
     written: "handed",
     received: "received",
     unknown: "uncertain",
@@ -154,12 +170,14 @@ const roundDestinations: Destinations<RoundPhase["kind"], RoundReport["kind"]> =
     observationLost: "unobserved",
   },
   working: {
+    sessionLost: "interrupted",
     received: "working",
     observationLost: "unobserved",
     rootStarted: "working",
     rootEnded: "closing",
   },
   unobserved: {
+    sessionLost: "interrupted",
     received: "unobserved",
     unknown: "unobserved",
     observationLost: "unobserved",
@@ -169,6 +187,8 @@ const roundDestinations: Destinations<RoundPhase["kind"], RoundReport["kind"]> =
   closing: { received: "closing", rootEnded: "closing", captureSettled: "finished" },
   finished: { received: "finished", rootEnded: "finished", captureSettled: "finished" },
   endedEarly: { received: "endedEarly" },
+  handled: { handled: "handled" },
+  interrupted: { sessionLost: "interrupted" },
   notDelivered: { received: "notDelivered" },
 };
 for (const phase of Object.values(phases)) {

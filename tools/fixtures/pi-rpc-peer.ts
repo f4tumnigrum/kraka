@@ -1,0 +1,239 @@
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
+import * as v from "valibot";
+import errorRecording from "../../fixtures/executors/pi/error.jsonl" with { type: "text" };
+
+const args = process.argv.slice(2);
+const option = (flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
+const ledger = process.env.KRAKA_PI_LEDGER;
+const control = process.env.KRAKA_PI_CONTROL;
+const pid = process.pid;
+let epoch = 0,
+  position = 0;
+function record(event: string, details: object = {}) {
+  const row = { event, pid, epoch, ...details };
+  if (ledger) appendFileSync(ledger, `${JSON.stringify(row)}\n`);
+  return row;
+}
+async function signal(event: string, details: object = {}) {
+  const row = record(event, details);
+  if (control) {
+    const response = await fetch(control, { method: "POST", body: JSON.stringify(row) });
+    if (!response.ok) throw Error("Fixture signal failed");
+  }
+}
+record("launch", { args, cwd: process.cwd(), account: process.env.PI_CODING_AGENT_DIR });
+if (args.includes("--version")) {
+  console.log("1.6.0");
+  process.exit(0);
+}
+if (args[0] === "auth" && args[1] === "check") {
+  console.log(JSON.stringify({ status: "ready" }));
+  process.exit(0);
+}
+if (option("--mode") !== "rpc") process.exit(2);
+const dir = option("--session-dir");
+if (!dir || !process.env.PI_CODING_AGENT_DIR) throw Error("Missing isolated Pi directories");
+mkdirSync(dir, { recursive: true });
+const resume = option("--session");
+const sessionId = resume ?? crypto.randomUUID();
+const sessionFile = join(
+  dir,
+  readdirSync(dir).find((f) => resume && f.endsWith(`_${resume}.jsonl`)) ??
+    `fixture_${sessionId}.jsonl`,
+);
+if (resume && !existsSync(sessionFile)) throw Error("Missing fixture session");
+const model = { provider: "sample-provider", id: "sample-chat", name: "Sample Chat" };
+const commands: { name: string; source: string }[] = [];
+type ToolHook = (
+  e: { toolName: string; input: object },
+  ctx: { ui: { confirm: (title: string, message: string) => Promise<boolean> } },
+) => Promise<{ block: boolean } | undefined>;
+let hook: ToolHook | undefined;
+if (!process.env.KRAKA_PI_MISSING_BRIDGE) {
+  const path = option("--extension");
+  if (path) {
+    const extension = await import(pathToFileURL(path).href);
+    extension.default({
+      registerCommand(name: string) {
+        commands.push({ name, source: "extension" });
+      },
+      on(event: string, listener: ToolHook) {
+        if (event === "tool_call") hook = listener;
+      },
+    });
+  }
+}
+function frame(data: object) {
+  writeSync(1, `${JSON.stringify(data)}\n`);
+}
+function assistant(stopReason: string, content: object[] = []) {
+  return { role: "assistant", stopReason, content };
+}
+const recording = errorRecording
+  .trim()
+  .split("\n")
+  .map((line) => JSON.parse(line))
+  .filter((row) => row.direction === "fromExecutor")
+  .map((row) => row.frame);
+let scenario = "",
+  questions = 0;
+const approval: { resolve?: (allow: boolean) => void } = {};
+const ui = (id: string, method: string, title: string, extra: object = {}) => {
+  frame({ type: "extension_ui_request", id, method, title, ...extra });
+  return signal("uiRequest", { id });
+};
+function settle() {
+  frame({ type: "message_end", message: assistant("stop") });
+  frame({ type: "agent_settled", aborted: false });
+}
+async function runPrompt(text: string, reply: (data: object) => void) {
+  scenario = text;
+  if (!existsSync(sessionFile))
+    writeFileSync(
+      sessionFile,
+      `${JSON.stringify({ type: "session", version: 3, id: sessionId, cwd: process.cwd() })}\n`,
+    );
+  if (text === "handled") {
+    reply({ disposition: "handled" });
+    return;
+  }
+  if (text === "queued") {
+    frame({ type: "queue_update", steering: [], followUp: [text] });
+    reply({ disposition: "queued" });
+  } else reply({ disposition: "started" });
+  frame({ type: "agent_start" });
+  if (text === "queued") {
+    await signal("queued");
+    frame({ type: "queue_update", steering: [], followUp: [] });
+    frame({ type: "message_start", message: { role: "user", content: [{ type: "text", text }] } });
+  }
+  await signal("agentStarted", { attempt: text });
+  switch (text) {
+    case "error":
+    case "retry":
+      for (const event of recording) {
+        if (!["response", "agent_start", "agent_settled"].includes(event.type)) frame(event);
+      }
+      if (text === "retry") {
+        frame({ type: "auto_retry_start" });
+        frame({ type: "turn_start" });
+        frame({ type: "message_end", message: assistant("stop") });
+      }
+      frame({ type: "agent_settled", aborted: false });
+      return;
+    case "questions":
+      questions = 1;
+      await ui("question-1", "select", "Pick a color", { options: ["jade", "ochre"] });
+      return;
+    case "pipe":
+      await signal("beforePipeClose");
+      closeSync(1);
+      await signal("pipeClosed");
+      return;
+    case "observe":
+      frame({
+        type: "tool_execution_start",
+        toolCallId: "call-7",
+        toolName: "read",
+        args: { path: "private" },
+      });
+      await signal("beforeHistoryLink");
+      frame({
+        type: "message_end",
+        message: assistant("toolUse", [{ type: "toolCall", id: "call-7" }]),
+      });
+      return;
+    case "policy": {
+      if (!hook) throw Error("Policy hook unavailable");
+      const result = await hook(
+        { toolName: "bash", input: { command: "fixture operation" } },
+        {
+          ui: {
+            confirm: (title, message) => {
+              const result = Promise.withResolvers<boolean>();
+              approval.resolve = result.resolve;
+              void ui("approval", "confirm", title, { message });
+              return result.promise;
+            },
+          },
+        },
+      );
+      await signal("toolDecision", { blocked: result?.block ?? false });
+      settle();
+      return;
+    }
+    default:
+      settle();
+  }
+}
+const commandSchema = v.looseObject({ id: v.string(), type: v.string() });
+for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+  const cmd = v.parse(commandSchema, JSON.parse(line));
+  const match = /^pi-(\d+)-\d+$/.exec(cmd.id);
+  if (match) epoch = Number(match[1]);
+  await signal("frameRead", { position: ++position, frame: cmd });
+  const reply = (data: object) =>
+    frame({ id: cmd.id, type: "response", command: cmd.type, success: true, data });
+  switch (cmd.type) {
+    case "get_state":
+      reply({ sessionId, sessionFile, model, isStreaming: false, pendingMessageCount: 0 });
+      break;
+    case "get_commands":
+      reply({ commands });
+      break;
+    case "get_available_models":
+      reply({ models: [model] });
+      break;
+    case "prompt":
+      void runPrompt(v.parse(v.string(), cmd.message), reply).catch(() => process.exit(3));
+      break;
+    case "extension_ui_response":
+      if (approval.resolve && cmd.id === "approval") {
+        approval.resolve(cmd.confirmed === true);
+        delete approval.resolve;
+      }
+      if (scenario === "questions" && cmd.id === "question-1" && questions === 1) {
+        questions++;
+        await ui("question-2", "input", "Next answer");
+      }
+      break;
+    case "get_entries":
+      await signal("historyRead");
+      reply({
+        entries: [
+          {
+            type: "message",
+            id: "assistant-native-8",
+            parentId: null,
+            message: assistant("toolUse", [{ type: "toolCall", id: "call-7" }]),
+          },
+        ],
+        leafId: "assistant-native-8",
+      });
+      break;
+    case "abort":
+      reply({});
+      frame({ type: "agent_settled", aborted: true });
+      break;
+    default:
+      frame({
+        id: cmd.id,
+        type: "response",
+        command: cmd.type,
+        success: false,
+        error: "Unknown fixture command",
+      });
+  }
+}
+record("stdinClosed");

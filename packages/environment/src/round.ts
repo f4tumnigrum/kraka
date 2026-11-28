@@ -27,6 +27,12 @@ type RootObservation =
 export type RoundReport = { attemptId: AttemptId; deliveryId: DeliveryId } & (
   | { kind: "written"; at: number }
   | { kind: "received"; proof: ReceiptProof }
+  | { kind: "handled"; at: number }
+  | {
+      kind: "sessionLost";
+      at: number;
+      failure: Extract<RoundPhase, { kind: "interrupted" }>["failure"];
+    }
   | { kind: "unknown" }
   | { kind: "refused"; reason: string }
   | { kind: "absentAfterFence" }
@@ -51,6 +57,24 @@ export function transitionRound(
   if (event.deliveryId !== attempt.deliveryId) return reject("wrongDelivery");
   const phase = attempt.phase;
   switch (event.kind) {
+    case "handled":
+      if (phase.kind === "handled") return ok(phase);
+      return phase.kind === "armed" || phase.kind === "handed"
+        ? ok({ kind: "handled", handledAt: event.at })
+        : reject("invalidState");
+    case "sessionLost": {
+      if (phase.kind === "interrupted") return ok(phase);
+      const seen = phase.kind === "unobserved" ? phase.seen : phase;
+      return seen.kind === "working" || seen.kind === "root"
+        ? ok({
+            kind: "interrupted",
+            root: seen.root,
+            receipt: seen.receipt,
+            observedAt: event.at,
+            failure: event.failure,
+          })
+        : reject("invalidState");
+    }
     case "written":
       if (phase.kind === "handed") return ok(phase);
       return phase.kind === "armed"
@@ -90,6 +114,8 @@ export function transitionRound(
             return reject("wrongDelivery");
           return ok({ ...phase, seen: { ...seen, receipt: event.proof } });
         }
+        case "interrupted":
+        case "handled":
         case "filed":
           return reject("invalidState");
         default:
@@ -152,6 +178,8 @@ export function transitionRound(
           if (phase.seen.proof.sessionId !== event.root.sessionId) return reject("wrongNativeRoot");
           receipt = phase.seen.proof;
           break;
+        case "interrupted":
+        case "handled":
         case "filed":
         case "closing":
         case "finished":
@@ -173,7 +201,13 @@ export function transitionRound(
           ? ok(phase)
           : reject("invalidState");
       }
-      if (phase.kind === "filed" || phase.kind === "notDelivered") return reject("invalidState");
+      if (
+        phase.kind === "filed" ||
+        phase.kind === "notDelivered" ||
+        phase.kind === "handled" ||
+        phase.kind === "interrupted"
+      )
+        return reject("invalidState");
       // A correlated native terminal response can be the first observation of this root.
       const seen = phase.kind === "unobserved" ? phase.seen : phase;
       const recorded = seen.kind === "working" || seen.kind === "root" ? seen : null;
@@ -253,6 +287,8 @@ export function recoverInputDelivery(
     case "closing":
     case "finished":
     case "endedEarly":
+    case "handled":
+    case "interrupted":
     case "notDelivered":
       return phase;
     default:
