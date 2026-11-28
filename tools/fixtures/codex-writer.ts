@@ -54,8 +54,13 @@ const writer = await startWriter(state, null, {
   },
 });
 if (writer.kind !== "ready") throw new Error("Expected owned writer");
-process.stdin.once("end", writer.close);
+const close = writer.close;
+async function shutdown() {
+  await close();
+  if (process.connected) process.disconnect?.();
+}
+process.stdin.once("end", shutdown);
 process.stdin.resume();
-process.once("SIGTERM", writer.close);
-process.once("SIGINT", writer.close);
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
 console.log(JSON.stringify({ kind: writer.kind, publication: writer.instance }));
