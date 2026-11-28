@@ -2181,6 +2181,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                             "unknown"
                           ],
                           "type": "string"
+                        },
+                        "failure": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "message"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -4257,6 +4273,30 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                       "type": "null"
                     }
                   ]
+                },
+                "sessionPolicy": {
+                  "type": "object",
+                  "properties": {
+                    "supportedModes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/PermissionMode"
+                      }
+                    },
+                    "enforcement": {
+                      "enum": [
+                        "native",
+                        "adapter",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "supportedModes",
+                    "enforcement"
+                  ],
+                  "additionalProperties": false
                 },
                 "variables": {
                   "type": "array",
@@ -15801,6 +15841,38 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 {
   "type": "object",
   "properties": {
+    "executor": {
+      "type": "object",
+      "properties": {
+        "nativeSessionId": {
+          "$ref": "#/$defs/NativeSessionId"
+        },
+        "selectedMode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "supportedModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionMode"
+          }
+        },
+        "enforcement": {
+          "enum": [
+            "adapter",
+            "native",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "nativeSessionId",
+        "selectedMode",
+        "supportedModes",
+        "enforcement"
+      ],
+      "additionalProperties": false
+    },
     "id": {
       "$ref": "#/$defs/RoundId"
     },
@@ -16451,6 +16523,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
             "unknown"
           ],
           "type": "string"
+        },
+        "failure": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -22747,6 +22835,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                         "unknown"
                                                       ],
                                                       "type": "string"
+                                                    },
+                                                    "failure": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "type": "string"
+                                                        },
+                                                        "message": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "message"
+                                                      ],
+                                                      "additionalProperties": false
                                                     }
                                                   },
                                                   "required": [
@@ -23657,6 +23761,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                                                           "unknown"
                                                         ],
                                                         "type": "string"
+                                                      },
+                                                      "failure": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "kind": {
+                                                            "type": "string"
+                                                          },
+                                                          "message": {
+                                                            "type": "string"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "kind",
+                                                          "message"
+                                                        ],
+                                                        "additionalProperties": false
                                                       }
                                                     },
                                                     "required": [
@@ -31211,6 +31331,12 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                     }
                   ]
                 },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "endpoint": {
                   "anyOf": [
                     {
@@ -37685,6 +37811,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "instanceId": {
           "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "permission": {
+          "$ref": "#/$defs/PermissionMode"
         },
         "model": {
           "type": "object",

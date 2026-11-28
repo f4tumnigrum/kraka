@@ -1,3 +1,4 @@
+import { PermissionModeSchema } from "./access";
 import { RegistrationInputSchema, ExecutorRefreshedSchema } from "./executor-instance";
 import {
   ThreadChangeSchema,
@@ -370,6 +371,7 @@ const ThreadStartPayloadSchema = v.strictObject({
   projectId: ProjectIdSchema,
   worktreeId: v.nullable(WorktreeIdSchema),
   instanceId: v.optional(ExecutorInstanceIdSchema),
+  permission: v.optional(PermissionModeSchema),
   model: v.optional(ChildModelSchema),
   content: InputContentSchema,
 });
