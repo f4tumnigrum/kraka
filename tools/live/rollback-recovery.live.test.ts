@@ -185,7 +185,7 @@ test(
         files: { kind: "pending", execution: 1 },
       });
       expect(await ledger(s)).toEqual({ rewinds: 1, writes: 0 });
-      await s.restart(true);
+      await s.restartRollback(true);
       const reconnected = await s.rollbackReader(seed.threadId);
       await settled(reconnected, seed.id, "files", "succeeded");
       expect((await readPart(reconnected, seed, "files")).progress.dialogue).toEqual({
@@ -261,7 +261,7 @@ test(
       );
       expect(retry.progress.externalEffects).toEqual([]);
       await settled(client, seed.id, "files", "succeeded", 2);
-      await s.restart();
+      await s.restartRollback();
       const observer = await s.rollbackReader(seed.threadId),
         limited = await s.rollbackReader(seed.threadId, viewer);
       expect((await settled(observer, seed.id, "files", "succeeded", 2)).externalEffects).toEqual(
@@ -298,7 +298,7 @@ test(
         }
       }
       await inspect(client);
-      await s.restart();
+      await s.restartRollback();
       await inspect(await s.rollbackReader(seed.threadId));
       expect((await ledger(s)).rewinds).toBe(0);
       expect((await s.rollbackFence()).publications).toBe(0);

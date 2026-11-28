@@ -240,7 +240,7 @@ async function setup(
       } while (performance.now() < deadline);
       throw Error(`No committed interrupt acknowledgement for ${stopCommandId}`);
     }
-    async function restart(abrupt = false, barriers = patch?.barriers) {
+    async function restart(abrupt = false, barriers?: CaptureBarriers) {
       client.close();
       if (abrupt) await writer.kill();
       else await writer.stop();
@@ -265,6 +265,7 @@ async function setup(
       f,
       dir,
       pair,
+      restartRollback: (abrupt = false) => restart(abrupt, patch?.barriers),
       rollbackFence: () => {
         if (!patch) throw Error("Missing ledger pipe");
         return patch.barriers.rollbackFence();

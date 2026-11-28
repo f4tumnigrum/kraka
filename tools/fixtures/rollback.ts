@@ -60,7 +60,7 @@ export async function twoTurns(s: PatchHost) {
 export type Seed = Awaited<ReturnType<typeof twoTurns>>;
 export async function resume(s: PatchHost, enabled = true) {
   if (enabled) writeFileSync(join(s.dir, "rewind-enabled"), "");
-  await s.restart();
+  await s.restartRollback();
   if (!enabled) return;
   accepted(
     (
