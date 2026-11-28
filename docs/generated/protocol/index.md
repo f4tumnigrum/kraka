@@ -3913,6 +3913,13 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "kind": {
                   "const": "executorRefreshed"
                 },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
                 "instanceId": {
                   "$ref": "#/$defs/ExecutorInstanceId"
                 },

@@ -114,9 +114,9 @@ export async function openAccessHost(
         const lock = new Database(join(dir, "access-listener.sqlite"), { create: true });
         try {
           lock.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE");
-          return () => lock.close();
+          return () => lock.close(true);
         } catch (e) {
-          lock.close();
+          lock.close(true);
           throw e;
         }
       },
@@ -144,9 +144,9 @@ export async function openAccessHost(
         return store.command(actor, request);
       },
     };
-    return { identity, store, trusted, port, close: () => db.close() };
+    return { identity, store, trusted, port, close: () => db.close(true) };
   } catch (e) {
-    db.close();
+    db.close(true);
     throw e;
   }
 }

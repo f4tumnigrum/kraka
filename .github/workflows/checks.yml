@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   checks:
+    needs: installed
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,6 +22,9 @@ jobs:
           - windows-latest
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     steps:
+      - name: Require native launch evidence
+        if: needs.installed.result != 'success'
+        run: exit 1
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -27,6 +32,19 @@ jobs:
         with:
           bun-version: 1.4.5
       - run: bun install --frozen-lockfile
+      - name: Select the matching release
+        id: native
+        shell: bash
+        run: |
+          bun -e 'import {hostTarget,targetLabel} from "./tools/package-release"; console.log("target="+targetLabel(hostTarget()))' >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: kraka-${{ steps.native.outputs.target }}
+          path: .build/release
+      - name: Use the downloaded archive for candidate measurements
+        shell: bash
+        run: |
+          bun -e 'import {resolve} from "node:path"; const [path]=new Bun.Glob(".build/release/*.tar.gz").scanSync(); if(!path) throw Error("Missing release"); console.log("KRAKA_TEST_ARCHIVE="+resolve(path))' >> "$GITHUB_ENV"
       - name: Install the Chromium build for Playwright 1.56.1
         shell: bash
         run: |
@@ -173,6 +191,12 @@ jobs:
             bun run perf --report-only --root . | tee "$RUNNER_TEMP/budget-candidate.jsonl"
           fi
           jq -es 'any(.[]; .metric == "P5" and .status == "measured" and .actual == {"small":1,"cold":5,"warm":50} and all(.samples[] | select(.unit == "B"); .value <= 954991))' "$RUNNER_TEMP/budget-candidate.jsonl"
+      - name: Enforce installed startup, idle, archive and dependency budgets
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -se '[.[] | select(.variant == "installed" or .metric == "P8" or .metric == "A1")] | length == 4 and all(.status == "measured" and .result == "pass")' "$RUNNER_TEMP/budget-candidate.jsonl"
       - name: Compare budget observations
         if: ${{ !cancelled() && runner.os == 'macOS' && github.event_name == 'pull_request' }}
         shell: bash
@@ -217,3 +241,110 @@ jobs:
         with:
           name: browser-routed
           path: ${{ runner.temp }}/browser-routed.log
+
+  release:
+    name: Package ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-15, args: "--os darwin --arch arm64" }
+          - { target: darwin-x64, runner: macos-15-intel, args: "--os darwin --arch x64" }
+          - { target: win32-x64, runner: windows-2025, args: "--os win32 --arch x64" }
+          - { target: win32-arm64, runner: windows-11-arm, args: "--os win32 --arch arm64" }
+          - {
+              target: linux-x64-glibc,
+              runner: ubuntu-24.04,
+              args: "--os linux --arch x64 --libc glibc",
+            }
+          - {
+              target: linux-arm64-glibc,
+              runner: ubuntu-24.04-arm,
+              args: "--os linux --arch arm64 --libc glibc",
+            }
+          - {
+              target: linux-x64-musl,
+              runner: ubuntu-24.04,
+              args: "--os linux --arch x64 --libc musl",
+            }
+          - {
+              target: linux-arm64-musl,
+              runner: ubuntu-24.04-arm,
+              args: "--os linux --arch arm64 --libc musl",
+            }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - run: bun --version
+      - run: bun install --frozen-lockfile
+      - run: bun tools/package-release.ts ${{ matrix.args }} --out .build/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kraka-${{ matrix.target }}
+          path: .build/release/*
+          if-no-files-found: error
+
+  installed:
+    name: Launch ${{ matrix.target }}
+    needs: release
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-15 }
+          - { target: darwin-x64, runner: macos-15-intel }
+          - { target: win32-x64, runner: windows-2025 }
+          - { target: win32-arm64, runner: windows-11-arm }
+          - { target: linux-x64-glibc, runner: ubuntu-24.04 }
+          - { target: linux-arm64-glibc, runner: ubuntu-24.04-arm }
+          - { target: linux-x64-musl, runner: ubuntu-24.04, alpine: true }
+          - { target: linux-arm64-musl, runner: ubuntu-24.04-arm, alpine: true }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: kraka-${{ matrix.target }}
+          path: .build/release
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ !matrix.alpine }}
+        with:
+          bun-version: 1.4.5
+      - if: ${{ !matrix.alpine }}
+        run: bun install --frozen-lockfile
+      - name: Launch on host
+        if: ${{ !matrix.alpine }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=(.build/release/*.tar.gz)
+          NO_COLOR=1 KRAKA_TEST_ARCHIVE="${archive[0]}" bun test tools/installed-kraka.live.test.ts 2>&1 | tee .build/installed.log
+      - name: Launch on musl
+        if: matrix.alpine
+        run: |
+          set -eu
+          docker run --rm -v "$PWD:/repo" -w /repo oven/bun:1.4.5-alpine sh -ec '
+            apk add --no-cache git tar
+            bun --version
+            bun install --frozen-lockfile
+            set -- .build/release/*.tar.gz
+            NO_COLOR=1 KRAKA_TEST_ARCHIVE="$1" bun test tools/installed-kraka.live.test.ts > .build/installed.log 2>&1 || { cat .build/installed.log; exit 1; }
+            cat .build/installed.log'
+      - name: Require all three installed cases
+        shell: bash
+        run: |
+          for n in 1 2 3; do grep -F "(pass) $n. " .build/installed.log || exit 1; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-${{ matrix.target }}
+          path: .build/installed.log
+          if-no-files-found: error

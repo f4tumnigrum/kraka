@@ -25,6 +25,7 @@ const metadata = {
       "tool.readActivity",
       "worktree.recovery",
       "browserTLS",
+      "installed",
       "codex.recovery",
     ]),
   ),
