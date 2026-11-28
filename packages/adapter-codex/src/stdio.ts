@@ -132,9 +132,12 @@ export class CodexConnection {
       if (this.child.exitCode === null) this.child.kill("SIGKILL");
     }, 2000);
     try {
-      this.child.stdin.end();
-      await this.child.exited;
-      await this.reader;
+      try {
+        await this.child.stdin.end();
+      } finally {
+        await this.child.exited;
+        await this.reader;
+      }
     } finally {
       clearTimeout(timer);
     }
