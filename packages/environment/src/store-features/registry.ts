@@ -1,6 +1,7 @@
 export { captures } from "./captures";
 export { diff } from "./diff";
 export { executors } from "./executors";
+export { logins } from "./logins";
 export { queues } from "./queues";
 export { sessions } from "./sessions";
 export { settings } from "./settings";

@@ -76,17 +76,18 @@ export type LoginFlow = {
   credential: CredentialBinding | null;
   ownerSessionId: EnvironmentSessionId;
   expiresAt: number;
+  configVersion: ObjectVersion;
+  expectedAccount: string;
+  interaction: import("@kraka/protocol").LoginInteraction["kind"];
 };
 export type LoginStatus =
-  | { kind: "browser"; url: string }
-  | { kind: "deviceCode"; url: string; userCode: string }
-  | { kind: "nativeCli"; instructions: string }
+  | import("@kraka/protocol").LoginInteraction
   | { kind: "verifying" }
   | { kind: "authenticated"; account: string }
   | { kind: "failed"; reason: string }
   | { kind: "cancelled" | "expired" };
 /** Interaction details belong only to the initiating device session. A callback still requires account verification. */
-export type LoginResult = LoginFlow & { status: LoginStatus };
+export type LoginResult = LoginFlow & { nativeLoginId: string; status: LoginStatus };
 export type AuthenticationResult = { status: Readiness; account: string | null };
 export type ModelOption =
   | { kind: "enum"; values: readonly string[] }

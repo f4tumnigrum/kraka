@@ -11,10 +11,12 @@ type Services = { readonly [K in Keys<Parts>]: Extract<Parts, Record<K, unknown>
 
 export function openWriterServices(
   store: FirstSendStore,
+  clock?: import("../instance-login").LoginClock,
   families?: readonly import("@kraka/environment").ExecutorFamily[],
 ) {
   const opened: Opened[] = [];
-  for (const feature of features) if ("open" in feature) opened.push(feature.open(store, families));
+  for (const feature of features)
+    if ("open" in feature) opened.push(feature.open(store, clock, families));
   const services: Services = Object.assign({}, ...opened.map((part) => part.services));
   return {
     ...services,

@@ -23,7 +23,11 @@ for (const path of suites) {
   const declared = /^\/\/ Live cases (\d+); required groups (\[[^\n]*\])$/m.exec(source);
   if (!declared) throw Error("Missing live case and group declaration in " + path);
   const required = v.parse(v.array(v.string()), JSON.parse(declared[2] ?? ""));
-  const child = Bun.spawn([process.execPath, "test", "./" + path], {
+  const junit = /^\/\/ Live junit ([\w.-]+\.xml)$/m.exec(source)?.[1];
+  const reporter = junit
+    ? ["--reporter=junit", "--reporter-outfile=" + join(logDirectory, junit)]
+    : [];
+  const child = Bun.spawn([process.execPath, "test", "./" + path, ...reporter], {
     stdout: "pipe",
     stderr: "pipe",
     ...(Object.keys(env).length && { env: { ...process.env, ...env } }),
