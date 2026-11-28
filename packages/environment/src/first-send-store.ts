@@ -1,3 +1,6 @@
+import { RoundCaptures } from "./capture-store";
+import { WriterRecovery } from "./writer-recovery";
+import { writerGitPaths } from "./private-git";
 import { DiffCleanup } from "./diff-cleanup";
 import { TodoLedger } from "./todo-ledger";
 import { ThreadJournal } from "./thread-journal";
@@ -5,6 +8,7 @@ import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import {
   type CommandId,
+  type CheckpointCapture,
   CommandReceiptSchema,
   canonicalJson,
   type DeliveryId,
@@ -159,9 +163,12 @@ export function readReceipt(db: Database, actor: PrincipalId, command: CommandId
     : null;
 }
 export class FirstSendStore {
+  readonly recovery = new WriterRecovery();
+  readonly gitPaths: ReturnType<typeof writerGitPaths>;
   readonly diffCleanup: DiffCleanup;
   readonly diffReads = new Set<Promise<void>>();
   readonly sync: ThreadJournal;
+  readonly captures: RoundCaptures;
   readonly todos: TodoLedger;
   onQueueChanged?: (thread: Thread["id"]) => void;
   beforeCommit?: (method: string) => void;
@@ -172,9 +179,11 @@ export class FirstSendStore {
     db.exec(
       "CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));",
     );
-    this.diffCleanup = new DiffCleanup(db, writer.stateDirectory, writer.environmentId);
+    this.gitPaths = writerGitPaths(writer.stateDirectory, writer.environmentId);
+    this.diffCleanup = new DiffCleanup(db, this.gitPaths);
     this.sync = new ThreadJournal(db, writer.environmentId);
     this.todos = new TodoLedger(this);
+    this.captures = new RoundCaptures(this);
   }
   projectDirectory(id: string) {
     const row = this.db
@@ -206,7 +215,7 @@ export class FirstSendStore {
     const physical = path ? physicalDirectory(path) : null;
     return physical?.identity === saved.identity && physical.realPath === path ? path : null;
   }
-  setPhase(round: Round, phase: RoundPhase) {
+  setPhase(round: Round, phase: RoundPhase, capture?: CheckpointCapture) {
     if (phase.kind === "filed" && phase.gate === "eligible") {
       const thread = readThread(this.db, round.threadId);
       if (thread?.worktreeId) {
@@ -230,8 +239,19 @@ export class FirstSendStore {
       );
     const saved = v.parse(RoundSchema, updated);
     this.db.transaction(() => {
-      this.sync.record([{ objectType: "round", value: saved }]);
+      this.sync.record(
+        [
+          { objectType: "round", value: saved },
+          ...(capture ? [{ objectType: "checkpointCapture" as const, value: capture }] : []),
+        ],
+        { captureThread: round.threadId },
+      );
       this.db.run("UPDATE rounds SET data=? WHERE id=?", [JSON.stringify(saved), round.id]);
+      if (phase.kind === "finished" || phase.kind === "endedEarly" || phase.kind === "notDelivered")
+        this.db.run("DELETE FROM capture_intents WHERE round=? AND attempt=?", [
+          round.id,
+          saved.attempt.attemptId,
+        ]);
       if (phase.kind !== "filed" || phase.gate !== "eligible")
         this.db.run("DELETE FROM ready_dispatch WHERE round=?", [round.id]);
       const pending =

@@ -78,6 +78,8 @@ export async function runReplayTurn<Handle extends object>({
   signal: AbortSignal;
   persisted?: {
     todos?: TodoLedger;
+    baseline?: () => Promise<void>;
+    captureId?: () => import("@kraka/protocol").CaptureId;
     thread: Thread;
     round: Round;
     messageVersion: ObjectVersion;
@@ -243,6 +245,8 @@ export async function runReplayTurn<Handle extends object>({
       parts: [],
     };
     const payload = persisted?.prepare(delivery, c.input) ?? delivery;
+    await persisted?.baseline?.();
+    signal.throwIfAborted();
     if (payload.handoff) {
       if (c.matrix.startSession.kind === "unsupported") throw Error("Handoff unsupported");
       const ack = await adapter.invoke(
@@ -467,7 +471,7 @@ export async function runReplayTurn<Handle extends object>({
             endTimeEvidence: p.endTimeEvidence,
             nativeReason: p.outcome.nativeReason,
             outcome: p.outcome.reason,
-            captureId: v.parse(CaptureIdSchema, crypto.randomUUID()),
+            captureId: persisted?.captureId?.() ?? v.parse(CaptureIdSchema, crypto.randomUUID()),
           });
           publish(update);
           break;

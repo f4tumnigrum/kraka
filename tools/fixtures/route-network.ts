@@ -1,3 +1,4 @@
+import { CAPTURE_BOUNDARY_TIMEOUT_MS } from "../../packages/environment/src/checkpoints";
 import { join, resolve } from "node:path";
 import * as v from "valibot";
 import {
@@ -11,6 +12,9 @@ import {
 import { signP256 } from "@kraka/protocol/web-crypto";
 import { terminate, within } from "./replay-process";
 
+const observationMs = 7000;
+// S16 records a before boundary prior to delivery. Dispatch gets the original observation margin plus one capture.
+export const dispatchObservationMs = observationMs + CAPTURE_BOUNDARY_TIMEOUT_MS;
 export class Journal<T> {
   readonly items: T[] = [];
   private changed = Promise.withResolvers<void>();
@@ -19,11 +23,19 @@ export class Journal<T> {
     this.changed.resolve();
     this.changed = Promise.withResolvers<void>();
   }
-  async until(predicate: (item: T) => boolean, since = 0) {
+  untilDispatch(predicate: (item: T) => boolean, since = 0) {
+    return this.until(predicate, since, dispatchObservationMs);
+  }
+  async until(predicate: (item: T) => boolean, since = 0, budgetMs?: number) {
+    const deadline = budgetMs === undefined ? null : performance.now() + budgetMs;
     for (;;) {
       const match = this.items.slice(since).find(predicate);
       if (match !== undefined) return match;
-      await within(this.changed.promise, 7000, "Route observation");
+      await within(
+        this.changed.promise,
+        deadline === null ? observationMs : Math.max(0, deadline - performance.now()),
+        "Route observation",
+      );
     }
   }
 }

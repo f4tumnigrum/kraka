@@ -1,3 +1,4 @@
+import { finishedCapture } from "./fixtures/first-send-client";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { CommandIdSchema, GitObjectIdSchema } from "@kraka/protocol";
@@ -466,14 +467,17 @@ test(
         const task = await cli(writer, "standalone", isolated);
         const id = task.request.payload.worktreeId;
         if (!id) throw Error("Expected standalone checkout");
-        await idle(writer);
+        const captureId = await finishedCapture(writer.client, task.ids);
         const m = readClaim(stateDir, id);
         expect(managedView(m).availability).toBe("usable");
         expect(
           git(m.directory.realPath, "config", "--file", "setup.cfg", "--get", "kraka.setup"),
         ).toBe("completed");
         expect(git(m.directory.realPath, "rev-parse", "HEAD")).toBe(repo.base);
-        expect(roundInfo(stateDir, m).round?.attempt.phase.kind).toBe("closing");
+        expect(roundInfo(stateDir, m).round?.attempt.phase).toMatchObject({
+          kind: "finished",
+          captureId,
+        });
       } finally {
         await writer.close();
       }
@@ -496,6 +500,7 @@ test(
           "threadStarted",
         );
         await f.waitTerminal();
+        await finishedCapture(f.client, first);
         const managed = readClaim(f.stateDir, id);
         expect(managedView(managed).availability).toBe("usable");
         expect(f.updates.at(-1)?.kind).toBe("round.ended");
@@ -506,7 +511,12 @@ test(
           [{ clientId: first.deliveryId }],
         );
       } finally {
-        await f.close();
+        try {
+          await f.close();
+        } finally {
+          for (const line of f.stderrTail().split("\n"))
+            if (line.startsWith("Checkpoint boundary timing ")) console.error(line);
+        }
       }
     }),
   60000,

@@ -51,11 +51,20 @@ export const CheckpointComparisonSchema = v.strictObject({
   after: GitObjectIdSchema,
   summary: ChangeSummarySchema,
 });
+const directoryAddress = {
+  directoryId: v.pipe(v.string(), v.minLength(1)),
+  generation: WorktreeGenerationSchema,
+};
 const boundary = v.picklist(["before", "after"]);
 export const CheckpointResultSchema = v.variant("kind", [
   v.strictObject({
     kind: v.literal("ready"),
     worktreeId: WorktreeIdSchema,
+    comparison: v.optional(CheckpointComparisonSchema),
+  }),
+  v.strictObject({
+    kind: v.literal("ready"),
+    ...directoryAddress,
     comparison: v.optional(CheckpointComparisonSchema),
   }),
   v.strictObject({
@@ -83,8 +92,7 @@ export function checkpointSummary(result: CheckpointResult): ChangeSummary {
 const local = { threadId: ThreadIdSchema, worktreeId: WorktreeIdSchema };
 const projectRoot = {
   threadId: ThreadIdSchema,
-  directoryId: v.pipe(v.string(), v.minLength(1)),
-  generation: WorktreeGenerationSchema,
+  ...directoryAddress,
 };
 export const DiffRequestSchema = v.union([
   v.strictObject({
@@ -94,6 +102,13 @@ export const DiffRequestSchema = v.union([
     toCaptureId: CaptureIdSchema,
   }),
   v.strictObject({ ...local, kind: v.literal("round"), captureId: CaptureIdSchema }),
+  v.strictObject({ ...projectRoot, kind: v.literal("round"), captureId: CaptureIdSchema }),
+  v.strictObject({
+    ...projectRoot,
+    kind: v.literal("roundRange"),
+    fromCaptureId: CaptureIdSchema,
+    toCaptureId: CaptureIdSchema,
+  }),
   v.strictObject({ ...local, kind: v.literal("workingTree") }),
   v.strictObject({ ...projectRoot, kind: v.literal("workingTree") }),
   v.strictObject({

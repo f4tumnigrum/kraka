@@ -130,6 +130,15 @@ jobs:
           git --version
           bun test tools/local-diff.live.test.ts 2>&1 | tee "$RUNNER_TEMP/local-diff.log"
           for group in 1 2 3 4 5; do grep -F "(pass) $group. " "$RUNNER_TEMP/local-diff.log"; done
+      - name: Verify all four round checkpoint cases
+        env:
+          NO_COLOR: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          git --version
+          bun test tools/round-patch.live.test.ts 2>&1 | tee "$RUNNER_TEMP/round-patch.log"
+          for group in 1 2 3 4; do grep -F "(pass) $group. " "$RUNNER_TEMP/round-patch.log"; done
       - name: Test workspace and require all three short socket cases
         shell: bash
         env:
@@ -146,6 +155,7 @@ jobs:
             --path-ignore-patterns "**/owner-pairing.live.test.ts" \
             --path-ignore-patterns "**/browser-outbox.live.test.ts" \
             --path-ignore-patterns "**/browser-https.live.test.ts" \
+            --path-ignore-patterns "**/round-patch.live.test.ts" \
             --path-ignore-patterns "**/local-diff.live.test.ts" \
             --path-ignore-patterns "**/first-answer.live.test.ts" \
             --path-ignore-patterns "**/thread-attention.live.test.ts" \

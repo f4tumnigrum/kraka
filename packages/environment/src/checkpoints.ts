@@ -12,14 +12,19 @@ import type {
   DialogueRollbackTarget,
   ThreadId,
   WorktreeId,
+  DirectoryBinding,
 } from "@kraka/protocol";
 import { ok, reject, unexpected, type TransitionResult } from "./result";
 
-type CaptureKey = Pick<CheckpointCapture, "id" | "roundId" | "attemptId"> & {
+export type CaptureKey = Pick<CheckpointCapture, "id" | "roundId" | "attemptId"> & {
   threadId: ThreadId;
+  writer?: string;
+  environmentId?: import("@kraka/protocol").EnvironmentId;
   worktreeId: WorktreeId | null;
+  projectRoot?: Extract<DirectoryBinding, { kind: "projectRoot" }>;
 };
-type Boundary = "before" | "after";
+export const CAPTURE_BOUNDARY_TIMEOUT_MS = 5000;
+export type Boundary = "before" | "after";
 /** Git writes this operation's private index and publishes its commit under the boundary ref. */
 export type CaptureWorkspace = {
   ref: string;
@@ -44,20 +49,49 @@ export function beginCapture(key: CaptureKey): CaptureState {
 }
 
 /** A committed operation ID survives a restart. Removing a thread releases its refs; unreachable objects follow Git GC. */
-export function checkpointRef(key: CaptureKey, boundary: Boundary): string {
+export function checkpointRef(
+  key: Pick<CaptureKey, "environmentId" | "threadId" | "id" | "writer">,
+  boundary: Boundary,
+): string {
   return [
     "refs/kraka/checkpoints",
+    ...(key.writer
+      ? [key.writer]
+      : key.environmentId
+        ? [new Bun.CryptoHasher("sha256").update(key.environmentId).digest("hex")]
+        : []),
     new Bun.CryptoHasher("sha256").update(key.threadId).digest("hex"),
     new Bun.CryptoHasher("sha256").update(key.id).digest("hex"),
     boundary,
   ].join("/");
 }
 
+export type CaptureLayout = "compact" | "legacy";
+export function captureDirectory(
+  key: Pick<CaptureKey, "id" | "threadId" | "environmentId">,
+  boundary: Boundary,
+  layout: CaptureLayout = "compact",
+) {
+  // Scratch already lives under the writer state. Keep its address across ref-format upgrades.
+  const { environmentId, threadId, id } = key;
+  const ref = checkpointRef({ ...(environmentId && { environmentId }), threadId, id }, boundary);
+  return layout === "legacy"
+    ? ref.slice("refs/kraka/".length)
+    : new Bun.CryptoHasher("sha256").update(ref).digest("hex");
+}
+
 /** Paths are relative to the environment's scratch root. Probe the published ref before repeating work on restart. */
-export function captureWorkspace(state: CaptureState): CaptureWorkspace | null {
-  if ((state.kind !== "before" && state.kind !== "after") || !state.key.worktreeId) return null;
+export function captureWorkspace(
+  state: CaptureState,
+  layout: CaptureLayout = "compact",
+): CaptureWorkspace | null {
+  if (
+    (state.kind !== "before" && state.kind !== "after") ||
+    !(state.key.worktreeId || state.key.projectRoot)
+  )
+    return null;
   const ref = checkpointRef(state.key, state.kind);
-  const directory = ref.slice("refs/kraka/".length);
+  const directory = captureDirectory(state.key, state.kind, layout);
   return {
     ref,
     privateIndexPath: `${directory}/index`,
@@ -128,7 +162,7 @@ export function transitionCapture(
   if (state.kind === "settled") return ok(state);
   switch (event.kind) {
     case "baselinePublished":
-      if (!key.worktreeId || event.point.ref !== checkpointRef(key, "before"))
+      if (!(key.worktreeId || key.projectRoot) || event.point.ref !== checkpointRef(key, "before"))
         return reject("wrongCapture");
       if (state.kind !== "before")
         return state.baseline.commit === event.point.commit ? ok(state) : reject("idConflict");
@@ -138,7 +172,7 @@ export function transitionCapture(
       return state.kind === "working" ? ok({ ...state, kind: "after" }) : reject("invalidState");
     case "endPublished": {
       if (state.kind !== "after") return reject("invalidState");
-      if (!key.worktreeId || event.point.ref !== checkpointRef(key, "after"))
+      if (!(key.worktreeId || key.projectRoot) || event.point.ref !== checkpointRef(key, "after"))
         return reject("wrongCapture");
       const comparison = event.comparison;
       const summary =
@@ -149,7 +183,9 @@ export function transitionCapture(
             : { kind: "empty" as const };
       const result = {
         kind: "ready" as const,
-        worktreeId: key.worktreeId,
+        ...(key.projectRoot
+          ? { directoryId: key.projectRoot.directoryId, generation: key.projectRoot.generation }
+          : { worktreeId: key.worktreeId! }),
         comparison: { before: state.baseline.commit, after: event.point.commit, summary },
       };
       return ok({
@@ -259,6 +295,7 @@ export function transitionRollback(
           return set({ kind: "failed", execution, reason: "sharedWorkspace", retryable: true });
         if (
           capture.result.kind !== "ready" ||
+          !("worktreeId" in capture.result) ||
           capture.result.worktreeId !== target.worktreeId ||
           !capture.result.comparison
         )

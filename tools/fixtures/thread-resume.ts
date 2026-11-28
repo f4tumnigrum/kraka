@@ -36,6 +36,7 @@ type Options = {
   captureReply?: (wire: import("@kraka/protocol").WireMessage) => void;
   timing?: (applyMs: number, persistMs: number) => void;
   timeline?: boolean;
+  directoryDiff?: boolean;
   received?: (kind: string, message: unknown, at: number) => void;
   pageStaged?: (p: SubscriptionPage) => Promise<void> | void;
   store?: ThreadCacheStore;
@@ -114,7 +115,9 @@ export async function connectReplica(
       )
         throw Error("Unverified environment");
       const features = body.features.filter(
-        (f) => opts.timeline !== false || f !== "timelineItems",
+        (f) =>
+          (opts.timeline !== false || f !== "timelineItems") &&
+          (opts.directoryDiff !== false || f !== "directoryDiff"),
       );
       const envelope = {
         protocolVersion: { major: body.protocolVersion.major, minor: opts.minor ?? 0 },

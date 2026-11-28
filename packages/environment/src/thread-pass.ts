@@ -42,6 +42,7 @@ export interface AuthorizedScope {
   environmentId: SyncCursor["environmentId"];
   canRead: (source: ThreadId) => boolean;
   timelineItems: boolean;
+  directoryDiff?: boolean;
   protocolMinor: number;
 }
 function readSources(scope: AuthorizedScope, view: ThreadReadView) {
@@ -130,7 +131,11 @@ function threadWindow(threadId: ThreadId, rows: readonly ReadRow[], requested: r
     selected.set(key, item);
     const row = item.row;
     const related = (type: string, id: string) => add(byKey.get(JSON.stringify([type, id])));
-    if (row.objectType === "round") related("message", row.value.messageId);
+    if (row.objectType === "round") {
+      related("message", row.value.messageId);
+      const phase = row.value.attempt.phase;
+      if (phase.kind === "finished") related("checkpointCapture", phase.captureId);
+    }
     if (row.objectType === "message" && row.value.roundId) related("round", row.value.roundId);
     if (row.objectType === "todoRequest") {
       related("round", row.value.roundId);

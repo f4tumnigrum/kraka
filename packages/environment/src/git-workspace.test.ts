@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { writerGitPaths } from "./private-git";
+import { WriterRecovery } from "./writer-recovery";
 import { DiffCleanup } from "./diff-cleanup";
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -40,7 +42,7 @@ function repository() {
   const root = mkdtempSync(join(tmpdir(), "kraka-s15-git-"));
   const path = join(root, "checkout");
   const db = new Database(":memory:");
-  const cleanup = new DiffCleanup(db, root, "git-fixture");
+  const cleanup = new DiffCleanup(db, writerGitPaths(root, "git-fixture"));
   const close = () => {
     db.close(true);
     rmSync(root, { recursive: true, force: true });
@@ -402,15 +404,17 @@ test("retries partial cleanup without deleting a changed endpoint or following a
 
 test.each([false, true])(
   "recovery remembers a completed legacy scan (prior legacy ref: %p)",
-  (hasLegacy) => {
+  async (hasLegacy) => {
     const repo = repository();
     const trace = join(repo.path, "..", "recovery.trace");
-    function recoveryGitStarts() {
+    async function recoveryGitStarts() {
       writeFileSync(trace, "");
       const previous = process.env.GIT_TRACE2_EVENT;
       process.env.GIT_TRACE2_EVENT = trace;
       try {
-        repo.cleanup.recover();
+        const recovery = new WriterRecovery();
+        repo.cleanup.registerRecovery(recovery);
+        await recovery.run();
       } finally {
         if (previous === undefined) delete process.env.GIT_TRACE2_EVENT;
         else process.env.GIT_TRACE2_EVENT = previous;
@@ -422,7 +426,7 @@ test.each([false, true])(
       });
     }
     try {
-      expect(recoveryGitStarts()).toEqual([]);
+      expect(await recoveryGitStarts()).toEqual([]);
       git(repo.path, "commit", "--allow-empty", "-qm", "base");
       const intent = repo.cleanup.begin(repo.path);
       if (!intent) throw Error("Missing comparison intent");
@@ -435,7 +439,7 @@ test.each([false, true])(
       }
       const legacy = "refs/kraka/diffs/" + crypto.randomUUID() + "/from";
       if (hasLegacy) git(repo.path, "update-ref", legacy, "HEAD");
-      const first = recoveryGitStarts();
+      const first = await recoveryGitStarts();
       expect(first.filter((args) => args.includes("--count=1"))).toHaveLength(1);
       expect(repo.db.query("SELECT legacyRef FROM compared_repositories").all()).toEqual([
         { legacyRef: hasLegacy ? legacy : "" },
@@ -443,7 +447,7 @@ test.each([false, true])(
       if (!hasLegacy) git(repo.path, "update-ref", legacy, "HEAD");
       const orphan = repo.cleanup.namespace + crypto.randomUUID() + "/to";
       git(repo.path, "update-ref", orphan, "HEAD");
-      const second = recoveryGitStarts();
+      const second = await recoveryGitStarts();
       expect(second.some((args) => args.includes("--count=1"))).toBe(false);
       expect(git(repo.path, "for-each-ref", "--format=%(refname)", "refs/kraka/diffs/")).toBe(
         legacy,

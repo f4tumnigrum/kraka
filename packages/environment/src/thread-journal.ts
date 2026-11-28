@@ -161,7 +161,18 @@ export class ThreadJournal {
       this.listeners.delete(wake);
     };
   }
+  private pendingWake = false;
   notify() {
+    if (this.db.inTransaction) {
+      if (!this.pendingWake) {
+        this.pendingWake = true;
+        queueMicrotask(() => {
+          this.pendingWake = false;
+          for (const wake of this.listeners) wake();
+        });
+      }
+      return;
+    }
     for (const wake of this.listeners) wake();
   }
   private advanceClock() {
@@ -209,6 +220,7 @@ export class ThreadJournal {
     extras: {
       removed?: readonly { source: ThreadId; key: ObjectKey; version: string }[];
       returns?: readonly TextReturnedEvent[];
+      captureThread?: ThreadId;
       activity?: { item: ToolActivityHistoryItem; round: string | null };
     } = {},
   ) {
@@ -227,7 +239,9 @@ export class ThreadJournal {
           ? row.value.id
           : "threadId" in row.value
             ? row.value.threadId
-            : null;
+            : row.objectType === "checkpointCapture"
+              ? extras.captureThread
+              : null;
       if (!source) throw Error("Missing source thread");
       const round =
         row.objectType === "round"
@@ -361,6 +375,7 @@ export class ThreadJournal {
     return result;
   }
   recordUnattributedToolChange(event: {
+    itemId?: string;
     threadId: ThreadId;
     attemptId: string;
     eventId: string;
@@ -419,7 +434,10 @@ export class ThreadJournal {
         databaseGeneration: meta.generation,
         visibilityGeneration: visibility,
         scope: { kind: "thread", threadId: scope.threadId },
-        shapeVersion: (scope.protocolMinor >= 1 ? 3 : 1) + Number(scope.timelineItems),
+        shapeVersion:
+          (scope.protocolMinor >= 1 ? 3 : 1) +
+          Number(scope.timelineItems) +
+          (scope.directoryDiff ? 4 : 0),
         through: meta.head,
       });
       const result: ThreadReadView = {
@@ -468,6 +486,13 @@ export class ThreadJournal {
                 : decodeJournalRow(payload);
             if (row.objectType === "round")
               row.value = roundForProtocol(row.value, scope.protocolMinor);
+            if (
+              row.objectType === "checkpointCapture" &&
+              !scope.directoryDiff &&
+              row.value.result.kind === "ready" &&
+              "directoryId" in row.value.result
+            )
+              row.value.result = { kind: "missing", reason: "directoryDiffUnsupported" };
             rows.push({ row, source, created, changed, round: data.round });
             if (row.objectType === "thread" && row.value.lineage.kind === "fork")
               parent = row.value.lineage.parentThreadId;
@@ -503,7 +528,19 @@ export class ThreadJournal {
         !view.rows.some((r) => r.row.objectType === "thread" && r.source === scope.threadId)
       )
         return null;
-      const entries = historyEntries(visibleThreadRows(scope, view).rows);
+      const visible = visibleThreadRows(scope, view).rows;
+      const entries = historyEntries(visible);
+      const captures = new Map(
+        visible.flatMap(({ row }) =>
+          row.objectType === "checkpointCapture" ? [[row.value.id, row] as const] : [],
+        ),
+      );
+      const withCaptures = (items: ReadRow[]): HistoryRow[] =>
+        items.reverse().flatMap(({ row }): HistoryRow[] => {
+          const phase = row.objectType === "round" ? row.value.attempt.phase : null;
+          const capture = phase?.kind === "finished" ? captures.get(phase.captureId) : undefined;
+          return capture ? [row, capture] : [row];
+        });
       const binding = JSON.stringify([
         principal,
         scope.environmentId,
@@ -546,7 +583,7 @@ export class ThreadJournal {
           verifiedAt: view.head,
           pageNumber: 0,
           pageCount: 1,
-          rows: selected.reverse().map((r) => r.row),
+          rows: withCaptures(selected),
           olderAnchor: older.length ? make(older) : null,
         };
       }
@@ -560,7 +597,7 @@ export class ThreadJournal {
         verifiedAt: view.head,
         pageNumber: 0,
         pageCount: 1,
-        rows: selected.reverse().map((r) => r.row),
+        rows: withCaptures(selected),
         olderAnchor: older.length ? make(older) : null,
       };
     })();

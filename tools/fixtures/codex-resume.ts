@@ -1,3 +1,5 @@
+import { seedGit } from "./isolated-start";
+import type { CheckpointCapture, Round } from "@kraka/protocol";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import * as v from "valibot";
@@ -14,7 +16,7 @@ import { connectReplica } from "./thread-resume";
 import { codexFixture } from "./codex-turn";
 import { connectFirstSend } from "./first-send-client";
 import { accepted, launchWriter, productRoot } from "./first-send";
-import { Journal } from "./route-network";
+import { Journal, dispatchObservationMs } from "./route-network";
 import { within, withState } from "./replay-process";
 const observation = v.looseObject({
   event: v.string(),
@@ -23,7 +25,41 @@ const observation = v.looseObject({
   session: v.string(),
   root: v.string(),
 });
-async function setup(dir: string, mode: PermissionMode, root: string) {
+const stageSchema = v.object({
+  stage: v.picklist(["sealed", "published", "summary", "settled"]),
+  boundary: v.picklist(["before", "after"]),
+  id: v.string(),
+  thread: v.string(),
+  round: v.string(),
+  token: v.string(),
+});
+export class CaptureBarriers {
+  readonly events = new Journal<v.InferOutput<typeof stageSchema>>();
+  hold: v.InferOutput<typeof stageSchema>["stage"] | null = null;
+  holdBoundary: "before" | "after" = "after";
+  holdId: string | null = null;
+  failSummary = false;
+  writer?: ReturnType<typeof launchWriter>;
+  receive = (raw: unknown) => {
+    const e = v.parse(stageSchema, raw);
+    this.events.push(e);
+    if (
+      e.boundary !== this.holdBoundary ||
+      e.stage !== this.hold ||
+      (this.holdId && e.id !== this.holdId)
+    )
+      this.release(e.token, e.stage === "summary" && this.failSummary);
+  };
+  release(token: string, fail = false) {
+    this.writer?.child.send({ token, fail });
+  }
+}
+async function setup(
+  dir: string,
+  mode: PermissionMode,
+  root: string,
+  patch?: { git: boolean; barriers: CaptureBarriers },
+) {
   const events = new Journal<v.InferOutput<typeof observation>>(),
     updates = new Journal<ExecutorTurnUpdate>();
   const peers = new Map<number, Bun.ServerWebSocket<null>>();
@@ -83,15 +119,21 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
     });
     clean.push(pair.close);
     const state = join(pair.stateDir, "host");
+    if (patch?.git) seedGit(dir, "project");
     const f = await codexFixture(
       dir,
-      { control: "ws://127.0.0.1:" + server.port },
+      {
+        control: "ws://127.0.0.1:" + server.port,
+        ...(patch ? { capture: patch.barriers.receive, historyDirectory: dir } : {}),
+      },
       root,
-      false,
+      !!patch,
       undefined,
       state,
       (e) => updates.push(e),
     );
+    const writers = [f.stderrTail];
+    if (patch) patch.barriers.writer = f;
     clean.push(f.close);
     const reg = structuredClone(f.registration);
     reg.permission = { ceiling: mode, selected: mode };
@@ -100,7 +142,12 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
     assert.equal(refresh.snapshot?.matrix.resumeSessionAfterHostRestart.kind, "native");
     let client = f.client,
       endpoint = f.instance.endpoint;
-    const event = (name: string, since = 0) => events.until((e) => e.event === name, since);
+    const event = (name: string, since = 0) =>
+      events.until(
+        (e) => e.event === name,
+        since,
+        name === "turn" ? dispatchObservationMs : undefined,
+      );
     const action = (handle: number, cmd: string) => {
       const ws = peers.get(handle);
       if (!ws || ws.send(cmd) <= 0) throw Error("Missing native peer " + handle);
@@ -126,6 +173,7 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
       return { rpc: socket.client.rpc.bind(socket.client), todos, rounds, close: socket.close };
     }
     async function start(text: string) {
+      const since = events.items.length;
       const ids = accepted(
         (
           await client.send("thread.start", {
@@ -135,8 +183,8 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
         ).receipt,
         "threadStarted",
       );
-      const turn = await event("turn");
-      const start = await updates.until(
+      const turn = await event("turn", since);
+      const start = await updates.untilDispatch(
         (e) => e.kind === "round.started" && e.attemptId === ids.attemptId,
       );
       assert.ok(
@@ -159,11 +207,19 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
       } while (performance.now() < deadline);
       throw Error(`No committed interrupt acknowledgement for ${stopCommandId}`);
     }
-    async function restart(abrupt = false) {
+    async function restart(abrupt = false, barriers?: CaptureBarriers) {
       client.close();
       if (abrupt) await f.kill();
       else await f.stop();
-      const next = launchWriter(state, root, "codex-cli");
+      const next = launchWriter(
+        state,
+        root,
+        patch ? "codex" : "codex-cli",
+        undefined,
+        barriers?.receive,
+      );
+      if (barriers) barriers.writer = next;
+      writers.push(next.stderrTail);
       clean.push(next.stop);
       const { publication: instance } = await next.ready();
       endpoint = instance.endpoint;
@@ -173,6 +229,36 @@ async function setup(dir: string, mode: PermissionMode, root: string) {
     }
     return {
       f,
+      stderrTails: () => writers.map((tail) => tail()),
+      async patchReader(threadId: ThreadId, directoryDiff = true) {
+        const cache = new SqliteThreadCache(
+          join(dir, crypto.randomUUID() + ".sqlite"),
+          "patch-reader",
+        );
+        clean.push(() => cache.close());
+        const snapshots = new Journal<{ rounds: Round[]; captures: CheckpointCapture[] }>();
+        const socket = await connectReplica(endpoint, pair.identity, pair.owner, cache, {
+          minor: 1,
+          directoryDiff,
+          installed() {
+            const rows = Object.values(cache.read().rows).map((r) => r.row);
+            snapshots.push({
+              rounds: rows.flatMap((r) => (r?.objectType === "round" ? [r.value] : [])),
+              captures: rows.flatMap((r) =>
+                r?.objectType === "checkpointCapture" ? [r.value] : [],
+              ),
+            });
+          },
+        });
+        clean.push(socket.close);
+        assert.equal((await (await socket.client.open(threadId, null)).receipt).kind, "accepted");
+        return {
+          snapshots,
+          read: (query: import("@kraka/protocol").DiffRequest, cursor: string | null = null) =>
+            socket.client.rpc("checkpoint.diff", { query, cursor }),
+          close: socket.close,
+        };
+      },
       events,
       updates,
       action,
@@ -199,9 +285,10 @@ export function runCodexCase(
   mode: PermissionMode,
   fn: (s: Setup) => Promise<void>,
   root = productRoot,
+  patch?: { git: boolean; barriers: CaptureBarriers },
 ) {
   return withState(async (dir) => {
-    const s = await setup(dir, mode, root);
+    const s = await setup(dir, mode, root, patch);
     try {
       await fn(s);
     } finally {

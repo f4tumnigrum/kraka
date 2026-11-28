@@ -27,7 +27,9 @@ export async function measureCodexResume(
           (r) => r.id === request.id && r.state.kind === "expired",
         );
         await b.rounds.until(
-          (r) => r.id === original.roundId && r.attempt.phase.kind === "closing",
+          (r) =>
+            r.id === original.roundId &&
+            (r.attempt.phase.kind === "closing" || r.attempt.phase.kind === "finished"),
         );
         const db = openReceiptReader(s.state);
         try {
@@ -36,7 +38,7 @@ export async function measureCodexResume(
           const round = readRound(db, original.roundId);
           if (
             phase?.attemptId !== original.attemptId ||
-            phase.phase.kind !== "closing" ||
+            (phase.phase.kind !== "closing" && phase.phase.kind !== "finished") ||
             phase.phase.endedAt !== 1767225603000 ||
             round?.attempt.attemptId !== original.attemptId ||
             restored.roundId !== round.id

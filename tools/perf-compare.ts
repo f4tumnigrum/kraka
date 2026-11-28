@@ -27,6 +27,7 @@ const metadata = {
       "browserTLS",
       "installed",
       "codex.recovery",
+      "capture.recovery",
     ]),
   ),
   role: v.picklist(["candidate", "baseline"]),

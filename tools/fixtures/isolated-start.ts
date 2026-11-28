@@ -6,17 +6,20 @@ import { readManaged, openReceiptReader, hashId, confirmWriter } from "@kraka/en
 import * as v from "valibot";
 import { CommandReceiptSchema, REQUEST_METHODS } from "@kraka/protocol";
 export function git(cwd: string, ...args: string[]) {
-  const r = Bun.spawnSync(["git", ...args], {
-    cwd,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Fixture",
-      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-      GIT_COMMITTER_NAME: "Fixture",
-      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  const r = Bun.spawnSync(
+    ["git", ...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []), ...args],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+      timeout: 30000,
     },
-    timeout: 30000,
-  });
+  );
   if (r.exitCode !== 0) throw Error(r.stderr.toString());
   return r.stdout.toString().trimEnd();
 }
@@ -49,7 +52,10 @@ export async function isolatedFixture(dir: string, point: Fault = "peer", root =
     opts,
     f,
     async restart() {
-      return startFirstSendFixture({ ...opts, point: "peer" });
+      const next = await startFirstSendFixture({ ...opts, point: "peer" });
+      for (const line of next.stderrTail().split("\n"))
+        if (line.startsWith("Writer startup timing ")) console.error(line);
+      return next;
     },
   };
 }
@@ -88,7 +94,7 @@ export function setupPolicy(f: Fixture, setup: string[], prefix?: string) {
     }),
   );
 }
-export async function idle(f: Fixture) {
+export async function idle(f: Pick<Fixture, "instance">) {
   const deadline = performance.now() + 30000;
   while (performance.now() < deadline) {
     if (await confirmWriter(f.instance.stateDirectory, deadline, true)) return;

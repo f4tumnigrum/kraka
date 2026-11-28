@@ -3293,6 +3293,30 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "type": "object",
       "properties": {
         "kind": {
+          "const": "ready"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "comparison": {
+          "$ref": "#/$defs/CheckpointComparison"
+        }
+      },
+      "required": [
+        "kind",
+        "directoryId",
+        "generation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
           "const": "missing"
         },
         "boundary": {
@@ -7642,6 +7666,68 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         "worktreeId",
         "kind",
         "captureId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "round"
+        },
+        "captureId": {
+          "$ref": "#/$defs/CaptureId"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "kind",
+        "captureId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "directoryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "$ref": "#/$defs/WorktreeGeneration"
+        },
+        "kind": {
+          "const": "roundRange"
+        },
+        "fromCaptureId": {
+          "$ref": "#/$defs/CaptureId"
+        },
+        "toCaptureId": {
+          "$ref": "#/$defs/CaptureId"
+        }
+      },
+      "required": [
+        "threadId",
+        "directoryId",
+        "generation",
+        "kind",
+        "fromCaptureId",
+        "toCaptureId"
       ],
       "additionalProperties": false
     },

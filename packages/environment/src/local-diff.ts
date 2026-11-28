@@ -23,7 +23,7 @@ import {
   type GitObjectId,
 } from "@kraka/protocol";
 import * as v from "valibot";
-import { gitEnvironment, runGit } from "./git-process";
+import { gitEnvironment, gitRepositoryIdentity, runGit } from "./git-process";
 
 const logicalPatchBytes = 10_000_000;
 const cursorRetentionMs = 60_000;
@@ -59,8 +59,10 @@ type CursorState = {
   currentSize: number | null;
   cleanupId: string;
   pinned: boolean;
+  owners?: ReadonlyMap<string, DiffFile["owner"]> | undefined;
 };
-type EndpointPair = {
+export type EndpointPair = {
+  repository?: NonNullable<ReturnType<typeof gitRepositoryIdentity>>;
   from: OutputEndpoint;
   to: OutputEndpoint;
   fromTree: GitObjectId;
@@ -335,6 +337,26 @@ function diffFile(path: ChangedPath, address: DiffAddress): DiffFile | null {
   };
 }
 
+export function compareCaptureFiles(
+  directory: ResolvedDiffDirectory,
+  from: GitObjectId,
+  to: GitObjectId,
+) {
+  const paths = changedPaths(directory.path, from, to);
+  if (!paths) throw Error("summaryUnavailable");
+  return paths.map((path) => {
+    const file = diffFile(path, directory.address);
+    if (!file) throw Error("pathUnavailable");
+    return file;
+  });
+}
+function endpointOid(endpoint: OutputEndpoint) {
+  return endpoint.kind === "round"
+    ? endpoint.commit
+    : endpoint.kind === "workingTree"
+      ? endpoint.tree
+      : endpoint.oid;
+}
 function preparePatch(state: CursorState, path: ChangedPath) {
   const fd = openSync(state.patchPath, "w", 0o600);
   try {
@@ -419,6 +441,9 @@ export class LocalDiffService {
     query: DiffRequest;
     cursor: string | null;
     resolvedDirectory: ResolvedDiffDirectory;
+    captureRange?: () =>
+      | { pair: EndpointPair; owners?: ReadonlyMap<string, DiffFile["owner"]> }
+      | { reason: string; from: OutputEndpoint | null; to: OutputEndpoint | null };
   }): Promise<DiffResult> {
     const { actor, query, cursor, resolvedDirectory } = input;
     if (this.closed) return unavailable(query, "cursorUnavailable");
@@ -436,22 +461,26 @@ export class LocalDiffService {
         !sameDirectory(state.directory, resolvedDirectory)
       )
         return unavailable(query, "cursorScopeChanged");
+      if (
+        state.pair.repository &&
+        !Bun.deepEquals(state.pair.repository, gitRepositoryIdentity(resolvedDirectory.path))
+      )
+        return unavailable(query, "sourceRepositoryChanged");
       clearTimeout(entry.timer);
       this.cursors.delete(cursor);
       return this.page(state, query);
     }
-    if (query.kind !== "workingTree" && query.kind !== "branch" && query.kind !== "commit")
-      return unavailable(query, "capturedComparisonUnsupported");
-    const intent = this.cleanup.begin(resolvedDirectory.path);
+    const captured = query.kind === "round" || query.kind === "roundRange";
+    const fixed = captured ? input.captureRange?.() : null;
+    if (captured && !fixed) return unavailable(query, "capturedComparisonUnsupported");
+    if (fixed && "reason" in fixed) return unavailable(query, fixed.reason, fixed.from, fixed.to);
+    const intent = this.cleanup.begin(resolvedDirectory.path, fixed?.pair.repository);
     if (!intent) return unavailable(query, "gitUnavailable");
     let paging = false;
     try {
-      const comparison = buildComparison(
-        resolvedDirectory.path,
-        resolvedDirectory.address,
-        query,
-        intent.scratch,
-      );
+      const comparison: ReturnType<NonNullable<typeof input.captureRange>> =
+        fixed ??
+        buildComparison(resolvedDirectory.path, resolvedDirectory.address, query, intent.scratch);
       if ("reason" in comparison)
         return unavailable(query, comparison.reason, comparison.from, comparison.to);
       const paths = changedPaths(
@@ -483,6 +512,7 @@ export class LocalDiffService {
           currentSize: null,
           cleanupId: intent.id,
           pinned: false,
+          owners: comparison.owners,
         },
         query,
       );
@@ -503,6 +533,7 @@ export class LocalDiffService {
         if (!path) break;
         const file = diffFile(path, state.directory.address);
         if (!file) return unavailable(query, "pathUnavailable", from, to);
+        file.owner = state.owners?.get(file.path) ?? file.owner;
         state.currentSize ??= preparePatch(state, path);
         if (state.currentSize === null) return unavailable(query, "diffUnavailable", from, to);
         const remaining = state.currentSize - state.byteOffset;
@@ -539,13 +570,7 @@ export class LocalDiffService {
       if (!unprintable && state.pathIndex < state.paths.length) {
         if (!state.pinned) {
           if (
-            from.kind !== "git" ||
-            to.kind === "round" ||
-            !(await this.cleanup.pin(
-              state.cleanupId,
-              from.oid,
-              to.kind === "workingTree" ? to.tree : to.oid,
-            )) ||
+            !(await this.cleanup.pin(state.cleanupId, endpointOid(from), endpointOid(to))) ||
             this.closed
           )
             return unavailable(query, "retentionUnavailable", from, to);

@@ -343,6 +343,7 @@ export type AdapterEventPayload =
     }
   | {
       kind: "fileChanged";
+      itemId?: import("@kraka/protocol").NativeItemId;
       attemptId: AttemptId;
       path: string;
       change: "created" | "modified" | "deleted" | "moved";

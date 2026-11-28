@@ -196,7 +196,7 @@ test(
         },
       );
       const started = accepted(task.receipt, "threadStarted");
-      await a.events.until((e) => e.event === "ended" && e.roundId === started.roundId);
+      await a.events.untilDispatch((e) => e.event === "ended" && e.roundId === started.roundId);
       const binding = v.parse(v.object({ worktreeId: v.string() }), task.request.payload);
       expect(readClaim(a.state, binding.worktreeId).claim.threadId).toBe(started.threadId);
       writeFileSync(join(left.path, "replacement"), '{"directoryMode":"local"}');

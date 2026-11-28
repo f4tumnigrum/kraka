@@ -75,6 +75,7 @@ export function launchWriter(
         : point
           ? [join(root, "tools/fixtures/first-send-writer.ts"), stateDir, root, point]
           : [join(root, entry), "start", "--state-dir", stateDir, "--recording", recording];
+  const existingState = existsSync(join(stateDir, "environment.sqlite"));
   const started = performance.now();
   const child = Bun.spawn(
     executable ? [executable, ...argv.slice(1)] : [process.execPath, ...argv],
@@ -86,7 +87,14 @@ export function launchWriter(
       ...(ipc && { ipc }),
     },
   );
-  const stderr = new Response(child.stderr).text();
+  let stderrTail = "";
+  const stderr = (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of child.stderr)
+      stderrTail = (stderrTail + decoder.decode(chunk, { stream: true })).slice(-8192);
+    stderrTail = (stderrTail + decoder.decode()).slice(-8192);
+    return stderrTail;
+  })();
   const line = Promise.withResolvers<string>();
   const drained = (async () => {
     let out = "";
@@ -106,7 +114,12 @@ export function launchWriter(
   })();
   void line.promise.catch(() => {});
   const ready = async () => {
-    const raw = await within(line.promise, 11000, "Writer publication");
+    const raw = await within(line.promise, 11000, "Writer publication").catch((error) => {
+      console.error(
+        `Writer publication failed (${existingState ? "restart" : "fresh"}), daemon stderr tail:\n${stderrTail || "(empty)"}`,
+      );
+      throw error;
+    });
     const result = v.parse(
       v.strictObject({
         kind: v.picklist(["ready", "existingInstance"]),
@@ -127,6 +140,7 @@ export function launchWriter(
     stderr,
     started,
     ready,
+    stderrTail: () => stderrTail,
     async stop() {
       try {
         if (child.stdin && child.exitCode === null && child.signalCode === null) {

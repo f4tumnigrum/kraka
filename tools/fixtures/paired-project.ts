@@ -138,8 +138,8 @@ export async function startTestHost(
     events.push(e);
     publication.reject(Error(`Fixture exited (${e.code}): ${e.error}`));
   });
-  async function event(kind: string) {
-    const e = await events.until((m) => m.event === kind || m.event === "exit");
+  async function event(kind: string, budgetMs?: number) {
+    const e = await events.until((m) => m.event === kind || m.event === "exit", 0, budgetMs);
     if (e.event === "exit") throw Error(`Fixture exited: ${e.error}`);
     return e;
   }

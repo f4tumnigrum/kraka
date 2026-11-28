@@ -59,7 +59,7 @@ test(
           accepted((await f.configure(null, reg)).receipt, "executorConfigured");
           accepted((await f.refresh()).receipt, "executorRefreshed");
           const ids = accepted((await f.send()).receipt, "threadStarted");
-          await entered.until((n) => n === 12);
+          await entered.untilDispatch((n) => n === 12);
           await pair.host.control("project", { projectId: f.project.id, threadId: ids.threadId });
           const tablet = pair.clients[0]!;
           accepted(
@@ -157,7 +157,9 @@ test(
           accepted((await f.configure("1", replacement)).receipt, "executorConfigured");
           accepted((await f.refresh()).receipt, "executorRefreshed");
           const failedIds = accepted((await f.send()).receipt, "threadStarted");
-          await f.events.until((e) => e.kind === "tool.ended" && e.roundId === failedIds.roundId);
+          await f.events.untilDispatch(
+            (e) => e.kind === "tool.ended" && e.roundId === failedIds.roundId,
+          );
           accepted(
             await (await c.client.open(failedIds.threadId, null)).receipt,
             "subscriptionOpened",
