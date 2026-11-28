@@ -13,6 +13,8 @@ import {
   PairingPendingSchema,
   PairingCompletedSchema,
   MessageIdSchema,
+  CommandReceiptSchema,
+  TodoRequestIdSchema,
   HistoryPageSchema,
   SyncCursorSchema,
   TodoReplyRecordSchema,
@@ -126,77 +128,126 @@ test.skipIf(!native)(
   120000,
 );
 
-type PhoneCondition = {
-  message?: MessageId;
-  open?: "question" | "approval";
-  answered?: TodoRequestId;
-  atLeast?: SyncPosition;
-};
-async function phoneHead(page: Page, condition: PhoneCondition = {}) {
-  const raw = await within(
-    page.evaluate(
-      async ({ path, condition }) => {
-        const t = (await import(path)).pageThread;
-        function read() {
-          const status = t.status;
-          if (
-            !t.current ||
-            !status.acknowledged ||
-            status.installed.through !== status.acknowledged.through
-          )
-            return;
-          const cache: ThreadCache = t.cache;
-          const rows = Object.values(cache.rows).flatMap((r) => (r.row ? [r.row] : []));
-          if (condition.atLeast && BigInt(status.acknowledged.through) < BigInt(condition.atLeast))
-            return;
-          if (
-            condition.message &&
-            !rows.some((r) => r.objectType === "message" && r.value.id === condition.message)
-          )
-            return;
-          if (
-            condition.open &&
-            !rows.some(
-              (r) =>
-                r.objectType === "todoRequest" &&
-                r.value.body.kind === condition.open &&
-                r.value.state.kind === "open",
-            )
-          )
-            return;
-          if (
-            condition.answered &&
-            !rows.some(
-              (r) =>
-                r.objectType === "todoRequest" &&
-                r.value.id === condition.answered &&
-                r.value.state.kind === "answered",
-            )
-          )
-            return;
-          return {
-            rows,
-            head: status.acknowledged,
-            permissions: status.permissions,
-            connectionId: status.session.connectionId,
-          };
+type PhoneCondition = { message?: MessageId; answered?: TodoRequestId; atLeast?: SyncPosition };
+type PhoneAction =
+  | { kind: "submit"; requestKind: "question" | "approval" }
+  | { kind: "readAnswer"; id: TodoRequestId };
+async function atPhoneSeal(
+  page: Page,
+  selection: ({ kind: "head" } & PhoneCondition) | PhoneAction,
+) {
+  return page.evaluate(
+    async ({ path, selection }) => {
+      const thread = (await import(path)).pageThread;
+      return new Promise<unknown>((resolve, reject) => {
+        const off = thread.subscribe(check);
+        const deadline = setTimeout(() => {
+          off();
+          reject(
+            Error(
+              `Timed out waiting for ${JSON.stringify(selection)}; phone installed ${thread.status.installed?.through ?? "none"}, acknowledged ${thread.status.acknowledged?.through ?? "none"}`,
+            ),
+          );
+        }, 20000);
+        function finish() {
+          off();
+          clearTimeout(deadline);
         }
-        if (read()) return read();
-        return new Promise((resolve) => {
-          const off = t.subscribe(() => {
-            const value = read();
-            if (value) {
-              off();
-              resolve(value);
+        async function check() {
+          try {
+            const { installed, acknowledged, permissions, session } = thread.status;
+            if (
+              !thread.current ||
+              !acknowledged ||
+              !installed ||
+              installed.through !== acknowledged.through
+            )
+              return;
+            const cache: ThreadCache = thread.cache;
+            const view = Object.values(cache.scopes).find(
+              ({ cursor }) =>
+                cursor.scope.kind === "thread" && cursor.scope.threadId === thread.scope.threadId,
+            );
+            if (!view || view.cursor.through !== acknowledged.through) return;
+            const rows = Object.keys(view.members).flatMap((key) => cache.rows[key]?.row ?? []);
+            if (selection.kind === "head") {
+              if (selection.atLeast && BigInt(installed.through) < BigInt(selection.atLeast))
+                return;
+              if (
+                selection.message &&
+                !rows.some(
+                  (row) => row.objectType === "message" && row.value.id === selection.message,
+                )
+              )
+                return;
+              if (
+                selection.answered &&
+                !rows.some(
+                  (row) =>
+                    row.objectType === "todoRequest" &&
+                    row.value.id === selection.answered &&
+                    row.value.state.kind === "answered",
+                )
+              )
+                return;
+              finish();
+              resolve({
+                rows,
+                head: acknowledged,
+                permissions,
+                connectionId: session.connectionId,
+              });
+              return;
             }
-          });
-        });
-      },
-      { path: modulePath, condition },
-    ),
-    20000,
-    "acknowledged phone thread",
+            const row = rows.find(
+              (row) =>
+                row.objectType === "todoRequest" &&
+                row.value.threadId === thread.scope.threadId &&
+                (selection.kind === "readAnswer"
+                  ? row.value.id === selection.id && row.value.state.kind === "answered"
+                  : row.value.body.kind === selection.requestKind &&
+                    row.value.state.kind === "open"),
+            );
+            if (row?.objectType !== "todoRequest") return;
+            finish();
+            // Invoke in this notification. Another pass can start before a second page.evaluate.
+            const todoRequestId = row.value.id,
+              threadId = row.value.threadId;
+            const receipt: unknown = await (selection.kind === "readAnswer"
+              ? thread.readAnswer(todoRequestId)
+              : selection.requestKind === "question"
+                ? thread.answer({
+                    threadId,
+                    todoRequestId,
+                    answers: [{ questionKey: "color", answer: "blue" }],
+                  })
+                : thread.decide({
+                    threadId,
+                    todoRequestId,
+                    decision: {
+                      kind: "approval",
+                      choiceKey: "accept",
+                      decision: "allow",
+                      scope: "once",
+                    },
+                  }));
+            if (receipt === null)
+              throw Error(
+                `${selection.kind} returned null for request ${todoRequestId} at seal ${installed.through}; phone currently installed ${thread.status.installed?.through ?? "none"}`,
+              );
+            resolve({ id: todoRequestId, through: installed.through, receipt });
+          } catch (error) {
+            finish();
+            reject(error);
+          }
+        }
+        check();
+      });
+    },
+    { path: modulePath, selection },
   );
+}
+async function phoneHead(page: Page, condition: PhoneCondition = {}) {
   return v.parse(
     v.object({
       rows: HistoryPageSchema.entries.rows,
@@ -204,7 +255,17 @@ async function phoneHead(page: Page, condition: PhoneCondition = {}) {
       permissions: v.array(v.string()),
       connectionId: v.string(),
     }),
-    raw,
+    await atPhoneSeal(page, { kind: "head", ...condition }),
+  );
+}
+async function phoneRequest(page: Page, action: PhoneAction) {
+  return v.parse(
+    v.object({
+      id: TodoRequestIdSchema,
+      through: SyncCursorSchema.entries.through,
+      receipt: CommandReceiptSchema,
+    }),
+    await atPhoneSeal(page, action),
   );
 }
 describe.skipIf(!routed)("routed installed desktop handoff", () => {
@@ -339,14 +400,11 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
   }, 45000);
   test("handoff 2. cached history and one frozen phone send survive a lost receipt", async () => {
     const before = await phoneHead(phone);
-    await phone.evaluate(async (path) => (await import(path)).pageThread.disconnect(), modulePath);
-    const cached = await phone.evaluate(
-      async (path) =>
-        Object.values(((await import(path)).pageThread.cache as ThreadCache).scopes).map(
-          (s) => s.cursor.through,
-        ),
-      modulePath,
-    );
+    const cached = await phone.evaluate(async (path) => {
+      const thread = (await import(path)).pageThread;
+      thread.disconnect();
+      return Object.values((thread.cache as ThreadCache).scopes).map((s) => s.cursor.through);
+    }, modulePath);
     expect(cached).toContain(before.head.through);
     expect(f.host.events.items.filter((e) => e.event === "turn")).toHaveLength(1);
     await phone.getByLabel("Message", { exact: true }).fill("question");
@@ -390,42 +448,9 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
     );
     const submitted = async (kind: "question" | "approval") => {
       f.host.control(turn, kind === "question" ? "callback" : "handoff-approval");
-      const head = await observe(
-        "phone: installed open " + kind + " for native turn " + turn.root,
-        phoneHead(phone, { open: kind }),
-      );
-      const row = head.rows.find(
-        (r) =>
-          r.objectType === "todoRequest" &&
-          r.value.body.kind === kind &&
-          r.value.state.kind === "open",
-      );
-      if (row?.objectType !== "todoRequest") throw Error("Open native request missing");
-      const id = row.value.id;
-      const receipt = await observe(
-        `phone: ${kind} receipt for ${id} after installed position ${head.head.through}`,
-        phone.evaluate(
-          async ({ path, id, threadId, kind }) => {
-            const t = (await import(path)).pageThread;
-            return kind === "question"
-              ? t.answer({
-                  threadId,
-                  todoRequestId: id,
-                  answers: [{ questionKey: "color", answer: "blue" }],
-                })
-              : t.decide({
-                  threadId,
-                  todoRequestId: id,
-                  decision: {
-                    kind: "approval",
-                    choiceKey: "accept",
-                    decision: "allow",
-                    scope: "once",
-                  },
-                });
-          },
-          { path: modulePath, threadId: f.args.threadId, id, kind },
-        ),
+      const { receipt, id, through } = await observe(
+        `phone: submit once the open ${kind} for native turn ${turn.root} is installed`,
+        phoneRequest(phone, { kind: "submit", requestKind: kind }),
       );
       phoneReceipts[kind] = receipt;
       expect(receipt).toMatchObject({
@@ -433,30 +458,28 @@ describe.skipIf(!routed)("routed installed desktop handoff", () => {
         result: { kind: "todoAnswerStored", todoRequestId: id },
       });
       const resolved = await observe(
-        `phone: resolved ${kind} ${id} after ${head.head.through}`,
-        phoneHead(phone, { answered: id }),
+        `phone: read installed winner for ${kind} ${id} after position ${through}`,
+        phoneRequest(phone, { kind: "readAnswer", id }),
       );
-      const r = await observe(
-        `phone: read winner of ${id} at ${resolved.head.through}`,
-        phone.evaluate(async ({ path, id }) => (await import(path)).pageThread.readAnswer(id), {
-          id,
-          path: modulePath,
-        }),
-      );
-      const answer = v.parse(TodoReplyRecordSchema, r.result);
+      if (resolved.receipt.kind !== "accepted")
+        throw Error(
+          `readAnswer for ${id} at phone position ${resolved.through} returned ${resolved.receipt.kind}`,
+        );
+      const answer = v.parse(TodoReplyRecordSchema, resolved.receipt.result);
+      expect(answer.todoRequestId).toBe(id);
       expect(answer.deviceId).toBe(phoneDevice);
       expect(answer.at).toBeGreaterThan(0);
       expect(
         (
           await observe(
-            `CLI: sealed ${kind} winner ${id}, phone installed ${resolved.head.through}`,
+            `CLI: sealed ${kind} winner ${id}, phone installed ${resolved.through}`,
             cli.at((r) => r.answers.some((a) => a.todoRequestId === id)),
           )
         ).answers,
       ).toContainEqual(answer);
       const nativeId = kind === "question" ? 4001 : 4002;
       await observe(
-        `native peer: callback ${nativeId} for ${id}, phone installed ${resolved.head.through}`,
+        `native peer: callback ${nativeId} for ${id}, phone installed ${resolved.through}`,
         f.host.events.until(
           (e) => e.event === "reply-written" && e.handle === turn.handle && e.id === nativeId,
         ),
