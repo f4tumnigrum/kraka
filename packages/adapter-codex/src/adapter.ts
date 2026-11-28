@@ -23,11 +23,18 @@ import {
   readCodexQuota,
   readSessionFee,
 } from "./account-usage";
+import { CodexLogins, checkAccount, requireAccess } from "./login";
 import { Callbacks, serverRequest } from "./requests";
 import type { AdapterEventPayload } from "@kraka/environment";
 import { CodexConnection, type Launch } from "./stdio";
 import { type CodexNativeFrame, NativeError, notification, object } from "./native";
-import { accountFingerprint, openThread, selectedModel, type CodexProbe } from "./discovery";
+import {
+  accountFingerprint,
+  listModels,
+  openThread,
+  selectedModel,
+  type CodexProbe,
+} from "./discovery";
 import { translateCodexFrame, type CodexTurnState } from "./translate";
 type Frame = { frame: CodexNativeFrame; ordinal: number; observedAt: number | null };
 type Event = AdapterEventEnvelope<"codex">;
@@ -314,10 +321,12 @@ export function createCodexAdapter(
   launch: Launch,
   probe: CodexProbe,
   previousEpoch = 0,
+  now: () => number = Date.now,
 ): ProviderAdapter<"codex", CodexSessionHandle> {
+  const logins = new CodexLogins(launch);
   let epoch = previousEpoch;
   const handles = new WeakMap<CodexSessionHandle, SessionSetup["model"]>();
-  const matches = (i: Instance) =>
+  const matches = (i: AdapterInstance) =>
     i.family === instance.family && i.instanceId === instance.instanceId;
   const owns = (s: Session) =>
     matches(s) &&
@@ -352,26 +361,74 @@ export function createCodexAdapter(
     )
       return denied("unsupported");
     if (!("handle" in target)) {
-      if (cmd.capability === "reportQuota" && probe.quotaAccount) {
-        try {
-          return ok({
-            kind: "service",
-            result: await readCodexQuota(launch, probe.quotaAccount, cmd.request.signal),
-          });
-        } catch (error) {
-          return error instanceof QuotaAccountChanged
-            ? denied("invalidCapabilitySnapshot", "Quota account changed")
-            : denied("invalidState", "Quota probe failed");
+      if (cmd.kind !== "service") return denied("unsupported");
+      let rpc: CodexConnection | undefined;
+      try {
+        const request = cmd.request;
+        if (cmd.capability === "reportQuota" && probe.quotaAccount) {
+          try {
+            return ok({
+              kind: "service",
+              result: await readCodexQuota(launch, probe.quotaAccount, cmd.request.signal),
+            });
+          } catch (error) {
+            return error instanceof QuotaAccountChanged
+              ? denied("invalidCapabilitySnapshot", "Quota account changed")
+              : denied("invalidState", "Quota probe failed");
+          }
         }
+
+        if (request.kind === "login" || request.kind === "cancelLogin") {
+          if (request.kind === "login" && request.flow.interaction === "nativeCli")
+            return denied("unsupported");
+          if (
+            request.flow.instanceId !== instance.instanceId ||
+            Number(request.flow.configVersion) !== permit.capabilityVersion
+          )
+            return denied("invalidCapabilitySnapshot");
+          return ok({ kind: "service", result: await logins.invoke(request) });
+        }
+        if (request.kind === "listModels") {
+          if (!request.verifiedAccount)
+            return probe.models
+              ? ok({ kind: "service", result: probe.models })
+              : denied("invalidState");
+          const accountPermit = request.verifiedAccount.authenticationPermit;
+          if (
+            !matches(accountPermit) ||
+            accountPermit.capabilityVersion !== permit.capabilityVersion ||
+            accountPermit.capability !== "checkAuthentication" ||
+            probe.declaration.matrix.checkAuthentication.kind !== "native"
+          )
+            return denied("invalidCapabilitySnapshot");
+        }
+        if (request.kind !== "checkAuthentication" && request.kind !== "listModels")
+          return denied("unsupported");
+        const authorize =
+          (request.kind === "checkAuthentication"
+            ? request.authorize
+            : request.verifiedAccount?.authorize) ?? (() => true);
+        requireAccess(authorize);
+        rpc = new CodexConnection(launch, now, authorize);
+        await rpc.initialize();
+        requireAccess(authorize);
+        const auth = await checkAccount(rpc, now);
+        requireAccess(authorize);
+        if (request.kind === "checkAuthentication") return ok({ kind: "service", result: auth });
+        if (
+          !request.verifiedAccount ||
+          auth.status.state !== "yes" ||
+          auth.account !== request.verifiedAccount.expectedAccount
+        )
+          return denied("invalidState");
+        const models = await listModels(rpc, now, () => requireAccess(authorize));
+        requireAccess(authorize);
+        return ok({ kind: "service", result: models });
+      } catch {
+        return denied("invalidState", "Instance service unavailable");
+      } finally {
+        await rpc?.close();
       }
-      if (cmd.capability === "listModels" && probe.models)
-        return ok({ kind: "service", result: probe.models });
-      if (cmd.capability === "checkAuthentication")
-        return ok({
-          kind: "service",
-          result: { status: probe.declaration.readiness.authenticated, account: null },
-        });
-      return denied("unsupported");
     }
     if (!owns(target) || target.handle.closed) return denied("invalidState");
     const h = target.handle;

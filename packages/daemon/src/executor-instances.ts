@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { LoginController, systemLoginClock, type LoginClock } from "./instance-login";
 import * as registered from "./executor-families/registry";
 import type { ExecutorFamily, FamilyProbe } from "@kraka/environment";
 import {
@@ -25,7 +26,7 @@ import {
   type ProjectId,
   type SignedRequest,
 } from "@kraka/protocol";
-type Entry = {
+export type InstanceEntry = {
   reg: ExecutorRegistration;
   cwd: string;
   probe: FamilyProbe;
@@ -33,27 +34,35 @@ type Entry = {
 };
 export class ExecutorInstances {
   readonly registry;
-  private entries = new Map<string, Entry>();
+  private entries = new Map<string, InstanceEntry>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private closed = false;
   readonly active = new Set<Promise<unknown>>();
   private readonly families;
+  readonly login: LoginController;
+  private readonly queues = new Map<string, Promise<unknown>>();
   constructor(
     private store: FirstSendStore,
     families: readonly ExecutorFamily[] = Object.values(registered),
+    readonly clock: LoginClock = systemLoginClock,
   ) {
     this.families = new Map(families.map((family) => [family.family, family]));
     this.registry = new WriterExecutorRegistry(store);
+    this.login = new LoginController(store, this, clock);
+    this.login.recover();
   }
   configure(
     ctx: FirstSendContext,
     payload: Extract<SignedRequest, { method: "executor.configure" }>["payload"],
   ) {
-    return this.registry.configure(
+    const receipt = this.registry.configure(
       ctx,
       payload,
       (reg) => this.families.get(reg.family)?.supports(reg) ?? false,
     );
+    if (receipt.kind === "accepted")
+      this.login.registrationChanged(payload.registration.instanceId);
+    return receipt;
   }
   verified(id: ExecutorInstanceId) {
     const entry = this.entries.get(id);
@@ -84,8 +93,9 @@ export class ExecutorInstances {
   }
   async close() {
     this.closed = true;
+    this.login.close();
     for (const timer of this.timers.values()) clearTimeout(timer);
-    await Promise.allSettled(this.active);
+    while (this.active.size) await Promise.allSettled([...this.active]);
   }
   current(id: ExecutorInstanceId, owner: PrincipalId, cwd: string) {
     const entry = this.entries.get(id),
@@ -93,7 +103,7 @@ export class ExecutorInstances {
     return entry &&
       entry.cwd === cwd &&
       reg?.version === entry.reg.version &&
-      entry.probe.retryAt > Date.now()
+      entry.probe.retryAt > this.clock.now()
       ? entry
       : null;
   }
@@ -116,7 +126,7 @@ export class ExecutorInstances {
       this.active.delete(work);
     }
   }
-  select(entry: Entry | null, selection: SessionSetup["model"] | undefined) {
+  select(entry: InstanceEntry | null, selection: SessionSetup["model"] | undefined) {
     if (
       !entry ||
       !entry.probe.declaration.permission.modes.includes(entry.snapshot.permission.selected) ||
@@ -128,23 +138,126 @@ export class ExecutorInstances {
     const model = entry.probe.selectModel(selection ?? entry.reg.model);
     return model ? { ...entry, model } : null;
   }
-  async probe(
+  track<T>(work: Promise<T>) {
+    this.active.add(work);
+    const done = () => this.active.delete(work);
+    void work.then(done, done);
+    return work;
+  }
+  serialize<T>(reg: ExecutorRegistration, run: () => Promise<T>) {
+    const key = JSON.stringify([
+      reg.family,
+      reg.driver.configurationRoot ?? [reg.instanceId, reg.credential],
+    ]);
+    const prior = this.queues.get(key) ?? Promise.resolve();
+    const work = prior.catch(() => {}).then(run);
+    this.queues.set(key, work);
+    const clear = () => {
+      if (this.queues.get(key) === work) this.queues.delete(key);
+    };
+    void work.then(clear, clear);
+    return this.track(work);
+  }
+  supports(
+    reg: ExecutorRegistration,
+    capability: "startLogin" | "checkAuthentication" | "listModels",
+  ) {
+    const entry = this.entries.get(reg.instanceId);
+    return (
+      entry?.reg.version === reg.version && entry.snapshot.matrix[capability].kind !== "unsupported"
+    );
+  }
+  async failedAuthentication(
+    reg: ExecutorRegistration,
+    status: import("@kraka/environment").Readiness,
+    reason: string,
+  ) {
+    const entry = this.entries.get(reg.instanceId);
+    if (
+      !entry ||
+      entry.reg.version !== reg.version ||
+      this.registry.current(reg.instanceId)?.version !== reg.version
+    )
+      return;
+    const checkedAt = this.clock.now();
+    const unknown = { state: "unknown", verifiedAt: null } as const;
+    const declaration = {
+      ...entry.probe.declaration,
+      checkedAt,
+      readiness: {
+        ...entry.probe.declaration.readiness,
+        authenticated: status,
+        model: unknown,
+        operation: unknown,
+      },
+    };
+    const probe = {
+      ...entry.probe,
+      declaration,
+      models: null,
+      attemptedAt: checkedAt,
+      authenticationReason: reason,
+    };
+    const snapshot = await this.registry.publish({
+      family: reg.family,
+      instanceId: reg.instanceId,
+      configurationVersion: reg.version,
+      credential: reg.credential,
+      model: reg.model,
+      workingDirectory: entry.cwd,
+      binaryVersion: probe.binaryVersion,
+      declaration,
+    });
+    if (snapshot && this.entries.get(reg.instanceId) === entry)
+      this.entries.set(reg.instanceId, { ...entry, probe, snapshot });
+  }
+  profileDirectory(reg: ExecutorRegistration) {
+    return (
+      this.entries.get(reg.instanceId)?.cwd ??
+      reg.driver.configurationRoot ??
+      this.store.writer.stateDirectory
+    );
+  }
+  probe(
     reg: ExecutorRegistration,
     directory: () => string | null,
     cwd: string,
-    actor: PrincipalId,
+    actor: PrincipalId | undefined,
+    authorize = () => true,
   ) {
+    return this.serialize(reg, () => this.discover(reg, directory, cwd, actor, authorize));
+  }
+  async discover(
+    reg: ExecutorRegistration,
+    directory: () => string | null,
+    cwd: string,
+    actor: PrincipalId | undefined,
+    authorize = () => true,
+    expectedAccount?: string,
+    verifiedCatalog?: ExecutorRefreshed["models"],
+  ) {
+    const valid = () =>
+      !this.closed &&
+      authorize() &&
+      this.registry.current(reg.instanceId)?.version === reg.version &&
+      directory() === cwd;
+    if (!valid()) return null;
+    const scope = {
+      now: this.clock.now,
+      authorize: valid,
+      ...(expectedAccount !== undefined && { expectedAccount }),
+      ...(verifiedCatalog !== undefined && { verifiedCatalog }),
+    };
     const token = this.registry.begin(reg.instanceId, cwd);
     const prev = this.entries.get(reg.instanceId);
     const family = this.families.get(reg.family);
     if (!family || !family.supports(reg)) return null;
     const probe =
       prev?.reg.version === reg.version && prev.cwd === cwd
-        ? await prev.probe.refresh()
-        : await family.probe(reg, cwd, this.registry.environment(reg));
+        ? await prev.probe.refresh(scope)
+        : await family.probe(reg, cwd, this.registry.environment(reg), scope);
     if (probe.declaration.family !== reg.family) throw Error("Mismatched probe family");
-    if (this.closed || !this.registry.isCurrent(reg.instanceId, token) || directory() !== cwd)
-      return null;
+    if (!valid() || !this.registry.isCurrent(reg.instanceId, token)) return null;
     const snapshot = await this.registry.publish({
       family: reg.family,
       instanceId: reg.instanceId,
@@ -169,7 +282,8 @@ export class ExecutorInstances {
         if (
           this.closed ||
           directory() !== cwd ||
-          !visibleRegistration(this.registry.current(reg.instanceId), actor) ||
+          (actor !== undefined &&
+            !visibleRegistration(this.registry.current(reg.instanceId), actor)) ||
           reg.version !== this.registry.current(reg.instanceId)?.version
         )
           return;
@@ -177,7 +291,7 @@ export class ExecutorInstances {
         this.active.add(work);
         void work.catch(() => {}).finally(() => this.active.delete(work));
       },
-      Math.max(0, probe.retryAt - Date.now()),
+      Math.max(0, probe.retryAt - this.clock.now()),
     );
     timer.unref();
     this.timers.set(reg.instanceId, timer);
@@ -186,6 +300,7 @@ export class ExecutorInstances {
   async refresh(
     ctx: FirstSendContext,
     payload: Extract<SignedRequest, { method: "executor.refresh" }>["payload"],
+    owner = ctx.actor.id,
   ) {
     const { projectId, instanceId } = payload,
       { actor, commandId } = ctx;
@@ -197,15 +312,23 @@ export class ExecutorInstances {
         commandId,
         failure: { kind: "missingPermission", permission: operation.permission, target },
       } as const;
-    const reg = visibleRegistration(this.registry.current(instanceId), actor.id),
+    const reg =
+        visibleRegistration(this.registry.current(instanceId), actor.id) ??
+        visibleRegistration(this.registry.current(instanceId), owner),
       project = readProject(this.store.db, projectId);
     const cwd = this.store.projectDirectory(projectId);
     let entry =
       reg && cwd && project?.environmentId === actor.environmentId
-        ? this.current(instanceId, actor.id, cwd)
+        ? this.current(instanceId, owner, cwd)
         : null;
-    if (!entry && reg && cwd && project?.environmentId === actor.environmentId)
-      entry = await this.probe(reg, () => this.store.projectDirectory(projectId), cwd, actor.id);
+    if ((!entry || payload.force) && reg && cwd && project?.environmentId === actor.environmentId)
+      entry = await this.probe(
+        reg,
+        () => this.store.projectDirectory(projectId),
+        cwd,
+        owner,
+        () => actor.allows(operation.permission, target),
+      );
     return recordCommand(
       ctx,
       operation,
@@ -230,6 +353,8 @@ export class ExecutorInstances {
           snapshot,
           readiness: { ...probe.declaration.readiness },
           models: probe.models,
+          authenticationReason: probe.authenticationReason ?? null,
+          attemptedAt: probe.attemptedAt ?? probe.declaration.checkedAt,
           binaryVersion: probe.binaryVersion,
           variables: Object.entries(registration.driver.variables).map(([name, v]) => ({
             name,

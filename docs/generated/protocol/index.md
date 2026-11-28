@@ -66,6 +66,9 @@ Supply a fresh public nonce in the upgrade query and verify its signed echo with
 | `executor.readQuota` | `thread.view` | environment |
 | `executor.refreshQuota` | `thread.view` | environment |
 | `thread.readUsage` | `thread.view` | thread |
+| `executor.startLogin` | `settings.change` | environment |
+| `executor.readLogin` | `settings.change` | environment |
+| `executor.cancelLogin` | `settings.change` | environment |
 | `executor.configure` | `settings.change` | environment |
 | `executor.refresh` | `thread.view` | project |
 | `project.register` | `workspace.change` | environment |
@@ -4478,6 +4481,22 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                   ],
                   "additionalProperties": false
                 },
+                "authenticationReason": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "attemptedAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
                 "models": {
                   "anyOf": [
                     {
@@ -4655,6 +4674,127 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
                 "variables",
                 "compatibilityAdvisory",
                 "versionAdvisory"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "instanceLogin"
+                },
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "flowId": {
+                  "$ref": "#/$defs/CommandId"
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "phase": {
+                  "enum": [
+                    "starting",
+                    "browser",
+                    "deviceCode",
+                    "nativeCli",
+                    "verifying",
+                    "authenticated",
+                    "failed",
+                    "cancelled",
+                    "expired"
+                  ],
+                  "type": "string"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "interaction": {
+                  "anyOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "const": "browser"
+                            },
+                            "url": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "url"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "const": "deviceCode"
+                            },
+                            "url": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "userCode": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "url",
+                            "userCode"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "const": "nativeCli"
+                            },
+                            "instructions": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "instructions"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "instanceId",
+                "flowId",
+                "expiresAt",
+                "phase",
+                "reason",
+                "interaction"
               ],
               "additionalProperties": false
             },
@@ -22420,6 +22560,15 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
       "$ref": "#/$defs/thread.readUsage"
     },
     {
+      "$ref": "#/$defs/executor.startLogin"
+    },
+    {
+      "$ref": "#/$defs/executor.readLogin"
+    },
+    {
+      "$ref": "#/$defs/executor.cancelLogin"
+    },
+    {
       "$ref": "#/$defs/executor.configure"
     },
     {
@@ -32219,6 +32368,124 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## executor.cancelLogin
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "executor.cancelLogin"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "flowId": {
+          "$ref": "#/$defs/CommandId"
+        }
+      },
+      "required": [
+        "instanceId",
+        "flowId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires settings.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
 ## executor.configure
 
 ```json
@@ -32570,6 +32837,124 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
 }
 ```
 
+## executor.readLogin
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "executor.readLogin"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "flowId": {
+          "$ref": "#/$defs/CommandId"
+        }
+      },
+      "required": [
+        "instanceId",
+        "flowId"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires settings.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
 ## executor.readQuota
 
 ```json
@@ -32774,6 +33159,9 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
         },
         "instanceId": {
           "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "force": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -32916,6 +33304,134 @@ A binary content message contains a four-byte unsigned big-endian JSON-header le
   ],
   "additionalProperties": false,
   "description": "Requires thread.view on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+}
+```
+
+## executor.startLogin
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "const": "signedRequest"
+    },
+    "protocolVersion": {
+      "$ref": "#/$defs/ProtocolVersion"
+    },
+    "environmentId": {
+      "$ref": "#/$defs/EnvironmentId"
+    },
+    "connectionId": {
+      "$ref": "#/$defs/ConnectionId"
+    },
+    "challengeId": {
+      "$ref": "#/$defs/ConnectionChallengeId"
+    },
+    "challenge": {
+      "$ref": "#/$defs/ConnectionChallenge"
+    },
+    "signer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "device"
+            },
+            "deviceId": {
+              "$ref": "#/$defs/DeviceId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/DeviceKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "deviceId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "executor"
+            },
+            "principalId": {
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "keyId": {
+              "$ref": "#/$defs/ExecutorKeyId"
+            }
+          },
+          "required": [
+            "kind",
+            "principalId",
+            "keyId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "commandId": {
+      "$ref": "#/$defs/CommandId"
+    },
+    "method": {
+      "const": "executor.startLogin"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ExecutorInstanceId"
+        },
+        "interaction": {
+          "enum": [
+            "browser",
+            "deviceCode",
+            "nativeCli"
+          ],
+          "type": "string"
+        },
+        "expectedAccount": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "instanceId",
+        "interaction",
+        "expectedAccount"
+      ],
+      "additionalProperties": false
+    },
+    "signature": {
+      "$ref": "#/$defs/P256Signature"
+    }
+  },
+  "required": [
+    "kind",
+    "protocolVersion",
+    "environmentId",
+    "connectionId",
+    "challengeId",
+    "challenge",
+    "signer",
+    "sequence",
+    "commandId",
+    "method",
+    "payload",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "description": "Requires settings.change on environment. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
 }
 ```
 

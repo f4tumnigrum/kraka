@@ -341,6 +341,10 @@ export async function usageCase(bins: Awaited<ReturnType<typeof usageBinaries>>)
       two,
       target,
       grant,
+      revoke: (grantId: Awaited<ReturnType<typeof grant>>["grantId"]) =>
+        pair.owner
+          .request({ method: "access.revoke", commandId: commandId(), payload: { grantId } })
+          .then((r) => accepted(r, "accessChanged")),
       advance,
       configure,
       read,

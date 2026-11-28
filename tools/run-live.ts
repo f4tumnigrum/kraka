@@ -23,14 +23,11 @@ for (const path of suites) {
   const declared = /^\/\/ Live cases (\d+); required groups (\[[^\n]*\])$/m.exec(source);
   if (!declared) throw Error("Missing live case and group declaration in " + path);
   const required = v.parse(v.array(v.string()), JSON.parse(declared[2] ?? ""));
-  const name = path.replaceAll("\\", "/").split("/").at(-1)?.split(".")[0];
-  const report = [];
-  if (/^\/\/ Live report junit$/m.test(source)) {
-    const directory = join(logDirectory, String(name));
-    await mkdir(directory, { recursive: true });
-    report.push("--reporter=junit", "--reporter-outfile=" + join(directory, "live.xml"));
-  }
-  const child = Bun.spawn([process.execPath, "test", "./" + path, ...report], {
+  const junit = /^\/\/ Live junit ([\w.-]+\.xml)$/m.exec(source)?.[1];
+  const reporter = junit
+    ? ["--reporter=junit", "--reporter-outfile=" + join(logDirectory, junit)]
+    : [];
+  const child = Bun.spawn([process.execPath, "test", "./" + path, ...reporter], {
     stdout: "pipe",
     stderr: "pipe",
     ...(Object.keys(env).length && { env: { ...process.env, ...env } }),
@@ -41,6 +38,7 @@ for (const path of suites) {
     new Response(child.stderr).text(),
   ]);
   const output = stdout + stderr;
+  const name = path.replaceAll("\\", "/").split("/").at(-1)?.split(".")[0];
   await Bun.write(join(logDirectory, name + ".log"), output);
   process.stdout.write(output);
   if (code !== 0) throw Error(path + " failed with exit " + code);

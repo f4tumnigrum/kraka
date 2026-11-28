@@ -26,6 +26,13 @@ export interface RequestContext {
   accountQuota: import("../account-quota").AccountQuota | undefined;
   quotaViews: Map<string, () => void>;
   allowsEnvironmentView(): boolean;
+  quotaSignal(): AbortSignal;
+  executors: import("../executor-instances").ExecutorInstances;
+  startThread: (
+    actor: LocalActor,
+    req: Extract<SignedRequest, { method: "thread.start" }>,
+  ) => Promise<CommandReceipt>;
+  loginSession: import("../instance-login").LoginSession;
   host: Awaited<ReturnType<typeof openAccessHost>>;
   principal: LocalActor;
   deviceId: Extract<SessionAuthorized["signer"], { kind: "device" }>["deviceId"];

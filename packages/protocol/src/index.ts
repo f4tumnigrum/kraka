@@ -10,6 +10,12 @@ export * from "./desktop-ipc";
 export * from "./device-registration";
 export * from "./executor-capabilities";
 export * from "./executor-instance";
+export {
+  LoginInteractionSchema,
+  LoginPhaseSchema,
+  type LoginInteraction,
+  type InstanceLoginResult,
+} from "./instance-login";
 export * from "./executor-tools";
 export * from "./flow-peer";
 export * from "./forge";

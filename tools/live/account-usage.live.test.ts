@@ -1,5 +1,5 @@
 // Live cases 6; required groups ["1.", "2.", "3.", "4.", "5.", "6."]
-// Live report junit
+// Live junit account-usage.xml
 import { beforeAll, afterAll, test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -237,7 +237,29 @@ test("6. A late account observation", async () => {
     const detached = await f.signals.until((m) => m.kind === "detached");
     expect(detached.counts).toEqual({ subscriptions: 0, queries: 0, scheduledChecks: 0 });
     expect(await f.advance(300001)).toEqual(detached.counts);
+    const grant = await f.grant();
+    const pending = f.hold("B", limits(55, 9));
+    const request = f.two.client.rpc("executor.refreshQuota", { instanceId: "B" });
+    await pending.received();
+    await f.revoke(grant.grantId);
+    expect(await request).toMatchObject({ kind: "rejected" });
+    expect(await f.read("B")).toMatchObject({ version: 0, lastSuccessAt: null });
+    pending.release();
+    // Closing one device leaves the shared query available to the other signed reader.
+    await f.grant();
+    const joined = f.hold("A-replacement", limits(9, 10)),
+      since = f.signals.items.length;
+    const closing = f.two.client
+      .rpc("executor.refreshQuota", { instanceId: "A" })
+      .catch(() => null);
+    await joined.received();
+    const remaining = f.refresh();
+    await f.signals.until((m) => m.kind === "refreshJoined", since);
+    await f.two.close();
+    await closing;
+    joined.release();
+    expect(await remaining).toMatchObject({ windows: [{}, { used: 9 }] });
   });
-  expect(probes(rows).map((c) => c.account)).toEqual(["A", "A-replacement"]);
+  expect(probes(rows).map((c) => c.account)).toEqual(["A", "A-replacement", "B", "A-replacement"]);
   expect(prompts(rows)).toBeEmpty();
 }, 45000);

@@ -46,6 +46,7 @@ export async function connectDevice(
   device: LocalDevice,
   principal: v.InferOutput<typeof DevicePrincipalSchema>,
   dial: RouteDial = dialRoute,
+  stage?: (label: string) => void,
 ) {
   const events = new Journal<RouteEvent>(),
     traffic = new Journal<SocketEvent>();
@@ -70,6 +71,7 @@ export async function connectDevice(
     observe: (e) => events.push(e),
   });
   try {
+    stage?.("authorize device and receive session configuration");
     const ready = await events.until((e) => e.kind === "sender" || e.kind === "diagnostic");
     if (ready.kind !== "sender")
       throw Error(`Device authorization failed: ${JSON.stringify(ready)}`);
@@ -81,6 +83,7 @@ export async function connectDevice(
       configuration: ready.configuration,
       close: selector.close,
       async request(input: RouteCommand) {
+        stage?.("signed receipt for " + input.method);
         const cmd = device.freeze(input),
           start = events.items.length;
         if (!(await selector.send(cmd))) throw Error("Device cannot send");
@@ -110,6 +113,7 @@ export async function startTestHost(
   dir: string,
   signal?: AbortSignal,
   browser?: BrowserPeerOptions,
+  stage?: (label: string) => void,
 ) {
   const publication = Promise.withResolvers<unknown>();
   const events = new Journal<Record<string, unknown>>();
@@ -139,11 +143,13 @@ export async function startTestHost(
     publication.reject(Error(`Fixture exited (${e.code}): ${e.error}`));
   });
   async function event(kind: string, budgetMs?: number) {
+    stage?.("host event " + kind);
     const e = await events.until((m) => m.event === kind || m.event === "exit", 0, budgetMs);
     if (e.event === "exit") throw Error(`Fixture exited: ${e.error}`);
     return e;
   }
   async function control(op: string, payload: object = {}) {
+    stage?.("host acknowledgment for " + op);
     const id = crypto.randomUUID();
     p.send({ id, op, ...payload });
     const e = await events.until((e) => e.response === id || e.event === "exit");
@@ -151,6 +157,7 @@ export async function startTestHost(
     return e.value;
   }
   try {
+    stage?.("pairing host ready over IPC");
     const { identity, origin } = v.parse(
       v.object({ identity: EnvironmentIdentitySchema, origin: v.string() }),
       await publication.promise,
@@ -260,6 +267,7 @@ export async function startPairedProject({
   browser,
   devices,
   signal,
+  stage,
 }: {
   stateDir: string;
   projectId: string;
@@ -267,6 +275,7 @@ export async function startPairedProject({
   requests: readonly (readonly PermissionItem[])[];
   devices?: { owner: LocalDevice; applicants: readonly LocalDevice[] };
   signal?: AbortSignal;
+  stage?: (label: string) => void;
 }) {
   const project = v.parse(ProjectIdSchema, projectId);
   const threadId = v.parse(ThreadIdSchema, crypto.randomUUID());
@@ -274,7 +283,7 @@ export async function startPairedProject({
   const connections: Client[] = [];
   const clients: Client[] = [];
   const stateDir = await mkdtemp(join(parent, "paired-"));
-  let host = await startTestHost(stateDir, signal, browser).catch(async (error) => {
+  let host = await startTestHost(stateDir, signal, browser, stage).catch(async (error) => {
     await rm(stateDir, { recursive: true, force: true });
     throw error;
   });
@@ -282,12 +291,13 @@ export async function startPairedProject({
   async function local(name: string) {
     const dir = join(stateDir, name);
 
+    stage?.("open device credentials for " + name);
     const d = await openDeviceCredentials(join(dir, "device.sqlite"));
     credentials.push(d);
     return d;
   }
   async function attach(d: LocalDevice, principal: v.InferOutput<typeof DevicePrincipalSchema>) {
-    const c = await connectDevice(host.origin, identity, d, principal);
+    const c = await connectDevice(host.origin, identity, d, principal, dialRoute, stage);
     connections.push(c);
     return c;
   }
@@ -317,10 +327,13 @@ export async function startPairedProject({
     for (const [index, permissions] of requests.entries()) {
       const d = devices?.applicants[index] ?? (await local(`device-${index}`));
       const id = await invite(owner, project);
+      stage?.("applicant hello and pending application");
       const app = await beginApplication(d, host.origin, identity, project, id, [...permissions]);
       try {
         await approve(owner, app.pending);
+        stage?.("selected applicant challenge and signature");
         app.socket.send(await app.proof());
+        stage?.("applicant exchange receipt");
         const registration = app.finish(await app.socket.result());
         clients.push(await attach(d, registration.principal));
       } finally {
@@ -346,7 +359,7 @@ export async function startPairedProject({
         owner.close();
         for (const c of clients) c.close();
         await host.stop();
-        host = await startTestHost(stateDir, signal, browser);
+        host = await startTestHost(stateDir, signal, browser, stage);
         if (canonicalJson(host.identity) !== canonicalJson(identity))
           throw Error("Environment identity changed");
         owner = await attach(device, first.principal);

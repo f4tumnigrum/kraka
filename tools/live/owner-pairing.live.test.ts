@@ -1,6 +1,8 @@
 // Live cases 4; required groups []
 // Live env KRAKA_REQUIRED_PAIRING_CASES=1
-import { afterAll, expect, onTestFinished, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, onTestFinished, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { connect } from "node:net";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -300,249 +302,282 @@ test(
     }),
   25000,
 );
-test(
+function pairedDeviceCase(
+  title: string,
+  rights: PermissionItem[],
+  run: (
+    fixture: Awaited<ReturnType<typeof startPairedProject>>,
+    stage: (wait: string) => void,
+  ) => Promise<void>,
+) {
+  describe("paired device", () => {
+    let dir: string;
+    let fixture: Awaited<ReturnType<typeof startPairedProject>> | undefined;
+    const lifetime = new AbortController();
+    const stage = (wait: string) => {
+      if (process.env.KRAKA_REQUIRED_PAIRING_CASES === "1")
+        console.info("[" + title + "] waiting for " + wait);
+    };
+    beforeAll(async () => {
+      dir = await mkdtemp(join(tmpdir(), "kraka-pairing-case-"));
+      fixture = await startPairedProject({
+        stateDir: dir,
+        projectId: "P",
+        requests: [rights],
+        signal: lifetime.signal,
+        stage,
+      });
+    }, 20000);
+    afterAll(async () => {
+      if (!fixture) lifetime.abort();
+      try {
+        await fixture?.close();
+      } finally {
+        lifetime.abort();
+        if (dir) await rm(dir, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
+      }
+    }, 20000);
+    test(title, async () => {
+      if (!fixture) throw Error("Paired device unavailable");
+      await run(fixture, stage);
+    }, 20000);
+  });
+}
+pairedDeviceCase(
   "Revoke closes the connected subscriber while the owner and executor continue",
-  () =>
-    withState(async (stateDir) => {
-      const f = await testProject(stateDir, [["thread.view"]]);
-      try {
-        const target = f.clients[0];
-        if (!target) throw Error("Missing subscriber");
-        await f.host.control("executor");
-        await f.host.event("executorActive");
-        const executorThread = v.parse(
-          ThreadIdSchema,
-          (await f.host.event("executorThread")).threadId,
-        );
-        const open = {
-          method: "subscription.openThread" as const,
+  ["thread.view"],
+  async (f, stage) => {
+    const target = f.clients[0];
+    if (!target) throw Error("Missing subscriber");
+    await f.host.control("executor");
+    await f.host.event("executorActive");
+    const executorThread = v.parse(ThreadIdSchema, (await f.host.event("executorThread")).threadId);
+    const open = {
+      method: "subscription.openThread" as const,
+      commandId: commandId(),
+      payload: {
+        subscriptionId: v.parse(SubscriptionIdSchema, crypto.randomUUID()),
+        streamId: 1,
+        threadId: executorThread,
+        after: null,
+        knownWindow: [],
+        recheckTodos: [],
+      },
+    };
+    expect(await target.request(open)).toMatchObject({
+      kind: "accepted",
+      result: { kind: "subscriptionOpened" },
+    });
+    await f.host.control("publish", open.payload);
+    stage("subscriber reset for original thread");
+    await target.events.until(
+      (e) =>
+        e.kind === "control" &&
+        e.frame.kind === "subscription.reset" &&
+        e.frame.subscriptionId === open.payload.subscriptionId,
+    );
+    const alternateOpen = {
+      ...open,
+      commandId: commandId(),
+      payload: {
+        ...open.payload,
+        streamId: 2,
+        threadId: f.threadId,
+        subscriptionId: v.parse(SubscriptionIdSchema, crypto.randomUUID()),
+      },
+    };
+    expect((await target.request(alternateOpen)).kind).toBe("accepted");
+    const projectGrants = await grants(f.owner, { kind: "project", projectId: f.projectId });
+    const inherited = projectGrants.find(
+      (g) => g.principalId === target.principal.id && g.permission === "thread.view",
+    );
+    if (!inherited) throw Error("Missing inherited stream access");
+    expect(
+      (
+        await f.owner.request({
+          method: "access.grant",
           commandId: commandId(),
           payload: {
-            subscriptionId: v.parse(SubscriptionIdSchema, crypto.randomUUID()),
-            streamId: 1,
-            threadId: executorThread,
-            after: null,
-            knownWindow: [],
-            recheckTodos: [],
-          },
-        };
-        expect(await target.request(open)).toMatchObject({
-          kind: "accepted",
-          result: { kind: "subscriptionOpened" },
-        });
-        await f.host.control("publish", open.payload);
-        await target.events.until(
-          (e) =>
-            e.kind === "control" &&
-            e.frame.kind === "subscription.reset" &&
-            e.frame.subscriptionId === open.payload.subscriptionId,
-        );
-        const alternateOpen = {
-          ...open,
-          commandId: commandId(),
-          payload: {
-            ...open.payload,
-            streamId: 2,
-            threadId: f.threadId,
-            subscriptionId: v.parse(SubscriptionIdSchema, crypto.randomUUID()),
-          },
-        };
-        expect((await target.request(alternateOpen)).kind).toBe("accepted");
-        const projectGrants = await grants(f.owner, { kind: "project", projectId: f.projectId });
-        const inherited = projectGrants.find(
-          (g) => g.principalId === target.principal.id && g.permission === "thread.view",
-        );
-        if (!inherited) throw Error("Missing inherited stream access");
-        expect(
-          (
-            await f.owner.request({
-              method: "access.grant",
-              commandId: commandId(),
-              payload: {
-                principalId: target.principal.id,
-                target: { kind: "thread", threadId: executorThread },
-                permission: "thread.view",
-                modeCeiling: "ask",
-                inheritance: "targetOnly",
-              },
-            })
-          ).kind,
-        ).toBe("accepted");
-        expect(
-          (
-            await f.owner.request({
-              method: "access.revoke",
-              commandId: commandId(),
-              payload: { grantId: inherited.id },
-            })
-          ).kind,
-        ).toBe("accepted");
-        await target.events.until(
-          (e) =>
-            e.kind === "control" &&
-            e.frame.kind === "subscription.ended" &&
-            e.frame.subscriptionId === alternateOpen.payload.subscriptionId &&
-            e.frame.reason === "authorizationRevoked",
-        );
-        const since = target.events.items.length;
-        await f.host.control("publish", open.payload);
-        await target.events.until(
-          (e) =>
-            e.kind === "control" &&
-            e.frame.kind === "subscription.reset" &&
-            e.frame.subscriptionId === open.payload.subscriptionId,
-          since,
-        );
-        const command = {
-          method: "device.revoke" as const,
-          commandId: commandId(),
-          payload: { deviceId: target.device.deviceId, deviceKeyId: target.device.keyId },
-        };
-        const start = performance.now();
-        const receipt = await f.owner.request(command);
-        expect(receipt.kind).toBe("accepted");
-        await f.host.events.until(
-          (e) => e.kind === "revoked" && e.deviceId === target.device.deviceId,
-        );
-        await target.traffic.until((e) => e.kind === "closed" && e.code === 4001);
-        expect(performance.now() - start).toBeLessThan(1000);
-        const ws = await pairingConnection(f.host.origin, f.identity);
-        try {
-          const { protocolVersion, features, connectionId, challengeId, challenge, clientNonce } =
-            ws.hello;
-          const fields = {
-            kind: "client.authenticate",
-            method: "session.authenticate",
-            environmentId: f.identity.id,
-            protocolVersion,
-            features,
-            connectionId,
-            challengeId,
-            challenge,
-            clientNonce,
-            sequence: 1,
-            signer: {
-              kind: "device",
-              keyId: target.device.keyId,
-              deviceId: target.device.deviceId,
-            },
-          };
-          ws.send({ ...fields, signature: await target.device.sign(canonicalJson(fields)) });
-          expect(await ws.next(SessionRejectedSchema)).toEqual({
-            kind: "session.rejected",
-            reason: "revokedKey",
-          });
-        } finally {
-          ws.close();
-        }
-        expect(await f.owner.request(command)).toEqual(receipt);
-        const r = await f.owner.request({
-          method: "access.listSessions",
-          commandId: commandId(),
-          payload: {},
-        });
-        expect(r).toMatchObject({
-          kind: "accepted",
-          result: { kind: "sessionsListed", sessions: [{ principal: f.owner.principal }] },
-        });
-        const boundary = f.host.events.items.findIndex((e) => e.kind === "revoked");
-        expect(
-          f.host.events.items
-            .slice(boundary + 1)
-            .filter((e) => e.kind === "accepted" && e.deviceId === target.device.deviceId),
-        ).toHaveLength(0);
-        await f.host.control("finish");
-        expect(
-          f.host.events.items.some(
-            (e) =>
-              e.event === "executorUpdate" &&
-              JSON.stringify(e.message).includes('"kind":"round.ended"'),
-          ),
-        ).toBe(true);
-        completed.add("revoke");
-      } finally {
-        await f.close();
-      }
-    }),
-  20000,
-);
-test(
-  "First-owner upgrade needs a separate local decision and returns one durable grant",
-  () =>
-    withState(async (stateDir) => {
-      const f = await testProject(stateDir, [[...DEFAULT_DEVICE_PERMISSIONS]]);
-      try {
-        const target = { kind: "environment" as const, environmentId: f.identity.id },
-          d = f.owner.device;
-        expect((await grants(f.owner, target)).map((g) => g.permission)).toEqual([
-          ...DEFAULT_DEVICE_PERMISSIONS,
-        ]);
-        const input = { deviceId: d.deviceId, keyId: d.keyId, commandId: commandId() };
-        await f.host.control("presence", { allowed: false });
-        expect(await f.host.control("upgrade", input)).toBeNull();
-        expect(
-          (await grants(f.owner, target)).some((g) => g.permission === "environment.upgrade"),
-        ).toBe(false);
-        await f.host.control("presence", { allowed: true });
-        const id = await f.host.control("upgrade", input);
-        expect(typeof id).toBe("string");
-        expect(await f.host.control("upgrade", input)).toBe(id);
-        expect(
-          (await grants(f.owner, target)).filter((g) => g.permission === "environment.upgrade"),
-        ).toMatchObject([
-          {
-            id,
+            principalId: target.principal.id,
+            target: { kind: "thread", threadId: executorThread },
+            permission: "thread.view",
+            modeCeiling: "ask",
             inheritance: "targetOnly",
-            grantedBy: { principalId: f.owner.principal.id },
-            target,
           },
-        ]);
-        expect(
-          (await changes(f.owner, target)).filter((c) => c.commandId === input.commandId),
-        ).toHaveLength(1);
-        const paired = f.clients[0];
-        if (!paired) throw Error("Missing paired device");
-        expect(
-          (await grants(paired, { kind: "project", projectId: f.projectId })).map(
-            (g) => g.permission,
-          ),
-        ).toEqual([...DEFAULT_DEVICE_PERMISSIONS]);
-        expect(
-          await paired.request({
-            method: "access.listGrants",
-            commandId: commandId(),
-            payload: { target, after: null },
-          }),
-        ).toMatchObject({ kind: "rejected", failure: { kind: "missingPermission" } });
-        const child = Bun.spawn(
-          [
-            process.execPath,
-            "packages/daemon/src/index.ts",
-            "access",
-            "grant-owner-upgrade",
-            "--state-dir",
-            join(f.stateDir, "host"),
-            "--device",
-            d.deviceId,
-            "--key",
-            d.keyId,
-            "--command-id",
-            commandId(),
-          ],
-          { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-        );
-        expect(await child.exited).toBe(1);
-        expect(await new Response(child.stderr).text()).toContain("Owner upgrade grant denied");
-        expect(
-          f.host.events.items.filter(
-            (e) =>
-              e.event === "presence" && JSON.stringify(e.detail).includes("environment.upgrade"),
-          ),
-        ).toHaveLength(3);
-        completed.add("upgrade");
-      } finally {
-        await f.close();
-      }
-    }),
-  20000,
+        })
+      ).kind,
+    ).toBe("accepted");
+    expect(
+      (
+        await f.owner.request({
+          method: "access.revoke",
+          commandId: commandId(),
+          payload: { grantId: inherited.id },
+        })
+      ).kind,
+    ).toBe("accepted");
+    stage("end of revoked thread subscription");
+    await target.events.until(
+      (e) =>
+        e.kind === "control" &&
+        e.frame.kind === "subscription.ended" &&
+        e.frame.subscriptionId === alternateOpen.payload.subscriptionId &&
+        e.frame.reason === "authorizationRevoked",
+    );
+    const since = target.events.items.length;
+    await f.host.control("publish", open.payload);
+    await target.events.until(
+      (e) =>
+        e.kind === "control" &&
+        e.frame.kind === "subscription.reset" &&
+        e.frame.subscriptionId === open.payload.subscriptionId,
+      since,
+    );
+    const command = {
+      method: "device.revoke" as const,
+      commandId: commandId(),
+      payload: { deviceId: target.device.deviceId, deviceKeyId: target.device.keyId },
+    };
+    const start = performance.now();
+    const receipt = await f.owner.request(command);
+    expect(receipt.kind).toBe("accepted");
+    stage("device revocation published");
+    await f.host.events.until((e) => e.kind === "revoked" && e.deviceId === target.device.deviceId);
+    stage("revoked device socket close 4001");
+    await target.traffic.until((e) => e.kind === "closed" && e.code === 4001);
+    expect(performance.now() - start).toBeLessThan(1000);
+    stage("new socket for revoked identity");
+    const ws = await pairingConnection(f.host.origin, f.identity);
+    try {
+      const { protocolVersion, features, connectionId, challengeId, challenge, clientNonce } =
+        ws.hello;
+      const fields = {
+        kind: "client.authenticate",
+        method: "session.authenticate",
+        environmentId: f.identity.id,
+        protocolVersion,
+        features,
+        connectionId,
+        challengeId,
+        challenge,
+        clientNonce,
+        sequence: 1,
+        signer: {
+          kind: "device",
+          keyId: target.device.keyId,
+          deviceId: target.device.deviceId,
+        },
+      };
+      ws.send({ ...fields, signature: await target.device.sign(canonicalJson(fields)) });
+      stage("rejection of revoked identity");
+      expect(await ws.next(SessionRejectedSchema)).toEqual({
+        kind: "session.rejected",
+        reason: "revokedKey",
+      });
+    } finally {
+      ws.close();
+    }
+    expect(await f.owner.request(command)).toEqual(receipt);
+    const r = await f.owner.request({
+      method: "access.listSessions",
+      commandId: commandId(),
+      payload: {},
+    });
+    expect(r).toMatchObject({
+      kind: "accepted",
+      result: { kind: "sessionsListed", sessions: [{ principal: f.owner.principal }] },
+    });
+    const boundary = f.host.events.items.findIndex((e) => e.kind === "revoked");
+    expect(
+      f.host.events.items
+        .slice(boundary + 1)
+        .filter((e) => e.kind === "accepted" && e.deviceId === target.device.deviceId),
+    ).toHaveLength(0);
+    await f.host.control("finish");
+    expect(
+      f.host.events.items.some(
+        (e) =>
+          e.event === "executorUpdate" &&
+          JSON.stringify(e.message).includes('"kind":"round.ended"'),
+      ),
+    ).toBe(true);
+    completed.add("revoke");
+  },
+);
+pairedDeviceCase(
+  "First-owner upgrade needs a separate local decision and returns one durable grant",
+  [...DEFAULT_DEVICE_PERMISSIONS],
+  async (f, stage) => {
+    const target = { kind: "environment" as const, environmentId: f.identity.id },
+      d = f.owner.device;
+    expect((await grants(f.owner, target)).map((g) => g.permission)).toEqual([
+      ...DEFAULT_DEVICE_PERMISSIONS,
+    ]);
+    const input = { deviceId: d.deviceId, keyId: d.keyId, commandId: commandId() };
+    await f.host.control("presence", { allowed: false });
+    expect(await f.host.control("upgrade", input)).toBeNull();
+    expect(
+      (await grants(f.owner, target)).some((g) => g.permission === "environment.upgrade"),
+    ).toBe(false);
+    await f.host.control("presence", { allowed: true });
+    const id = await f.host.control("upgrade", input);
+    expect(typeof id).toBe("string");
+    expect(await f.host.control("upgrade", input)).toBe(id);
+    expect(
+      (await grants(f.owner, target)).filter((g) => g.permission === "environment.upgrade"),
+    ).toMatchObject([
+      {
+        id,
+        inheritance: "targetOnly",
+        grantedBy: { principalId: f.owner.principal.id },
+        target,
+      },
+    ]);
+    expect(
+      (await changes(f.owner, target)).filter((c) => c.commandId === input.commandId),
+    ).toHaveLength(1);
+    const paired = f.clients[0];
+    if (!paired) throw Error("Missing paired device");
+    expect(
+      (await grants(paired, { kind: "project", projectId: f.projectId })).map((g) => g.permission),
+    ).toEqual([...DEFAULT_DEVICE_PERMISSIONS]);
+    expect(
+      await paired.request({
+        method: "access.listGrants",
+        commandId: commandId(),
+        payload: { target, after: null },
+      }),
+    ).toMatchObject({ kind: "rejected", failure: { kind: "missingPermission" } });
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "packages/daemon/src/index.ts",
+        "access",
+        "grant-owner-upgrade",
+        "--state-dir",
+        join(f.stateDir, "host"),
+        "--device",
+        d.deviceId,
+        "--key",
+        d.keyId,
+        "--command-id",
+        commandId(),
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    stage("noninteractive upgrade CLI exit and stderr EOF");
+    const [code, error] = await Promise.all([
+      child.exited,
+      new Response(child.stderr).text(),
+      new Response(child.stdout).text(),
+    ]);
+    expect(code).toBe(1);
+    expect(error).toContain("Owner upgrade grant denied");
+    expect(
+      f.host.events.items.filter(
+        (e) => e.event === "presence" && JSON.stringify(e.detail).includes("environment.upgrade"),
+      ),
+    ).toHaveLength(3);
+    completed.add("upgrade");
+  },
 );

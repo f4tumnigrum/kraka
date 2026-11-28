@@ -63,6 +63,7 @@ export type ReplayWriter<H extends object> = {
 export type WriterLifecycle = {
   quota?: QuotaOptions;
   usageCommitted?: (thread: ThreadId, round: RoundId) => void;
+  loginClock?: import("./instance-login").LoginClock;
   accessHost?: Awaited<ReturnType<typeof openAccessHost>>;
   queueChanged?: (threadId: ThreadId) => void;
   preparation?: PreparationHook;
@@ -419,6 +420,22 @@ export function threadWork<H extends object>(
       },
     );
   }
+  async function startAndSchedule(
+    principal: LocalActor,
+    req: Extract<SignedRequest, { method: "thread.start" }>,
+  ) {
+    const receipt = await startThread(principal, req);
+    if (receipt.kind === "accepted" && receipt.result.kind === "threadStarted") {
+      const claim = req.payload.worktreeId && readManaged(transaction.db, req.payload.worktreeId);
+      if (
+        claim &&
+        (claim.claim.phase.kind === "building" || claim.claim.phase.kind === "preparing")
+      )
+        void resume(claim);
+      else schedule(receipt.result.threadId, req.commandId);
+    }
+    return receipt;
+  }
   const openThread = (nonce: string, reportPermissions = false) =>
     threadConnection(
       transaction,
@@ -427,6 +444,8 @@ export function threadWork<H extends object>(
       schedule,
       sendInput,
       gitStatusCache,
+      executors,
+      startAndSchedule,
       lifecycle?.threadCommand,
       lifecycle?.inspectPage,
       lifecycle?.beforeTodo,
@@ -511,6 +530,7 @@ export function threadWork<H extends object>(
   return {
     openThread,
     accountQuota,
+    startAndSchedule,
     startThread,
     schedule,
     resume,

@@ -64,6 +64,8 @@ export async function threadConnection(
     command: Extract<SignedRequest, { method: "input.send" }>,
   ) => Promise<CommandReceipt>,
   gitStatusCache: GitStatusCache,
+  executors: import("./executor-instances").ExecutorInstances,
+  startThread: import("./signed-requests/context").RequestContext["startThread"],
   fixtureCommand?: FixtureThreadCommand,
   inspectPage?: (page: SubscriptionPage) => SubscriptionPage,
   beforeTodo?: (id: CommandId, proceed: () => void) => void,
@@ -119,6 +121,7 @@ export async function threadConnection(
     epoch,
     beforeSend: () => check(),
     attach(peer, wake) {
+      let quotaSession: AbortController | undefined;
       const quotaViews = new Map<string, () => void>();
       const allowsEnvironmentView = () =>
         !!session &&
@@ -129,6 +132,7 @@ export async function threadConnection(
           "thread.view",
         );
       const watch = watchSettings(store);
+      const sessionLifetime = new AbortController();
       let seq = 0,
         session: SessionAuthorized | null = null,
         subs: ThreadSubscriptions | null = null,
@@ -136,7 +140,7 @@ export async function threadConnection(
       const uploads = new RequestUploads(peer);
       const disclosures = new Map<
         CommandId,
-        { stream: number | undefined; allowed: () => boolean }
+        { stream: number | undefined; allowed: () => boolean; sensitive?: boolean }
       >();
       let boundKey: ReturnType<typeof createPublicKey> | null = null;
       function usable(signer: ClientAuthentication["signer"]) {
@@ -319,14 +323,32 @@ export async function threadConnection(
           };
           const disclose = (receipt: CommandReceipt, allowed: () => boolean) => {
             const stream = sendLogicalRequest(peer, receipt);
-            disclosures.set(m.commandId, { stream, allowed });
+            disclosures.set(m.commandId, {
+              stream,
+              allowed,
+              sensitive:
+                receipt.kind === "accepted" &&
+                (receipt.result.kind === "instanceLogin" || receipt.result.kind === "accountQuota"),
+            });
           };
           const result = dispatch(m, {
             store,
             host,
+            executors,
+            startThread,
+            loginSession: {
+              id: session.environmentSessionId,
+              owner: actor.principal.ownerId,
+              signal: sessionLifetime.signal,
+              active: () => session !== null && !!usable(m.signer),
+            },
             principal,
             accountQuota,
             quotaViews,
+            quotaSignal() {
+              quotaSession ??= new AbortController();
+              return quotaSession.signal;
+            },
             allowsEnvironmentView,
             deviceId: actor.deviceId,
             session,
@@ -392,7 +414,8 @@ export async function threadConnection(
             d.stream === undefined ? peer.send.pending.control === 0 : !peer.send.snapshot(d.stream)
           )
             disclosures.delete(id);
-          else if (!d.allowed()) throw Error("Read authority expired");
+          else if ((d.sensitive || next !== last) && !d.allowed())
+            throw Error("Read authority expired");
         }
         if (next === last && Date.now() < expires && expires !== Infinity) return;
         const device = usable(session.signer);
@@ -400,7 +423,9 @@ export async function threadConnection(
           throw Error("Device registration ended");
         expires = device.deviceKey.state.expiresAt;
         if (next !== last) {
-          if (!allowsEnvironmentView()) {
+          if ((quotaSession || quotaViews.size) && !allowsEnvironmentView()) {
+            quotaSession?.abort();
+            quotaSession = undefined;
             for (const detach of quotaViews.values()) detach();
             quotaViews.clear();
           }
@@ -429,10 +454,12 @@ export async function threadConnection(
           uploads.drop(id);
         },
         close() {
+          quotaSession?.abort();
           for (const detach of quotaViews.values()) detach();
           quotaViews.clear();
           watch.close();
           session = null;
+          sessionLifetime.abort();
           clearInterval(timer);
           diffService.close();
           subs?.close();

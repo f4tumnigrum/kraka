@@ -27,13 +27,13 @@ export class Journal<T> {
     return this.until(predicate, since, dispatchObservationMs);
   }
   async until(predicate: (item: T) => boolean, since = 0, budgetMs?: number) {
-    const deadline = budgetMs === undefined ? null : performance.now() + budgetMs;
+    const deadline = performance.now() + (budgetMs ?? observationMs);
     for (;;) {
       const match = this.items.slice(since).find(predicate);
       if (match !== undefined) return match;
       await within(
         this.changed.promise,
-        deadline === null ? observationMs : Math.max(0, deadline - performance.now()),
+        Math.max(0, deadline - performance.now()),
         "Route observation",
       );
     }

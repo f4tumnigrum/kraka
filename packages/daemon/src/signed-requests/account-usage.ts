@@ -25,18 +25,19 @@ export const accountQuota: Handler<"executor.readQuota" | "executor.refreshQuota
   if (!service)
     return { kind: "rejected", commandId: m.commandId, failure: { kind: "unsupported" } };
   const resolve = () => (allowed() ? service.target(id) : null);
+  const signal = c.quotaSignal();
   const execute = async () => {
     const subscribe = m.method === "executor.readQuota" ? m.payload.subscribe : undefined;
     if (m.method === "executor.refreshQuota" || subscribe === true)
       await service.prepare(id, c.principal.id);
-    if (!c.active()) return;
+    if (!c.active() || signal.aborted) return;
     if (subscribe !== undefined) {
       c.quotaViews.get(id)?.();
       c.quotaViews.delete(id);
     }
     const snapshot =
       m.method === "executor.refreshQuota" && allowed()
-        ? await service.refreshes.refresh(() => service.target(id))
+        ? await service.refreshes.refresh(() => service.target(id), true, signal)
         : service.refreshes.read(resolve);
     if (!c.active()) return;
     const matches = () =>

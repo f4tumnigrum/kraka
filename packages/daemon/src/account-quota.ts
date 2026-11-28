@@ -48,7 +48,7 @@ export class AccountQuota {
         const support = entry?.snapshot.matrix.reportQuota;
         if (!reg.enabled || support?.kind === "unsupported") return { outcome: "unsupported" };
         if (!entry || !support) return { outcome: "probeFailed" };
-        const result = await entry.probe.driver(0).invokeInstance(
+        const work = entry.probe.driver(0).invokeInstance(
           { capabilityVersion: entry.snapshot.version, support },
           {
             kind: "service",
@@ -57,6 +57,8 @@ export class AccountQuota {
             deliveryId: v.parse(DeliveryIdSchema, crypto.randomUUID()),
           },
         );
+        this.store.services.quotaReads.add(work);
+        const result = await work.finally(() => this.store.services.quotaReads.delete(work));
         if (result.kind === "rejected")
           return {
             outcome:
@@ -85,12 +87,12 @@ export class AccountQuota {
       this.executors.probe(reg, () => cwd, cwd, reg.credential?.ownerId ?? actor),
     );
     this.preparing.set(key, work);
-    this.executors.active.add(work);
+    this.store.services.quotaReads.add(work);
     try {
       await work;
     } finally {
       this.preparing.delete(key);
-      this.executors.active.delete(work);
+      this.store.services.quotaReads.delete(work);
     }
   }
 }

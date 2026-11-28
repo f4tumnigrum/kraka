@@ -4,6 +4,7 @@ import { editQueue, input } from "./inputs";
 import { lifecycle, rename, roundControl } from "./threads";
 import { git, subscription } from "./subscriptions";
 import { todo } from "./todos";
+import { executor } from "./executor";
 import { settings } from "./settings";
 import type { Request, RequestContext } from "./context";
 import type { CommandReceipt } from "@kraka/protocol";
@@ -34,8 +35,13 @@ const routes = new Map<
   (req: Request, c: RequestContext) => CommandReceipt | null | void
 >([
   route("checkpoint.diff", checkpoint),
+  route("executor.cancelLogin", executor),
+  route("executor.configure", executor),
+  route("executor.readLogin", executor),
   route("executor.readQuota", accountQuota),
+  route("executor.refresh", executor),
   route("executor.refreshQuota", accountQuota),
+  route("executor.startLogin", executor),
   route("git.readStatus", git),
   route("git.subscribeStatus", git),
   route("history.pageSaved", subscription),
@@ -60,6 +66,7 @@ const routes = new Map<
   route("thread.readHistory", subscription),
   route("thread.readUsage", threadUsage),
   route("thread.rename", rename),
+  route("thread.start", executor),
   route("todo.answer", todo),
   route("todo.decide", todo),
   route("todo.readAnswer", todo),

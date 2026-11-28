@@ -10,5 +10,5 @@ export interface RecoveryContext {
 export interface WriterFeature {
   open?(store: FirstSendStore): { services: object; close?: () => Promise<void> };
   register?(context: RecoveryContext): void | (() => void);
-  draining?(store: FirstSendStore): Iterable<Promise<void>>;
+  draining?(store: FirstSendStore): Iterable<Promise<unknown>>;
 }

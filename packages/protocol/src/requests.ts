@@ -86,6 +86,7 @@ import {
   WorktreeRetainedSchema,
 } from "./worktrees";
 import * as v from "valibot";
+import { StartLoginSchema, LoginTargetSchema, InstanceLoginResultSchema } from "./instance-login";
 import {
   RemoteSettingTargetSchema,
   SettingCheckoutSchema,
@@ -768,6 +769,24 @@ export const REQUEST_METHODS = {
     "thread",
     v.strictObject({ threadId: ThreadIdSchema }),
   ),
+  startLogin: defineRequestMethod(
+    "executor.startLogin",
+    "settings.change",
+    "environment",
+    StartLoginSchema,
+  ),
+  readLogin: defineRequestMethod(
+    "executor.readLogin",
+    "settings.change",
+    "environment",
+    LoginTargetSchema,
+  ),
+  cancelLogin: defineRequestMethod(
+    "executor.cancelLogin",
+    "settings.change",
+    "environment",
+    LoginTargetSchema,
+  ),
   configureExecutor: defineRequestMethod(
     "executor.configure",
     "settings.change",
@@ -781,7 +800,11 @@ export const REQUEST_METHODS = {
     "executor.refresh",
     "thread.view",
     "project",
-    v.strictObject({ projectId: ProjectIdSchema, instanceId: ExecutorInstanceIdSchema }),
+    v.strictObject({
+      projectId: ProjectIdSchema,
+      instanceId: ExecutorInstanceIdSchema,
+      force: v.optional(v.boolean()),
+    }),
   ),
   registerProject: defineRequestMethod(
     "project.register",
@@ -1151,6 +1174,7 @@ export const RequestResultSchema = v.variant("kind", [
   StopResultSchema,
   ToolActivityReadResultSchema,
   ExecutorRefreshedSchema,
+  InstanceLoginResultSchema,
   v.strictObject({
     kind: v.literal("executorConfigured"),
     instanceId: ExecutorInstanceIdSchema,

@@ -35,17 +35,15 @@ export type QuotaSignal =
   | { kind: "detached"; counts: QuotaCounts };
 type Resolve = () => QuotaTarget | null;
 type View = { resolve: Resolve; publish: (s: AccountQuotaSnapshot) => void };
+type Flight = {
+  id: number;
+  done: Promise<AccountQuotaSnapshot | null>;
+  abort: AbortController;
+  readers: Set<symbol>;
+};
 export class QuotaRefresh {
   private readonly views = new Set<View>();
-  private readonly active = new Map<
-    string,
-    {
-      id: number;
-      done: Promise<AccountQuotaSnapshot | null>;
-      abort: AbortController;
-      manual: boolean;
-    }
-  >();
+  private readonly active = new Map<string, Flight>();
   private cancelAutomatic: (() => void) | null = null;
   private closed = false;
   constructor(
@@ -77,7 +75,7 @@ export class QuotaRefresh {
       if (!this.views.size) {
         this.cancelAutomatic?.();
         this.cancelAutomatic = null;
-        const automatic = [...this.active.values()].filter((query) => !query.manual);
+        const automatic = [...this.active.values()].filter((query) => !query.readers.size);
         for (const query of automatic) query.abort.abort();
         const detached = () => {
           if (!this.views.size) this.signal({ kind: "detached", counts: this.counts() });
@@ -129,28 +127,34 @@ export class QuotaRefresh {
     )
       this.publish(canonicalJson(binding), this.store.read(binding, now));
   }
-  refresh(resolve: Resolve, manual = true): Promise<AccountQuotaSnapshot | null> {
+  refresh(
+    resolve: Resolve,
+    manual = true,
+    signal?: AbortSignal,
+  ): Promise<AccountQuotaSnapshot | null> {
     const target = resolve();
-    if (!target || this.closed) return Promise.resolve(null);
+    if (!target || this.closed || signal?.aborted) return Promise.resolve(null);
     const binding = target.binding,
       key = canonicalJson(binding),
       account = binding.source.account;
     const flight = this.active.get(key);
-    if (flight) {
-      flight.manual ||= manual;
+    if (flight && !flight.abort.signal.aborted) {
       this.signal({ kind: "refreshJoined", account, refresh: flight.id });
-      return flight.done;
+      return this.wait(flight, key, manual, signal);
     }
     this.store.bind(binding);
     const attemptedAt = this.clock.now(),
       ticket = this.store.begin(binding, attemptedAt);
     const abort = new AbortController(),
       timeout = Promise.withResolvers<QuotaReply>();
-    const onAbort = () => timeout.resolve({ outcome: "probeFailed" });
+    const onAbort = () =>
+      timeout.resolve({
+        outcome: abort.signal.reason === "deadline" ? "probeFailed" : "discarded",
+      });
     abort.signal.addEventListener("abort", onAbort, { once: true });
     const cancel = this.clock.schedule(attemptedAt + 10000, async () => {
-      abort.abort();
-      await this.active.get(key)?.done;
+      abort.abort("deadline");
+      await done;
     });
     const done = Promise.resolve()
       .then(async () => {
@@ -173,7 +177,10 @@ export class QuotaRefresh {
             mode: reply.outcome === "success" ? reply.mode : "full",
             windows: reply.outcome === "success" ? reply.windows : [],
           });
-        const snapshot = this.read(resolve);
+        const snapshot =
+          this.closed || (abort.signal.aborted && abort.signal.reason !== "deadline")
+            ? null
+            : this.read(resolve);
         this.signal({
           kind: "refreshFinished",
           account,
@@ -186,10 +193,34 @@ export class QuotaRefresh {
       .finally(() => {
         cancel();
         abort.signal.removeEventListener("abort", onAbort);
-        this.active.delete(key);
+        if (this.active.get(key)?.id === ticket.refreshId) this.active.delete(key);
       });
-    this.active.set(key, { id: ticket.refreshId, done, abort, manual });
-    return done;
+    const started: Flight = { id: ticket.refreshId, done, abort, readers: new Set() };
+    this.active.set(key, started);
+    return this.wait(started, key, manual, signal);
+  }
+  private wait(flight: Flight, key: string, manual: boolean, signal?: AbortSignal) {
+    if (!manual) return flight.done;
+    const reader = Symbol();
+    flight.readers.add(reader);
+    if (!signal) return flight.done;
+    const detached = Promise.withResolvers<null>();
+    const detach = () => {
+      flight.readers.delete(reader);
+      detached.resolve(null);
+      if (flight.readers.size) return;
+      for (const view of this.views) {
+        const target = view.resolve();
+        if (target && canonicalJson(target.binding) === key) return;
+      }
+      flight.abort.abort();
+    };
+    signal.addEventListener("abort", detach, { once: true });
+    if (signal.aborted) detach();
+    return Promise.race([flight.done, detached.promise]).finally(() => {
+      flight.readers.delete(reader);
+      signal.removeEventListener("abort", detach);
+    });
   }
   async close() {
     this.closed = true;
