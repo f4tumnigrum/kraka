@@ -13,6 +13,7 @@ import {
 import * as v from "valibot";
 import { type LocalActor, recordCommand } from "./command-receipts";
 import { type FirstSendStore, readMessage, readRound, readThread } from "./first-send-store";
+import { reservedForkRound } from "./session-fork";
 import { fileInputRound, advanceQueue, loadQueue, nextVersion, persistQueue } from "./input-store";
 import {
   firstPending,
@@ -96,6 +97,14 @@ export function applyInputCommand({
         return change.receipt;
       }
       if (command.method === "input.send" || command.method === "input.steer") {
+        if (
+          transaction.db
+            .query(
+              "SELECT 1 FROM session_switches WHERE thread=? AND busy=1 UNION ALL SELECT 1 FROM session_clear WHERE thread=? AND json_extract(data,'$.state.kind') IN ('accepted','unknown')",
+            )
+            .get(threadId, threadId)
+        )
+          return refuse("invalidState");
         if (!transaction.directory(thread)) return refuse("invalidState");
         const { content } = command.payload;
         if (content.references.length || content.attachments.length) return refuse("unsupported");
@@ -110,7 +119,11 @@ export function applyInputCommand({
           active = command.payload.mode === "insertCurrent";
           if (active && !supportsSteer?.(head.attempt.attemptId)) return refuse("unsupported");
         }
-        const roundId = active && head ? head.id : v.parse(RoundIdSchema, crypto.randomUUID());
+        const roundId =
+          active && head
+            ? head.id
+            : (!queue.rows.length && reservedForkRound(transaction, threadId)) ||
+              v.parse(RoundIdSchema, crypto.randomUUID());
         const message = v.parse(MessageSchema, {
           id: crypto.randomUUID(),
           threadId,

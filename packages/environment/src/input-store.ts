@@ -19,6 +19,7 @@ import {
   ThreadIdSchema,
 } from "@kraka/protocol";
 import * as v from "valibot";
+import { consumeFreshContext } from "./session-clear";
 import type { AdapterSessionBinding, DeliveryGuarantee } from "./adapter-contract";
 import type { FrozenDelivery } from "./executor-records";
 import { type FirstSendStore, readRound } from "./first-send-store";
@@ -47,6 +48,7 @@ export function fileInputRound(
       ("gate" in head.attempt.phase && head.attempt.phase.gate === "held"));
   const round = v.parse(RoundSchema, {
     id: roundId,
+    ...(consumeFreshContext(transaction, queue.threadId) ? { freshContext: true } : {}),
     threadId: queue.threadId,
     messageId,
     place: String(

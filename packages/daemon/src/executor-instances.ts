@@ -67,7 +67,7 @@ export class ExecutorInstances {
   forThread(threadId: ThreadId) {
     return this.store.db
       .query<{ instance: string; version: string; model: string }, [string]>(
-        "SELECT instance,version,model FROM round_executors WHERE round=(SELECT id FROM rounds WHERE json_extract(data,'$.threadId')=? ORDER BY rowid LIMIT 1)",
+        "SELECT e.instance,e.version,e.model FROM round_executors e JOIN rounds r ON r.id=e.round WHERE json_extract(r.data,'$.threadId')=? ORDER BY r.rowid DESC LIMIT 1",
       )
       .get(threadId);
   }

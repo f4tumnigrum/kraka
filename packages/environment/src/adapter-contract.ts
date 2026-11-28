@@ -199,7 +199,13 @@ type ServiceCommand =
   | Service<"reportQuota", { kind: "quota" }>
   | Service<"reportCost", { kind: "cost"; scope: "round" | "session" }>
   | Service<"compactContext", { kind: "compact"; instructions: string | null }>
-  | Service<"startSession", { kind: "handoff" } & HandoffContext>
+  | Service<
+      "startSession",
+      {
+        kind: "handoff";
+        entries?: readonly import("@kraka/protocol").HandoffEntry[];
+      } & HandoffContext
+    >
   | Service<
       "provideTools",
       { kind: "provideTools"; tools: readonly { name: string; configuration: AdapterJsonValue }[] }

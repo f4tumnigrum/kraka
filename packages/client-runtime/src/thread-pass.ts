@@ -229,6 +229,7 @@ export interface ThreadCache {
   scopes: Record<string, Membership>;
   history: Record<string, SavedPage>;
   accepted: Record<string, AcceptedInput>;
+  contextOperations?: Record<string, import("@kraka/protocol").ContextOperation>;
   returns: Record<string, TextReturnedEvent>;
   summaries: Record<string, Extract<ObjectChange, { kind: "thread.summary" }>["summary"]>;
 }
@@ -373,6 +374,26 @@ export async function installThreadPass(
           case "executor.observation":
             saveRow(cache, { objectType: "timelineItem", value: change.observation });
             break;
+          case "context.operation": {
+            const operation = change.operation;
+            if (
+              begin.through.scope.kind !== "thread" ||
+              operation.threadId !== begin.through.scope.threadId
+            )
+              throw Error("Context operation outside thread");
+            const old = cache.contextOperations?.[operation.deliveryId];
+            if (!old || comparePositions(operation.version, old.version) > 0)
+              cache.contextOperations = {
+                ...cache.contextOperations,
+                [operation.deliveryId]: operation,
+              };
+            else if (
+              old.version === operation.version &&
+              canonicalJson(old) !== canonicalJson(operation)
+            )
+              throw Error("Conflicting context operation version");
+            break;
+          }
           case "handoff.textReturned": {
             if (
               change.result.target.environmentId !== begin.through.environmentId ||

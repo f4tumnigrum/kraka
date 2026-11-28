@@ -5,5 +5,6 @@ export { logins } from "./logins";
 export { queues } from "./queues";
 export { sessions } from "./sessions";
 export { settings } from "./settings";
+export { transitions } from "./transitions";
 export { todos } from "./todos";
 export { worktrees } from "./worktrees";

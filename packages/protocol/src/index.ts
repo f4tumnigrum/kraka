@@ -36,6 +36,7 @@ export * from "./requests";
 export * from "./route-diagnostics";
 export * from "./routes";
 export { protocolSchemas } from "./schemas";
+export * from "./session-transitions";
 export * from "./settings";
 export * from "./stream-codec";
 export * from "./stream-flow";

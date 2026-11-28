@@ -1,3 +1,5 @@
+import { session } from "./session";
+import { fork, relationships } from "./session-fork";
 import { checkpoint } from "./checkpoint";
 import { editQueue, input } from "./inputs";
 import { lifecycle, rename, roundControl } from "./threads";
@@ -58,6 +60,12 @@ const routes = new Map<
   route("subscription.openThread", subscription),
   route("subscription.pageSaved", subscription),
   route("thread.changeLifecycle", lifecycle),
+  route("thread.clear", session),
+  route("thread.fork", fork),
+  route("thread.previewSession", session),
+  route("thread.readSessionTransition", session),
+  route("thread.switchSession", session),
+  route("thread.readRelationships", relationships),
   route("thread.markRead", subscription),
   route("thread.readEarlierSettled", subscription),
   route("thread.readHistory", subscription),

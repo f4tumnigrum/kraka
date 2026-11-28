@@ -137,6 +137,7 @@ export type FrozenDelivery = {
   parts: readonly DeliveredPart[];
   appNotes?: AppNoteRead;
   handoff?: HandoffContext;
+  handoffEntries?: readonly import("@kraka/protocol").HandoffEntry[];
 };
 export interface DeliveryStore {
   read(deliveryId: DeliveryId): Promise<FrozenDelivery | null>;
