@@ -150,7 +150,7 @@ export function localGitHubTools(gh: readonly string[], signal: AbortSignal): Gi
 
 /** Reads a remote URL as host, owner and name. The port and any embedded login are dropped. */
 export function parseForgeRemote(remote: DetectedRemote): ForgeRemote | null {
-  if (/[\\\x00-\x1f?#]/.test(remote.url) || /(?:^|\/)(?:\.{1,2}|%2e)(?:\/|$)/i.test(remote.url))
+  if (/[^!-~]|[\\?#]/.test(remote.url) || /(?:^|\/)(?:(?:\.|%2e){1,2})(?:\/|$)/i.test(remote.url))
     return null;
   const identity = remoteIdentity(remote.url);
   if (!identity || !v.is(ForgeRepositorySchema.entries.host, identity.host)) return null;
