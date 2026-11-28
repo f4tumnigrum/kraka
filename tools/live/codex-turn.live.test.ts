@@ -6,7 +6,7 @@ import { openReceiptReader, readRound } from "@kraka/environment";
 import { finishedCapture } from "../fixtures/first-send-client";
 import { accepted } from "../fixtures/first-send";
 import { codexFixture, buildPeer, peerSignals, type Profile } from "../fixtures/codex-turn";
-import { fixture, terminate, withState } from "../fixtures/replay-process";
+import { fixture, within, withState } from "../fixtures/replay-process";
 import { productRoot } from "../fixtures/first-send";
 export async function startCodexPeer({
   recording,
@@ -32,14 +32,22 @@ export async function startCodexPeer({
     stdout: "pipe",
     stderr: "ignore",
   });
+  const output = new Response(child.stdout).text();
   return {
     child,
     wait: signals.wait,
     async close() {
       try {
-        await terminate(child);
+        await child.stdin.end();
+        await within(child.exited, 10000, "Direct Codex peer exit");
       } finally {
-        await signals.close();
+        try {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+          await child.exited;
+          await output;
+        } finally {
+          await signals.close();
+        }
       }
     },
   };
