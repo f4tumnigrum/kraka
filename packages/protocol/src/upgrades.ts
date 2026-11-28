@@ -48,3 +48,10 @@ export const UpgradeViewSchema = v.variant("phase", [
   }),
 ]);
 export type UpgradeView = v.InferOutput<typeof UpgradeViewSchema>;
+
+/** The host publishes this value only after verifying the complete release directory. */
+export const ActiveReleasePointerSchema = v.strictObject({ version: ReleaseVersionSchema });
+export type ActiveReleasePointer = v.InferOutput<typeof ActiveReleasePointerSchema>;
+export function releaseDirectory(release: ActiveReleasePointer): string {
+  return ["releases", release.version].join("/");
+}

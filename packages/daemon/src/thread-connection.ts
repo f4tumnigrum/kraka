@@ -164,10 +164,8 @@ export async function threadConnection(
         return !!host.store.ceiling(session.principal.id, target, permission);
       };
       function visibility() {
-        const n = host.store.db
-          .query<{ n: string }, []>("SELECT CAST(COALESCE(MAX(rowid),0) AS TEXT) n FROM changes")
-          .get()?.n;
-        return JSON.stringify([session?.principal.id, n]);
+        if (!session) throw Error("Visibility requires an authorized session");
+        return host.store.visibilityGeneration(session.principal.id);
       }
       const allows = (threadId: ThreadId, permission: PermissionItem) =>
         allowsTarget({ kind: "thread", threadId }, permission);

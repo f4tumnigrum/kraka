@@ -17,7 +17,7 @@ import {
 import { ownedDirectory } from "../../packages/cli-client/src/private-directory";
 import * as v from "valibot";
 import { connectFirstSend, fixtureActor, fixtureSigner } from "./first-send-client";
-import { entry, fixture, sampleRequest, terminate, within } from "./replay-process";
+import { captureStderr, entry, fixture, sampleRequest, terminate, within } from "./replay-process";
 
 export const productRoot = resolve(import.meta.dir, "../..");
 export type Fault =
@@ -87,14 +87,7 @@ export function launchWriter(
       ...(ipc && { ipc }),
     },
   );
-  let stderrTail = "";
-  const stderr = (async () => {
-    const decoder = new TextDecoder();
-    for await (const chunk of child.stderr)
-      stderrTail = (stderrTail + decoder.decode(chunk, { stream: true })).slice(-8192);
-    stderrTail = (stderrTail + decoder.decode()).slice(-8192);
-    return stderrTail;
-  })();
+  const { tail: stderrTail, drained: stderr } = captureStderr(child.stderr);
   const line = Promise.withResolvers<string>();
   const drained = (async () => {
     let out = "";
@@ -116,7 +109,7 @@ export function launchWriter(
   const ready = async () => {
     const raw = await within(line.promise, 11000, "Writer publication").catch((error) => {
       console.error(
-        `Writer publication failed (${existingState ? "restart" : "fresh"}), daemon stderr tail:\n${stderrTail || "(empty)"}`,
+        `Writer publication failed (${existingState ? "restart" : "fresh"}), daemon stderr tail:\n${stderrTail() || "(empty)"}`,
       );
       throw error;
     });
@@ -140,7 +133,7 @@ export function launchWriter(
     stderr,
     started,
     ready,
-    stderrTail: () => stderrTail,
+    stderrTail,
     async stop() {
       try {
         if (child.stdin && child.exitCode === null && child.signalCode === null) {

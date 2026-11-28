@@ -1,0 +1,7 @@
+services:
+  desktop:
+    # The non-root Electron renderer creates its own PID and network namespaces.
+    cap_add: [SYS_ADMIN]
+    security_opt: [apparmor:unconfined]
+    environment:
+      KRAKA_TEST_ARCHIVE: /app/.build/release/kraka-0.1.0-linux-x64-glibc.tar.gz

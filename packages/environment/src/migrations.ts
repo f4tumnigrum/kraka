@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import {
   ReleaseVersionSchema,
+  type ActiveReleasePointer,
   type UpgradeView,
   EnvironmentIdSchema,
   HostInstanceIdSchema,
@@ -36,13 +37,11 @@ export const ReleaseSchema = v.strictObject({
   catalog: MigrationCatalogSchema,
 });
 export type Release = v.InferOutput<typeof ReleaseSchema>;
-/** The host publishes this value only after verifying the complete release directory. */
-export const ActiveReleasePointerSchema = v.strictObject({ version: ReleaseVersionSchema });
-export type ActiveReleasePointer = v.InferOutput<typeof ActiveReleasePointerSchema>;
-export function releaseDirectory(release: ActiveReleasePointer): string {
-  return ["releases", release.version].join("/");
-}
-
+export {
+  ActiveReleasePointerSchema,
+  releaseDirectory,
+  type ActiveReleasePointer,
+} from "@kraka/protocol";
 function sameStep(a: Migration, b: Migration) {
   return a.id === b.id && a.from === b.from && a.to === b.to;
 }

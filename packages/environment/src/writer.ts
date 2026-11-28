@@ -78,21 +78,32 @@ async function verifyPublication(stateDirectory: string, deadline: number, idle 
     return null;
   }
 }
-export async function readInstancePublication(stateDir: string) {
+export async function inspectInstancePublication(
+  stateDir: string,
+): Promise<InstancePublication | "stopped" | "unconfirmed"> {
   let db: Database | undefined;
   let directory: string | undefined;
   try {
     directory = realpathSync.native(stateDir);
-    if (!existsSync(join(directory, "instance.json"))) return null;
-    db = new Database(join(directory, "writer.lock.sqlite"), { readonly: true });
+    const lock = join(directory, "writer.lock.sqlite");
+    if (!existsSync(lock)) return "stopped";
+    db = new Database(lock, { readonly: true });
     db.query("SELECT count(*) FROM sqlite_master").get();
-    return null;
+    return "stopped";
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "SQLITE_BUSY")) return null;
-    return directory ? verifyPublication(directory, performance.now() + 10_000) : null;
+    if (error instanceof Error && "code" in error) {
+      if (error.code === "ENOENT") return "stopped";
+      if (error.code === "SQLITE_BUSY" && directory)
+        return (await verifyPublication(directory, performance.now() + 10_000)) ?? "unconfirmed";
+    }
+    return "unconfirmed";
   } finally {
     db?.close(true);
   }
+}
+export async function readInstancePublication(stateDir: string) {
+  const observation = await inspectInstancePublication(stateDir);
+  return typeof observation === "string" ? null : observation;
 }
 export async function openWriter(stateDir: string, instanceId: HostInstanceId, deadline: number) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });

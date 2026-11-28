@@ -182,6 +182,7 @@ export async function openBrowserThread(input: BrowserSessionInput, threadId: Th
       return false;
     },
   };
+  let acknowledged: import("@kraka/protocol").SyncCursor | null = null;
   let error: string | undefined;
   async function flush() {
     clearTimeout(timer);
@@ -299,6 +300,12 @@ export async function openBrowserThread(input: BrowserSessionInput, threadId: Th
             opened(sub) {
               if (replica === local) installation = sub;
             },
+            acknowledged(head) {
+              if (replica === local && !closed && !stopped) {
+                acknowledged = head;
+                notify();
+              }
+            },
             installed() {
               reconnectAttempts = 0;
               notify();
@@ -335,6 +342,7 @@ export async function openBrowserThread(input: BrowserSessionInput, threadId: Th
     session?.close();
     stopped = false;
     installation = undefined;
+    acknowledged = null;
     error = undefined;
     session = openSession({ ...input, socketFactory }, [
       "strictSchemas",
@@ -409,6 +417,9 @@ export async function openBrowserThread(input: BrowserSessionInput, threadId: Th
         session: session?.snapshot(),
         subscription: installation?.state.status,
         installed: installation?.state.installed,
+        acknowledged,
+        permissions: installation?.state.permissions,
+        subscriptionId: installation?.state.request.payload.subscriptionId,
       };
     },
     get current() {
@@ -420,6 +431,31 @@ export async function openBrowserThread(input: BrowserSessionInput, threadId: Th
     subscribe(listener: () => void) {
       changes.add(listener);
       return () => changes.delete(listener);
+    },
+    async answer(payload: Extract<SignedRequest, { method: "todo.answer" }>["payload"]) {
+      const row =
+        cache.rows[keyString({ objectType: "todoRequest", id: payload.todoRequestId })]?.row;
+      if (
+        !current() ||
+        !replica ||
+        payload.threadId !== threadId ||
+        row?.objectType !== "todoRequest" ||
+        row.value.threadId !== threadId ||
+        row.value.body.kind !== "question" ||
+        row.value.state.kind !== "open" ||
+        !hasMethodPermissions(REQUEST_METHODS.answerTodo, new Set(installation?.state.permissions))
+      )
+        return null;
+      return replica.rpc("todo.answer", payload);
+    },
+    async readAnswer(
+      todoRequestId: Extract<
+        SignedRequest,
+        { method: "todo.readAnswer" }
+      >["payload"]["todoRequestId"],
+    ) {
+      if (!current() || !replica) return null;
+      return replica.rpc("todo.readAnswer", { threadId, todoRequestId });
     },
     async decide(payload: Extract<SignedRequest, { method: "todo.decide" }>["payload"]) {
       const row =
