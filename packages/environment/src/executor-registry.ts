@@ -20,15 +20,15 @@ import type {
 import { recordCommand, type FirstSendContext } from "./command-receipts";
 import type { FirstSendStore } from "./first-send-store";
 
+export const executorTables = `CREATE TABLE IF NOT EXISTS executor_registrations(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS executor_secrets(instance TEXT NOT NULL,binding TEXT NOT NULL,value TEXT NOT NULL, PRIMARY KEY(instance,binding));
+      CREATE TABLE IF NOT EXISTS round_executors(round TEXT PRIMARY KEY,instance TEXT NOT NULL,version TEXT NOT NULL,model TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS project_executor_defaults(project TEXT PRIMARY KEY,instance TEXT NOT NULL);`;
+
 export class WriterExecutorRegistry implements ExecutorRegistry {
   private readonly probes = new Map<string, InstanceProbe>();
   private readonly targets = new Map<string, { cwd: string; token: symbol }>();
-  constructor(readonly store: FirstSendStore) {
-    store.db.exec(`CREATE TABLE IF NOT EXISTS executor_registrations(id TEXT PRIMARY KEY, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS executor_secrets(instance TEXT NOT NULL,binding TEXT NOT NULL,value TEXT NOT NULL, PRIMARY KEY(instance,binding));
-      CREATE TABLE IF NOT EXISTS round_executors(round TEXT PRIMARY KEY,instance TEXT NOT NULL,version TEXT NOT NULL,model TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS project_executor_defaults(project TEXT PRIMARY KEY,instance TEXT NOT NULL);`);
-  }
+  constructor(readonly store: FirstSendStore) {}
   // This host-only boundary records immutable scoped versions before a signed command can refer to them.
   storeSecret(instance: ExecutorInstanceId, binding: CredentialBinding, value: string) {
     const old = this.secret(instance, binding);

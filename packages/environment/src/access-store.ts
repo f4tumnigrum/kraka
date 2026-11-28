@@ -99,6 +99,14 @@ type LiveAccess = {
 };
 const offline: LiveAccess = { sessions: () => [], notify() {} };
 
+export const accessTables = `CREATE TABLE IF NOT EXISTS devices(device TEXT PRIMARY KEY,key TEXT NOT NULL UNIQUE,principal TEXT NOT NULL UNIQUE,person TEXT NOT NULL,key_data TEXT NOT NULL,first_owner INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS invites(id TEXT PRIMARY KEY,body TEXT NOT NULL,permissions TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS applications(id TEXT PRIMARY KEY,invite TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS objects(kind TEXT NOT NULL,id TEXT NOT NULL,parent TEXT,PRIMARY KEY(kind,id));
+      CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS changes(body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,principal TEXT NOT NULL,intent TEXT NOT NULL,body TEXT NOT NULL);`;
+
 export class AccessStore implements PairingStore {
   readonly target: Extract<Target, { kind: "environment" }>;
   private readonly pages = new Map<string, { scope: string; offset: number }>();
@@ -109,14 +117,6 @@ export class AccessStore implements PairingStore {
     readonly now = Date.now,
   ) {
     this.target = { kind: "environment", environmentId: identity.id };
-    db.exec(`PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS devices(device TEXT PRIMARY KEY,key TEXT NOT NULL UNIQUE,principal TEXT NOT NULL UNIQUE,person TEXT NOT NULL,key_data TEXT NOT NULL,first_owner INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS invites(id TEXT PRIMARY KEY,body TEXT NOT NULL,permissions TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS applications(id TEXT PRIMARY KEY,invite TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS objects(kind TEXT NOT NULL,id TEXT NOT NULL,parent TEXT,PRIMARY KEY(kind,id));
-      CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY, principal TEXT NOT NULL, body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS changes(body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,principal TEXT NOT NULL,intent TEXT NOT NULL,body TEXT NOT NULL);`);
   }
   provisionProject(project: ProjectId) {
     this.db.run("INSERT OR IGNORE INTO objects VALUES('project',?,NULL)", [project]);

@@ -31,6 +31,7 @@ export async function listenBrowserDaemon(stateDir: string, options: BrowserList
     if (hasOwner) {
       let store: FirstSendStore | undefined;
       const writer = await startWriter(stateDir, null, {
+        accessHost: host,
         opened: (s) => {
           store = s;
         },

@@ -2,7 +2,7 @@ import { git, seedGit } from "../../../tools/fixtures/isolated-start";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { writerGitPaths } from "./private-git";
-import { DiffCleanup } from "./diff-cleanup";
+import { DiffCleanup, diffCleanupTables } from "./diff-cleanup";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -356,6 +356,7 @@ test("a shallow commit retains its verified right endpoint when its actual first
       threadId: key.threadId,
       worktreeId: key.worktreeId,
     });
+    db.exec(diffCleanupTables);
     const service = new LocalDiffService(
       new DiffCleanup(db, writerGitPaths(root, "shallow-fixture")),
     );
@@ -403,8 +404,9 @@ test("both capture and attempt identities must match; a conflicting baseline can
 
 test("a range cursor keeps the first before and the fixed last after across pages", async () => {
   const dir = mkdtempSync(join(tmpdir(), "kraka-capture-pages-")),
-    db = new Database(":memory:"),
-    service = new LocalDiffService(new DiffCleanup(db, writerGitPaths(dir, "range-fixture")));
+    db = new Database(":memory:");
+  db.exec(diffCleanupTables);
+  const service = new LocalDiffService(new DiffCleanup(db, writerGitPaths(dir, "range-fixture")));
   try {
     const repo = seedGit(dir),
       left = v.parse(GitObjectIdSchema, repo.base);

@@ -34,7 +34,6 @@ import {
 } from "./checkpoints";
 import { captureBoundary, captureLayout, decodeSeal, type CaptureHook } from "./capture-boundary";
 import {
-  openCaptureStorage,
   bindCaptureSource,
   readIntent,
   pendingBaselines,
@@ -93,7 +92,6 @@ export class RoundCaptures {
   hook?: CaptureHook;
   signal?: AbortSignal;
   constructor(private readonly store: FirstSendStore) {
-    openCaptureStorage(store.db);
     this.writers = new DirectoryWriters(store.writer.stateDirectory, (key) =>
       this.resolveLease(key),
     );

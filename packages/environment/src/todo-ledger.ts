@@ -45,14 +45,16 @@ const binding = v.object({
   ),
 });
 type Row = { data: string; binding: string };
-export class TodoLedger {
-  private live = new Map<TodoRequestId, LiveTodo>();
-  constructor(private store: FirstSendStore) {
-    const db = store.db;
-    db.exec(`CREATE TABLE IF NOT EXISTS todo_requests(id TEXT PRIMARY KEY, data TEXT NOT NULL, binding TEXT NOT NULL);
+export const todoTables = `CREATE TABLE IF NOT EXISTS todo_requests(id TEXT PRIMARY KEY, data TEXT NOT NULL, binding TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS todo_question_nodes(request TEXT PRIMARY KEY,node TEXT NOT NULL,questions TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS todo_replies(message TEXT PRIMARY KEY, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS private_todo_receipts(command TEXT PRIMARY KEY, metadata TEXT NOT NULL, choice TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS private_todo_receipts(command TEXT PRIMARY KEY, metadata TEXT NOT NULL, choice TEXT NOT NULL);`;
+
+export class TodoLedger {
+  private live = new Map<TodoRequestId, LiveTodo>();
+  constructor(private store: FirstSendStore) {}
+  recover() {
+    const db = this.store.db;
     db.transaction(() => {
       for (const row of db
         .query<{ data: string }, []>(

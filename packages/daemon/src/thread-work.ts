@@ -61,6 +61,7 @@ export type ReplayWriter<H extends object> = {
   confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
 } | null;
 export type WriterLifecycle = {
+  accessHost?: Awaited<ReturnType<typeof openAccessHost>>;
   queueChanged?: (threadId: ThreadId) => void;
   preparation?: PreparationHook;
   observeFrame?: (epoch: string, wire: import("@kraka/protocol").WireMessage) => void;
@@ -91,8 +92,8 @@ export function threadWork<H extends object>(
   codex: CodexInstances,
   replay: ReplayWriter<H>,
   lifecycle?: WriterLifecycle,
+  stops = new OrdinaryStops(transaction),
 ) {
-  const stops = new OrdinaryStops(transaction);
   const gitStatusCache = new GitStatusCache(Date.now, lifecycle?.gitProcess);
   const turns = new Map<string, Promise<void>>();
   const controller = new AbortController();
@@ -536,7 +537,6 @@ export function threadWork<H extends object>(
     resume,
     sendInput,
     steerInput,
-    stops,
     steers,
     recipients,
     recover,

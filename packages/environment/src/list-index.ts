@@ -30,7 +30,9 @@ const active: ThreadLifecycle = {
 type RoundData = AttentionFacts["root"]["rounds"][number];
 const roundFact = AttentionFactsSchema.entries.root.entries.rounds.item;
 export class ListIndex {
-  constructor(private db: Database) {
+  private constructor(private db: Database) {}
+  static open(db: Database) {
+    const list = new ListIndex(db);
     const existing = db.query("SELECT 1 FROM sqlite_master WHERE name='list_sources'").get();
     db.exec(`CREATE TABLE IF NOT EXISTS list_sources(source TEXT PRIMARY KEY,changed TEXT NOT NULL,created_at INTEGER NOT NULL,activity_at INTEGER NOT NULL,thread TEXT);
     CREATE TABLE IF NOT EXISTS list_attempts(source TEXT NOT NULL,round TEXT NOT NULL,attempt TEXT NOT NULL,data TEXT NOT NULL,terminal INTEGER NOT NULL,PRIMARY KEY(source,round,attempt));
@@ -43,10 +45,11 @@ export class ListIndex {
         .all();
       for (const row of rows) {
         const payload: unknown = JSON.parse(row.payload);
-        if (typeof payload === "string") this.touch(row.source, row.changed, 0);
-        else this.record(decodeJournalRow(payload), row.changed, 0);
+        if (typeof payload === "string") list.touch(row.source, row.changed, 0);
+        else list.record(decodeJournalRow(payload), row.changed, 0);
       }
     }
+    return list;
   }
   touch(source: string, position: string, now: number) {
     this.db

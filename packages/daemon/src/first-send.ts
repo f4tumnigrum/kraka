@@ -6,6 +6,7 @@ import { CodexInstances } from "./codex-instances";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  OrdinaryStops,
   selectWorktreeBase,
   retryPreparation,
   readManaged,
@@ -15,6 +16,7 @@ import {
   openStore,
   openWriter,
   measureWriterStartup,
+  markStartupDetail,
   type WriterStartupMark,
   readReceipt,
   readRound,
@@ -83,7 +85,7 @@ async function openDurableWriter<H extends object>(
   mark("writerLock");
   if (lock.kind !== "writer") return lock;
   let store: FirstSendStore | undefined;
-  let auth: Awaited<ReturnType<typeof openAccessHost>> | undefined;
+  let ownedAccess: Awaited<ReturnType<typeof openAccessHost>> | undefined;
   try {
     lifecycle?.locked?.();
     const transaction = openStore(lock.lease, replay?.recovery);
@@ -91,11 +93,16 @@ async function openDurableWriter<H extends object>(
     store = transaction;
     if (lifecycle?.capture) transaction.captures.hook = lifecycle.capture;
     lifecycle?.opened?.(transaction);
+    markStartupDetail("owner.openedHook");
     const codex = new CodexInstances(transaction);
+    markStartupDetail("owner.executors");
+    const stops = new OrdinaryStops(transaction);
+    markStartupDetail("owner.stops");
     const owner = v.parse(
       localOwnerSchema,
       JSON.parse(readFileSync(join(lock.lease.stateDirectory, "local-owner.json"), "utf8")),
     );
+    markStartupDetail("owner.read");
     const key = createPublicKey(owner.publicKey);
     if (key.asymmetricKeyDetails?.namedCurve !== "prime256v1")
       throw new Error("Local owner requires a P-256 public key");
@@ -105,28 +112,30 @@ async function openDurableWriter<H extends object>(
       environmentId: lock.lease.environmentId,
       allows: (permission: PermissionItem) => granted.has(permission),
     };
+    markStartupDetail("owner.key");
     mark("owner");
-    const authHost = await openAccessHost(stateDir);
+    const authHost = lifecycle?.accessHost ?? (await openAccessHost(stateDir));
+    if (!lifecycle?.accessHost) ownedAccess = authHost;
+    if (authHost.identity.id !== lock.lease.environmentId)
+      throw Error("Access identity conflicts with durable writer");
     mark("access");
-    auth = authHost;
     const reads = inputReads(transaction, actor);
 
     const sockets = new Set<Bun.ServerWebSocket<Session>>();
-    const work = threadWork(transaction, authHost, actor, codex, replay, {
-      ...lifecycle,
-      queueChanged: reads.changed,
-    });
-    const {
-      openThread,
-      startThread,
-      schedule,
-      resume,
-      sendInput,
-      steerInput,
+    const work = threadWork(
+      transaction,
+      authHost,
+      actor,
+      codex,
+      replay,
+      {
+        ...lifecycle,
+        queueChanged: reads.changed,
+      },
       stops,
-      steers,
-      recipients,
-    } = work;
+    );
+    const { openThread, startThread, schedule, resume, sendInput, steerInput, steers, recipients } =
+      work;
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -410,7 +419,7 @@ async function openDurableWriter<H extends object>(
           await codex.close();
         } finally {
           try {
-            authHost.close();
+            ownedAccess?.close();
             transaction.db.close(true);
           } finally {
             lock.close();
@@ -420,7 +429,7 @@ async function openDurableWriter<H extends object>(
     };
   } catch (e) {
     try {
-      auth?.close();
+      ownedAccess?.close();
       store?.db.close();
     } finally {
       lock.close();

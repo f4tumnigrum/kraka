@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { writerGitPaths } from "./private-git";
 import { WriterRecovery } from "./writer-recovery";
-import { DiffCleanup } from "./diff-cleanup";
+import { DiffCleanup, diffCleanupTables } from "./diff-cleanup";
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +42,7 @@ function repository() {
   const root = mkdtempSync(join(tmpdir(), "kraka-s15-git-"));
   const path = join(root, "checkout");
   const db = new Database(":memory:");
+  db.exec(diffCleanupTables);
   const cleanup = new DiffCleanup(db, writerGitPaths(root, "git-fixture"));
   const close = () => {
     db.close(true);

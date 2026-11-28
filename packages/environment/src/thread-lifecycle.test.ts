@@ -32,7 +32,7 @@ test("the list keeps every cutoff tie and visible ancestor and excludes an unrea
   try {
     for (const table of ["threads", "rounds", "messages"])
       db.exec("CREATE TABLE " + table + "(data TEXT)");
-    const journal = new ThreadJournal(db, v.parse(EnvironmentIdSchema, "env"));
+    const journal = ThreadJournal.open(db, v.parse(EnvironmentIdSchema, "env"));
     const rows: HistoryRow[] = [];
     function thread(id: string, at: number | null, parent?: string) {
       rows.push(

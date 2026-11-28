@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { AccessStore } from "./access-store";
+import { accessTables, AccessStore } from "./access-store";
 import { expect, test } from "bun:test";
 import * as v from "valibot";
 import {
@@ -169,6 +169,7 @@ test("the SQLite writer commits the winning cancellation or exchange once, inclu
         "SELECT (SELECT count(*) FROM devices) AS devices,(SELECT count(*) FROM grants) AS grants,(SELECT count(*) FROM changes) AS changes",
       )
       .get();
+  db.exec(accessTables);
   const store = new AccessStore(db, identity, () => 2);
   try {
     await store.confirm(

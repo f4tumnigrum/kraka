@@ -5,7 +5,7 @@ import { EnvironmentIdSchema, type EnvironmentId } from "@kraka/protocol";
 import * as v from "valibot";
 
 // Publish the first ID atomically. Both authorities retain IDs already committed by earlier versions.
-export function directoryEnvironmentId(dir: string, registered?: EnvironmentId) {
+export function directoryEnvironmentId(dir: string, registered?: EnvironmentId | null) {
   const path = join(dir, "environment.id");
   let initial = registered;
   const read = () => {
@@ -15,7 +15,8 @@ export function directoryEnvironmentId(dir: string, registered?: EnvironmentId) 
   };
   if (existsSync(path)) return read();
   const access = join(dir, "access.sqlite");
-  if (!initial && existsSync(access)) {
+  // null means the access host already checked its open identity table and found no row.
+  if (registered === undefined && existsSync(access)) {
     const db = new Database(access, { readonly: true });
     try {
       if (
