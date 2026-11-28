@@ -1,3 +1,5 @@
+import { ContextOperationSchema } from "@kraka/protocol";
+
 import { decodeJournalRow, encodeJournalRow } from "./journal-row";
 import { markStartupDetail } from "./capture-timing";
 import { ListIndex } from "./list-index";
@@ -96,6 +98,7 @@ export class ThreadJournal {
     return db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS sync_meta(id INTEGER PRIMARY KEY CHECK(id=1),generation TEXT NOT NULL,head TEXT NOT NULL,floor TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
+     CREATE TABLE IF NOT EXISTS sync_context(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
      CREATE TABLE IF NOT EXISTS tool_activity_scoped_changes(thread_id TEXT NOT NULL,event_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread_id,event_id));`);
@@ -180,6 +183,13 @@ export class ThreadJournal {
       return;
     }
     for (const wake of this.listeners) wake();
+  }
+  recordContextOperation(operation: import("@kraka/protocol").ContextOperation) {
+    if (!this.db.inTransaction) throw Error("Context operation must share its binding transaction");
+    this.db.run(
+      "INSERT INTO sync_context VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET changed=excluded.changed,data=excluded.data",
+      [operation.threadId, operation.deliveryId, this.advanceClock(), JSON.stringify(operation)],
+    );
   }
   private advanceClock() {
     const meta = this.meta();
@@ -518,7 +528,16 @@ export class ThreadJournal {
               event: v.parse(TextReturnedEventSchema, JSON.parse(r.data)),
             }))
         : [];
-      return { ...result, rows, deletions, returns };
+      const contextOperations = this.db
+        .query<{ data: string; changed: string }, [string]>(
+          "SELECT data,changed FROM sync_context WHERE source=?",
+        )
+        .all(scope.threadId)
+        .map((r) => ({
+          operation: v.parse(ContextOperationSchema, JSON.parse(r.data)),
+          changed: v.parse(SyncPositionSchema, r.changed),
+        }));
+      return { ...result, rows, deletions, returns, contextOperations };
     })();
   }
   history(

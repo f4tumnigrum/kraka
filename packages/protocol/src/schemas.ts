@@ -4,6 +4,7 @@ import { DeviceRegistrationSchema } from "./device-registration";
 import { AccessChangeSchema, UnusedInviteSchema } from "./access-management";
 import { portSchemas } from "./ports";
 import { previewSchemas } from "./preview";
+import { sessionTransitionSchemas } from "./session-transitions";
 import { handoffSchemas } from "./handoffs";
 import { RouteDiagnosticSchema } from "./route-diagnostics";
 import { contextOperationSchemas } from "./context-operations";
@@ -164,6 +165,7 @@ export const protocolSchemas = {
   ...portSchemas,
   ...previewSchemas,
   ...handoffSchemas,
+  ...sessionTransitionSchemas,
   ...contextOperationSchemas,
   ...timelineSchemas,
   ...toolActivitySchemas,

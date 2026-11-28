@@ -108,6 +108,7 @@ export const MessageSchema = v.strictObject({
 });
 
 export const RoundSchema = v.strictObject({
+  freshContext: v.optional(v.literal(true)),
   id: RoundIdSchema,
   threadId: ThreadIdSchema,
   messageId: MessageIdSchema,

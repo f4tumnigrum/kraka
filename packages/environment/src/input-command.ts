@@ -13,6 +13,7 @@ import {
 import * as v from "valibot";
 import { type LocalActor, recordCommand } from "./command-receipts";
 import { type FirstSendStore, readMessage, readRound, readThread } from "./first-send-store";
+import { reservedForkRound } from "./session-fork";
 import { fileInputRound, advanceQueue, loadQueue, nextVersion, persistQueue } from "./input-store";
 import {
   firstPending,
@@ -110,7 +111,11 @@ export function applyInputCommand({
           active = command.payload.mode === "insertCurrent";
           if (active && !supportsSteer?.(head.attempt.attemptId)) return refuse("unsupported");
         }
-        const roundId = active && head ? head.id : v.parse(RoundIdSchema, crypto.randomUUID());
+        const roundId =
+          active && head
+            ? head.id
+            : (!queue.rows.length && reservedForkRound(transaction, threadId)) ||
+              v.parse(RoundIdSchema, crypto.randomUUID());
         const message = v.parse(MessageSchema, {
           id: crypto.randomUUID(),
           threadId,

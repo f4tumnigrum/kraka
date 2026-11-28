@@ -5,6 +5,11 @@ import {
   EarlierSettledPageSchema,
   ThreadSummarySchema,
 } from "./thread-list";
+import {
+  SessionBindingSchema,
+  SessionPreviewIdSchema,
+  sessionResults,
+} from "./session-transitions";
 import { TextReturnResultSchema } from "./handoffs";
 import { ContextOperationReceiptSchema } from "./context-operations";
 import { ToolActivityReadResultSchema } from "./tool-activity";
@@ -469,6 +474,43 @@ export const REQUEST_METHODS = {
     "thread.send",
     "thread",
     v.strictObject({ ...parent, baseVersion: ObjectVersionSchema, change: ThreadChangeSchema }),
+  ),
+  previewSession: defineRequestMethod(
+    "thread.previewSession",
+    "thread.view",
+    "thread",
+    v.strictObject({
+      threadId: ThreadIdSchema,
+      sourceRoundId: v.nullable(RoundIdSchema),
+      targetInstanceId: ExecutorInstanceIdSchema,
+      model: ChildModelSchema,
+      proposedInput: InputContentSchema,
+      expectedBinding: v.nullable(SessionBindingSchema),
+    }),
+  ),
+  switchSession: defineRequestMethod(
+    "thread.switchSession",
+    "thread.send",
+    "thread",
+    v.strictObject({ previewId: SessionPreviewIdSchema }),
+  ),
+  readSessionTransition: defineRequestMethod(
+    "thread.readSessionTransition",
+    "thread.view",
+    "thread",
+    v.strictObject({ threadId: ThreadIdSchema, operationId: CommandIdSchema }),
+  ),
+  forkThread: defineRequestMethod(
+    "thread.fork",
+    "thread.send",
+    "thread",
+    v.strictObject({ sourceThreadId: ThreadIdSchema, sourceRoundId: RoundIdSchema }),
+  ),
+  readRelationships: defineRequestMethod(
+    "thread.readRelationships",
+    "thread.view",
+    "thread",
+    v.strictObject({ threadId: ThreadIdSchema }),
   ),
   compactThread: defineRequestMethod(
     "thread.compact",
@@ -1127,6 +1169,7 @@ export const StopResultSchema = v.strictObject({
 });
 export type StopResult = v.InferOutput<typeof StopResultSchema>;
 export const RequestResultSchema = v.variant("kind", [
+  ...sessionResults,
   StopResultSchema,
   ToolActivityReadResultSchema,
   ExecutorRefreshedSchema,

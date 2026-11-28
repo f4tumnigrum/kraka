@@ -49,6 +49,25 @@ export type { RoundReport } from "./round";
 export { recoverInputDelivery } from "./round";
 export { transitionRound } from "./round";
 export * from "./secret-file";
+export { SessionBindings } from "./session-binding";
+export { clearThreadSession } from "./session-clear";
+export { HandoffDeliveries, freezeTextHandoff } from "./session-delivery";
+export { forkAtRound, readForkRelationships } from "./session-fork";
+export {
+  previewSessionTransition,
+  loadPreview,
+  type PreviewInput,
+  type ApprovedPreview,
+  type TransitionTarget,
+  type TransitionFacts,
+  type VerifiedSession,
+} from "./session-preview";
+export {
+  readSessionTransition,
+  switchThreadSession,
+  type TransitionChannel,
+  type TransitionHost,
+} from "./session-transition";
 export { promoteSessionObservation } from "./session-observations";
 export * from "./setting-store";
 export * from "./settings";

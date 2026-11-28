@@ -3498,6 +3498,104 @@
                   "type": "object",
                   "properties": {
                     "kind": {
+                      "const": "sessionTransitionPreview"
+                    },
+                    "preview": {
+                      "$ref": "#/$defs/SessionTransitionPreview"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "preview"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "sessionSwitchAccepted"
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "operationId": {
+                      "$ref": "#/$defs/CommandId"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "threadId",
+                    "operationId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "sessionTransition"
+                    },
+                    "transition": {
+                      "$ref": "#/$defs/SessionTransitionRead"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "transition"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "threadForked"
+                    },
+                    "fork": {
+                      "$ref": "#/$defs/ForkTransfer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "fork"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "threadRelationships"
+                    },
+                    "relationships": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/WorkRelationship"
+                      }
+                    },
+                    "fork": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/ForkTransfer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "relationships",
+                    "fork"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
                       "const": "stopResult"
                     },
                     "stopCommandId": {
@@ -10406,6 +10504,38 @@
       ],
       "additionalProperties": false
     },
+    "ForkTransfer": {
+      "type": "object",
+      "properties": {
+        "transferId": {
+          "$ref": "#/$defs/ContextTransferId"
+        },
+        "source": {
+          "$ref": "#/$defs/HandoffSource"
+        },
+        "targetThreadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "firstRoundId": {
+          "$ref": "#/$defs/RoundId"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "consumed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "transferId",
+        "source",
+        "targetThreadId",
+        "firstRoundId",
+        "state"
+      ],
+      "additionalProperties": false
+    },
     "GitObjectId": {
       "type": "string",
       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
@@ -10840,6 +10970,34 @@
         "source",
         "messageIds",
         "history"
+      ],
+      "additionalProperties": false
+    },
+    "HandoffEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "version": {
+          "$ref": "#/$defs/ObjectVersion"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "role",
+        "text"
       ],
       "additionalProperties": false
     },
@@ -14558,6 +14716,9 @@
     "Round": {
       "type": "object",
       "properties": {
+        "freshContext": {
+          "const": true
+        },
         "id": {
           "$ref": "#/$defs/RoundId"
         },
@@ -16061,6 +16222,1851 @@
         "reason"
       ],
       "additionalProperties": false
+    },
+    "SessionTransitionPreview": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HandoffSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "expectedBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HandoffEntry"
+              }
+            },
+            "history": {
+              "$ref": "#/$defs/HistoryCoverage"
+            },
+            "budget": {
+              "type": "object",
+              "properties": {
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowSource": {
+                  "enum": [
+                    "reported",
+                    "estimated"
+                  ],
+                  "type": "string"
+                },
+                "workTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "allowanceTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "catalogVersion",
+                "windowTokens",
+                "windowSource",
+                "workTokens",
+                "inputTokens",
+                "allowanceTokens",
+                "historyTokens",
+                "historyBytes"
+              ],
+              "additionalProperties": false
+            },
+            "kind": {
+              "const": "reuseSession"
+            }
+          },
+          "required": [
+            "id",
+            "threadId",
+            "source",
+            "expectedBinding",
+            "target",
+            "entries",
+            "history",
+            "budget",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HandoffSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "expectedBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HandoffEntry"
+              }
+            },
+            "history": {
+              "$ref": "#/$defs/HistoryCoverage"
+            },
+            "budget": {
+              "type": "object",
+              "properties": {
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowSource": {
+                  "enum": [
+                    "reported",
+                    "estimated"
+                  ],
+                  "type": "string"
+                },
+                "workTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "allowanceTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "catalogVersion",
+                "windowTokens",
+                "windowSource",
+                "workTokens",
+                "inputTokens",
+                "allowanceTokens",
+                "historyTokens",
+                "historyBytes"
+              ],
+              "additionalProperties": false
+            },
+            "kind": {
+              "const": "resumeSession"
+            },
+            "nativeSessionId": {
+              "$ref": "#/$defs/NativeSessionId"
+            }
+          },
+          "required": [
+            "id",
+            "threadId",
+            "source",
+            "expectedBinding",
+            "target",
+            "entries",
+            "history",
+            "budget",
+            "kind",
+            "nativeSessionId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HandoffSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "expectedBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HandoffEntry"
+              }
+            },
+            "history": {
+              "$ref": "#/$defs/HistoryCoverage"
+            },
+            "budget": {
+              "type": "object",
+              "properties": {
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowSource": {
+                  "enum": [
+                    "reported",
+                    "estimated"
+                  ],
+                  "type": "string"
+                },
+                "workTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "allowanceTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "catalogVersion",
+                "windowTokens",
+                "windowSource",
+                "workTokens",
+                "inputTokens",
+                "allowanceTokens",
+                "historyTokens",
+                "historyBytes"
+              ],
+              "additionalProperties": false
+            },
+            "kind": {
+              "const": "changeModel"
+            },
+            "effectiveAt": {
+              "enum": [
+                "now",
+                "nextTurn"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "threadId",
+            "source",
+            "expectedBinding",
+            "target",
+            "entries",
+            "history",
+            "budget",
+            "kind",
+            "effectiveAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "source": {
+              "$ref": "#/$defs/HandoffSource"
+            },
+            "expectedBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HandoffEntry"
+              }
+            },
+            "history": {
+              "$ref": "#/$defs/HistoryCoverage"
+            },
+            "budget": {
+              "type": "object",
+              "properties": {
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "windowSource": {
+                  "enum": [
+                    "reported",
+                    "estimated"
+                  ],
+                  "type": "string"
+                },
+                "workTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "allowanceTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyTokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "historyBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "catalogVersion",
+                "windowTokens",
+                "windowSource",
+                "workTokens",
+                "inputTokens",
+                "allowanceTokens",
+                "historyTokens",
+                "historyBytes"
+              ],
+              "additionalProperties": false
+            },
+            "kind": {
+              "const": "createWithHandoff"
+            }
+          },
+          "required": [
+            "id",
+            "threadId",
+            "source",
+            "expectedBinding",
+            "target",
+            "entries",
+            "history",
+            "budget",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HandoffSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "expectedBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "reject"
+            },
+            "targetInstanceId": {
+              "$ref": "#/$defs/ExecutorInstanceId"
+            },
+            "model": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "options": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "options"
+              ],
+              "additionalProperties": false
+            },
+            "reason": {
+              "enum": [
+                "invalidState",
+                "targetUnavailable",
+                "unsupported",
+                "inputTooLarge",
+                "sourceUnavailable"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "threadId",
+            "source",
+            "expectedBinding",
+            "kind",
+            "targetInstanceId",
+            "model",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SessionTransitionRead": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "priorBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "currentBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "reuseSession"
+            }
+          },
+          "required": [
+            "operationId",
+            "threadId",
+            "target",
+            "priorBinding",
+            "currentBinding",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "priorBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "currentBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "resumeSession"
+            }
+          },
+          "required": [
+            "operationId",
+            "threadId",
+            "target",
+            "priorBinding",
+            "currentBinding",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "priorBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "currentBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "changeModel"
+            },
+            "effectiveAt": {
+              "enum": [
+                "now",
+                "nextTurn"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "operationId",
+            "threadId",
+            "target",
+            "priorBinding",
+            "currentBinding",
+            "kind",
+            "effectiveAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "$ref": "#/$defs/ExecutorInstanceId"
+                },
+                "family": {
+                  "$ref": "#/$defs/AdapterFamily"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                "configurationVersion": {
+                  "$ref": "#/$defs/ObjectVersion"
+                },
+                "capabilityVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "catalogVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "permission": {
+                  "$ref": "#/$defs/InstancePermission"
+                }
+              },
+              "required": [
+                "instanceId",
+                "family",
+                "account",
+                "model",
+                "configurationVersion",
+                "capabilityVersion",
+                "catalogVersion",
+                "permission"
+              ],
+              "additionalProperties": false
+            },
+            "priorBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "currentBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "createWithHandoff"
+            },
+            "transferId": {
+              "$ref": "#/$defs/ContextTransferId"
+            },
+            "deliveryId": {
+              "$ref": "#/$defs/DeliveryId"
+            },
+            "injection": {
+              "enum": [
+                "pending",
+                "injected",
+                "unknown",
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "operationId",
+            "threadId",
+            "target",
+            "priorBinding",
+            "currentBinding",
+            "kind",
+            "transferId",
+            "deliveryId",
+            "injection"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "SettingOverlay": {
       "oneOf": [
@@ -19874,6 +21880,21 @@
         },
         {
           "$ref": "#/$defs/thread.changeLifecycle"
+        },
+        {
+          "$ref": "#/$defs/thread.previewSession"
+        },
+        {
+          "$ref": "#/$defs/thread.switchSession"
+        },
+        {
+          "$ref": "#/$defs/thread.readSessionTransition"
+        },
+        {
+          "$ref": "#/$defs/thread.fork"
+        },
+        {
+          "$ref": "#/$defs/thread.readRelationships"
         },
         {
           "$ref": "#/$defs/thread.compact"
@@ -34312,6 +36333,119 @@
       "additionalProperties": false,
       "description": "Requires thread.send on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
+    "thread.fork": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "thread.fork"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "sourceThreadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "sourceRoundId": {
+              "$ref": "#/$defs/RoundId"
+            }
+          },
+          "required": [
+            "sourceThreadId",
+            "sourceRoundId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.send on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
     "thread.inspectCheckout": {
       "type": "object",
       "properties": {
@@ -34644,6 +36778,240 @@
             "threadId",
             "subscriptionId",
             "cursor"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
+    "thread.previewSession": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "thread.previewSession"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "sourceRoundId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RoundId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "targetInstanceId": {
+              "$ref": "#/$defs/ExecutorInstanceId"
+            },
+            "model": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "options": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "options"
+              ],
+              "additionalProperties": false
+            },
+            "proposedInput": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "references": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/MessageReference"
+                  }
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/AttachmentReference"
+                  }
+                }
+              },
+              "required": [
+                "text",
+                "references",
+                "attachments"
+              ],
+              "additionalProperties": false
+            },
+            "expectedBinding": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "family": {
+                      "$ref": "#/$defs/AdapterFamily"
+                    },
+                    "instanceId": {
+                      "$ref": "#/$defs/ExecutorInstanceId"
+                    },
+                    "nativeSessionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/NativeSessionId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "epoch": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "threadId": {
+                      "$ref": "#/$defs/ThreadId"
+                    },
+                    "attemptId": {
+                      "$ref": "#/$defs/AttemptId"
+                    }
+                  },
+                  "required": [
+                    "family",
+                    "instanceId",
+                    "nativeSessionId",
+                    "epoch",
+                    "threadId",
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "threadId",
+            "sourceRoundId",
+            "targetInstanceId",
+            "model",
+            "proposedInput",
+            "expectedBinding"
           ],
           "additionalProperties": false
         },
@@ -35013,6 +37381,228 @@
       "additionalProperties": false,
       "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
+    "thread.readRelationships": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "thread.readRelationships"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
+    "thread.readSessionTransition": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "thread.readSessionTransition"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "operationId": {
+              "$ref": "#/$defs/CommandId"
+            }
+          },
+          "required": [
+            "threadId",
+            "operationId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.view on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
     "thread.rename": {
       "type": "object",
       "properties": {
@@ -35309,6 +37899,116 @@
       ],
       "additionalProperties": false,
       "description": "Requires thread.send on project. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
+    },
+    "thread.switchSession": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "signedRequest"
+        },
+        "protocolVersion": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "environmentId": {
+          "$ref": "#/$defs/EnvironmentId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/ConnectionId"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/ConnectionChallengeId"
+        },
+        "challenge": {
+          "$ref": "#/$defs/ConnectionChallenge"
+        },
+        "signer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "device"
+                },
+                "deviceId": {
+                  "$ref": "#/$defs/DeviceId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/DeviceKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "deviceId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "executor"
+                },
+                "principalId": {
+                  "$ref": "#/$defs/PrincipalId"
+                },
+                "keyId": {
+                  "$ref": "#/$defs/ExecutorKeyId"
+                }
+              },
+              "required": [
+                "kind",
+                "principalId",
+                "keyId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "method": {
+          "const": "thread.switchSession"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "previewId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "previewId"
+          ],
+          "additionalProperties": false
+        },
+        "signature": {
+          "$ref": "#/$defs/P256Signature"
+        }
+      },
+      "required": [
+        "kind",
+        "protocolVersion",
+        "environmentId",
+        "connectionId",
+        "challengeId",
+        "challenge",
+        "signer",
+        "sequence",
+        "commandId",
+        "method",
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "Requires thread.send on thread. Sign the UTF-8 JCS canonical JSON of every field except signature with ECDSA P-256 and SHA-256. Reconnect with a fresh challenge and sequence and retain the command ID."
     },
     "todo.answer": {
       "type": "object",
