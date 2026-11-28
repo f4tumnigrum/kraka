@@ -305,7 +305,8 @@ test("Pi reports pipe loss while the child still lives", async () => {
   try {
     const h = await f.open();
     await h.prompt("pipe");
-    await next(h);
+    expect((await next(h)).payload.kind).toBe("roundStarted");
+    expect((await next(h)).payload.kind).toBe("requestOpened");
     f.release();
     const loss = await next(h);
     expect(loss.payload).toMatchObject({
@@ -315,6 +316,29 @@ test("Pi reports pipe loss while the child still lives", async () => {
     expect(h.session.handle.process.rpc.child.exitCode).toBeNull();
     await f.adapter.close(h.session, "shutdown");
     expect((await h.events.next()).done).toBe(true);
+  } finally {
+    await f.close();
+  }
+}, 30_000);
+test("A native read error expires the pending question", async () => {
+  const f = await piFixture(exe);
+  try {
+    const h = await f.open();
+    await h.prompt("questions");
+    await next(h);
+    const request = (await next(h)).payload;
+    if (request.kind !== "requestOpened") throw Error("Expected a live Pi question");
+    const { handle } = h.session;
+    expect(handle.hasCallback(request.requestId)).toBe(true);
+    handle.process.rpc.child.stdout.destroy(
+      Object.assign(Error("pipe disconnected"), { code: "ERROR_NO_DATA" }),
+    );
+    expect((await next(h)).payload).toMatchObject({
+      kind: "sessionLost",
+      failure: { kind: "transportError" },
+    });
+    expect(handle.hasCallback(request.requestId)).toBe(false);
+    expect(handle.process.rpc.child.exitCode).toBeNull();
   } finally {
     await f.close();
   }

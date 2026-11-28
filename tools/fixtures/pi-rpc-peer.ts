@@ -1,6 +1,5 @@
 import {
   appendFileSync,
-  closeSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -12,6 +11,7 @@ import { join, isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import * as v from "valibot";
+import { closePeerOutput } from "./pi-peer-output";
 import errorRecording from "../../fixtures/executors/pi/error.jsonl" with { type: "text" };
 
 const args = process.argv.slice(2);
@@ -19,6 +19,12 @@ const option = (flag: string) => (args.includes(flag) ? args[args.indexOf(flag) 
 const ledger = process.env.KRAKA_PI_LEDGER;
 const control = process.env.KRAKA_PI_CONTROL;
 const pid = process.pid;
+function diagnostic(message: string) {
+  const line = `Pi fixture PID ${pid}: ${message}\n`;
+  if (ledger) appendFileSync(`${ledger}.${pid}.stderr`, line);
+  writeSync(2, line);
+}
+process.on("uncaughtExceptionMonitor", (error) => diagnostic(error.message));
 let epoch = 0,
   position = 0;
 function record(event: string, details: object = {}) {
@@ -147,11 +153,14 @@ async function runPrompt(text: string, reply: (data: object) => void) {
       questions = 1;
       await ui("question-1", "select", "Pick a color", { options: ["jade", "ochre"] });
       return;
-    case "pipe":
+    case "pipe": {
+      await ui("pipe-question", "input", "Reply before disconnect");
       await signal("beforePipeClose");
-      closeSync(1);
-      await signal("pipeClosed");
+      const output = await closePeerOutput();
+      diagnostic(output);
+      await signal("pipeClosed", { output });
       return;
+    }
     case "observe":
       frame({
         type: "tool_execution_start",
@@ -207,7 +216,10 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       reply({ models: [model] });
       break;
     case "prompt":
-      void runPrompt(v.parse(v.string(), cmd.message), reply).catch(() => process.exit(3));
+      void runPrompt(v.parse(v.string(), cmd.message), reply).catch((error) => {
+        diagnostic(error instanceof Error ? error.message : String(error));
+        process.exit(3);
+      });
       break;
     case "extension_ui_response":
       if (approval.resolve && cmd.id === "approval") {

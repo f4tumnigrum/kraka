@@ -73,6 +73,7 @@ const signal = v.looseObject({
   pid: v.number(),
   epoch: v.number(),
   frame: v.optional(frame),
+  output: v.optional(v.string()),
   id: v.optional(v.string()),
   position: v.optional(v.number()),
 });
@@ -83,6 +84,7 @@ async function openFixture(
   hold: ReadonlySet<string>,
 ) {
   const signals = new Journal<v.InferOutput<typeof signal>>();
+  const ledger = join(dir, "pi-native.jsonl");
   const gates = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   for (const key of hold) gates.set(key, Promise.withResolvers<void>());
   const server = Bun.serve({
@@ -97,6 +99,30 @@ async function openFixture(
   });
   const daemon = startInstalled(site, "--print-pairing");
   const cleanup: (() => void | Promise<void>)[] = [() => server.stop(true), () => daemon.close()];
+  async function waitFailure(label: string, cause: unknown, epoch?: number): Promise<never> {
+    const last = signals.items.filter((row) => epoch === undefined || row.epoch === epoch).at(-1);
+    let peer = "no signal received",
+      stderr = "";
+    if (last) {
+      let state = "alive";
+      try {
+        process.kill(last.pid, 0);
+      } catch (error) {
+        state =
+          error instanceof Error && "code" in error && error.code === "ESRCH"
+            ? "exited"
+            : "unknown";
+      }
+      peer = `PID ${last.pid} ${state}, epoch ${last.epoch}, last signal ${last.event}`;
+      stderr = await readFile(`${ledger}.${last.pid}.stderr`, "utf8")
+        .then((text) => text.slice(-2048))
+        .catch(() => "");
+    }
+    throw Error(
+      `Waiting for ${label}; Pi peer ${peer}; peer stderr tail: ${stderr.trim() || "(empty)"}; daemon stderr tail: ${daemon.stderrTail().trim() || "(empty)"}`,
+      { cause },
+    );
+  }
   async function close() {
     for (const gate of gates.values()) gate.resolve();
     const failures: unknown[] = [];
@@ -143,8 +169,7 @@ async function openFixture(
       "projectRegistered",
     ).project;
     const account = join(dir, "account"),
-      sessions = join(dir, "sessions"),
-      ledger = join(dir, "pi-native.jsonl");
+      sessions = join(dir, "sessions");
     await Promise.all([mkdir(account), mkdir(sessions)]);
     const instanceId = v.parse(ExecutorInstanceIdSchema, "installed-pi");
     const registration = {
@@ -192,9 +217,11 @@ async function openFixture(
         installedProtocol: true,
       });
       cleanup.push(() => socket.close());
+      const until = (predicate: () => boolean, label: string) =>
+        socket.until(predicate, label).catch((error) => waitFailure(label, error));
       const opened = await socket.client.open(threadId, null);
       if ((await opened.receipt).kind !== "accepted") throw Error("Thread subscription failed");
-      await socket.until(() => socket.heads.length > 0, "initial Pi thread");
+      await until(() => socket.heads.length > 0, "initial Pi thread");
       const rows = () => Object.values(cache.read().rows).flatMap((r) => (r.row ? [r.row] : []));
       const rounds = () => rows().flatMap((r) => (r.objectType === "round" ? [r.value] : []));
       const todos = () => rows().flatMap((r) => (r.objectType === "todoRequest" ? [r.value] : []));
@@ -206,13 +233,14 @@ async function openFixture(
               t.state.route.kind === "live" &&
               t.state.route.requestId === nativeId,
           );
-        await socket.until(() => !!find(), `Pi question ${nativeId}`);
+        await until(() => !!find(), `Pi question ${nativeId}`);
         const item = find();
         if (!item) throw Error("Lost Pi question");
         return item;
       }
       return {
         ...socket,
+        until,
         rows,
         rounds,
         todos,
@@ -257,7 +285,9 @@ async function openFixture(
           .map((s) => v.parse(signal, JSON.parse(s))),
       release: (name: string) => gates.get(name)?.resolve(),
       wait: (event: string, epoch: number) =>
-        signals.until((row) => row.event === event && row.epoch === epoch, 0, 12_000),
+        signals
+          .until((row) => row.event === event && row.epoch === epoch, 0, 12_000)
+          .catch((error) => waitFailure(event, error, epoch)),
       async start(text: string) {
         return accepted(
           await request({

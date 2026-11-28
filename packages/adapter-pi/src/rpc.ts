@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+
 import type { AdapterFailure } from "@kraka/environment";
 import { parsePiLine, PiError, type PiNativeFrame } from "./native";
 
@@ -36,7 +36,7 @@ export class PiRpc {
       this.child.once("exit", (code, signal) => resolve({ code, signal }));
     });
     void this.exited.catch(() => {});
-    this.child.stdin.on("error", () => void this.pipeLost());
+    this.child.stdin.on("error", () => void this.pipeLost("Pi RPC input pipe failed"));
     this.reader = this.read();
   }
   private lose(failure: AdapterFailure) {
@@ -47,7 +47,7 @@ export class PiRpc {
     this.pending.clear();
     if (!this.closing) this.onLoss(failure, ++this.position);
   }
-  private async pipeLost() {
+  private async pipeLost(message: string) {
     if (this.failure) return;
     const child = this.child;
     // EOF can precede both the exit callback and reaping. A zombie still answers kill(pid, 0).
@@ -55,23 +55,21 @@ export class PiRpc {
     if (!gone && child.pid !== undefined) {
       const pid = String(child.pid);
       try {
-        const windows = process.platform === "win32";
-        const probe = Bun.spawn(
-          windows
-            ? [
-                join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tasklist.exe"),
-                "/FI",
-                "PID eq " + pid,
-                "/FO",
-                "CSV",
-                "/NH",
-              ]
-            : ["/bin/ps", "-o", "stat=", "-p", pid],
-          { stdout: "pipe", stderr: "ignore", stdin: "ignore" },
-        );
-        const [output, code] = await Promise.all([new Response(probe.stdout).text(), probe.exited]);
-        if (windows) gone = code === 0 && !output.includes(',"' + pid + '",');
-        else gone = (code === 1 && !output.trim()) || (code === 0 && output.trim().startsWith("Z"));
+        if (process.platform === "win32") {
+          const { windowsProcessExited } = await import("./windows-process");
+          gone = windowsProcessExited(child.pid);
+        } else {
+          const probe = Bun.spawn(["/bin/ps", "-o", "stat=", "-p", pid], {
+            stdout: "pipe",
+            stderr: "ignore",
+            stdin: "ignore",
+          });
+          const [output, code] = await Promise.all([
+            new Response(probe.stdout).text(),
+            probe.exited,
+          ]);
+          gone = (code === 1 && !output.trim()) || (code === 0 && output.trim().startsWith("Z"));
+        }
       } catch {
         try {
           process.kill(child.pid, 0);
@@ -88,35 +86,45 @@ export class PiRpc {
         return;
       }
     }
-    this.lose({ kind: "transportError", message: "Pi RPC pipe closed" });
+    this.lose({ kind: "transportError", message });
   }
   private async read() {
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "";
     try {
       for await (const bytes of this.child.stdout) {
-        pending += decoder.decode(bytes, { stream: true });
-        let end = pending.indexOf("\n");
-        while (end >= 0) {
-          const line = pending.slice(0, end);
-          pending = pending.slice(end + 1);
-          this.line(line);
-          end = pending.indexOf("\n");
+        try {
+          pending += decoder.decode(bytes, { stream: true });
+          let end = pending.indexOf("\n");
+          while (end >= 0) {
+            this.line(pending.slice(0, end));
+            pending = pending.slice(end + 1);
+            end = pending.indexOf("\n");
+          }
+        } catch {
+          this.lose({ kind: "protocolError", message: "Invalid Pi RPC frame" });
+          return;
         }
       }
-      if (pending + decoder.decode()) throw Error("Incomplete Pi RPC frame");
     } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        ["EPIPE", "ECONNRESET"].includes(String(error.code))
-      )
-        await this.pipeLost();
-      else this.lose({ kind: "protocolError", message: "Invalid Pi RPC frame" });
+      const code = error instanceof Error && "code" in error ? String(error.code) : null;
+      await this.pipeLost(
+        code && /^[A-Z0-9_]+$/.test(code)
+          ? `Pi RPC output pipe failed (${code})`
+          : "Pi RPC output pipe failed",
+      );
       return;
     }
-    await this.pipeLost();
+    try {
+      pending += decoder.decode();
+      if (pending) throw Error("Incomplete Pi RPC frame");
+    } catch {
+      this.lose({ kind: "protocolError", message: "Incomplete Pi RPC frame" });
+      return;
+    }
+    await this.pipeLost("Pi RPC output reached EOF");
   }
+
   private line(line: string) {
     const position = ++this.position;
     const observedAt = Date.now();
@@ -134,11 +142,15 @@ export class PiRpc {
   }
   async write(frame: object) {
     if (this.failure || this.closing) throw new PiError("unsafeToRetry", "Pi RPC is closed");
-    await new Promise<void>((resolve, reject) =>
-      this.child.stdin.write(`${JSON.stringify(frame)}\n`, (err) =>
-        err ? reject(new PiError("unsafeToRetry", "Pi write failed")) : resolve(),
-      ),
-    );
+    const line = JSON.stringify(frame) + "\n";
+    try {
+      await new Promise<void>((resolve, reject) =>
+        this.child.stdin.write(line, (error) => (error ? reject(error) : resolve())),
+      );
+    } catch {
+      await this.pipeLost("Pi RPC input pipe failed");
+      throw new PiError("unsafeToRetry", "Pi write failed");
+    }
   }
   async request(
     command: string,

@@ -135,6 +135,7 @@ test("3. A pipe can fail before exit is known", async () => {
       () => r.rounds().some((x) => x.attempt.phase.kind === "working"),
       "observed native root",
     );
+    const pending = await r.question("pipe-question");
     f.release("beforePipeClose");
     const child = await f.wait("pipeClosed", 1);
     const phase = () =>
@@ -143,6 +144,14 @@ test("3. A pipe can fail before exit is known", async () => {
     const original = phase();
     expect(original).toMatchObject({ kind: "interrupted", failure: { kind: "transportError" } });
     expect(() => process.kill(child.pid, 0)).not.toThrow();
+    console.log(
+      `Pi pipe evidence (${process.platform}): ${child.output}; ${original?.kind === "interrupted" && original.failure.kind === "transportError" ? original.failure.message : "no transport error"}; peer PID ${child.pid} alive`,
+    );
+    const late = await r.answer(pending.id, "pipe-question", "late");
+    expect(late).toMatchObject({
+      kind: "rejected",
+      failure: { kind: "todoChanged", current: { id: pending.id, state: { kind: "expired" } } },
+    });
     f.release("pipeClosed");
     const next = await r.send("handled");
     await r.until(
