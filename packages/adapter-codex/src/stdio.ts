@@ -43,6 +43,7 @@ export class CodexConnection {
   constructor(
     launch: Launch,
     readonly clock: () => number | null = Date.now,
+    private readonly authorize = () => true,
   ) {
     this.child = Bun.spawn([launch.executable, "app-server"], {
       cwd: launch.cwd,
@@ -82,6 +83,7 @@ export class CodexConnection {
     this.onLost(error);
   }
   private write(body: object) {
+    if (!this.authorize()) throw Error("Instance authority changed");
     this.child.stdin.write(`${JSON.stringify(body)}\n`);
     return this.child.stdin.flush();
   }

@@ -122,7 +122,12 @@ export function bindExecutorAdapter<F extends AdapterFamily, H extends object>(
 export interface FamilyProbe
   extends Pick<
     ExecutorRefreshed,
-    "binaryVersion" | "models" | "compatibilityAdvisory" | "versionAdvisory"
+    | "binaryVersion"
+    | "models"
+    | "compatibilityAdvisory"
+    | "versionAdvisory"
+    | "attemptedAt"
+    | "authenticationReason"
   > {
   declaration: CapabilityDeclaration;
   retryAt: number;
@@ -130,8 +135,14 @@ export interface FamilyProbe
   bindingContext: string;
   selectModel(selection: Model | null): Model | null;
   driver(previousEpoch: number): ExecutorDriver;
-  refresh(): Promise<FamilyProbe>;
+  refresh(scope?: ProbeScope): Promise<FamilyProbe>;
 }
+export type ProbeScope = {
+  now: () => number;
+  authorize: () => boolean;
+  expectedAccount?: string;
+  verifiedCatalog?: ExecutorRefreshed["models"];
+};
 export interface ExecutorFamily {
   family: AdapterFamily;
   supports(registration: Omit<ExecutorRegistration, "version">): boolean;
@@ -139,5 +150,6 @@ export interface ExecutorFamily {
     registration: ExecutorRegistration,
     cwd: string,
     environment: Record<string, string>,
+    scope?: ProbeScope,
   ): Promise<FamilyProbe>;
 }

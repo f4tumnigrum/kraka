@@ -68,6 +68,26 @@ jobs:
       - run: bun run typecheck
       - name: Run ordinary live suites and verify their groups
         uses: ./.github/actions/live-suites
+      - name: Verify signed instance login and Pi RPC evidence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib, xml.etree.ElementTree as ET
+          reports = {
+              'live.xml': ['1. Configuration and login (J-1.2, J-1.3)', '2. Cancelled flow and held verification', '3. Expiry', '4. Unknown login at model start (S-EXEC-008)', '5. Failed refresh after ready (S-EXEC-022)'],
+              'pi-rpc-turn.xml': ['1. Select the executable and policy', '2. The active RPC child exits', '3. A pipe can fail before exit is known', '4. An unassigned Pi item stays in history'],
+          }
+          for filename, expected in reports.items():
+              cases = ET.parse(pathlib.Path(os.environ['RUNNER_TEMP']) / filename).findall('.//testcase')
+              assert sorted(c.get('name') for c in cases) == sorted(expected), filename
+              assert all(c.find(tag) is None for c in cases for tag in ('failure', 'skipped', 'error')), filename
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: instance-login-${{ matrix.os }}
+          path: ${{ runner.temp }}/live.xml
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

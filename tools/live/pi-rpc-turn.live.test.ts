@@ -1,5 +1,5 @@
 // Live cases 4; required groups ["1.", "2.", "3.", "4."]
-// Live JUnit ["1. Select the executable and policy","2. The active RPC child exits","3. A pipe can fail before exit is known","4. An unassigned Pi item stays in history"]
+// Live junit pi-rpc-turn.xml
 import { beforeAll, afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
