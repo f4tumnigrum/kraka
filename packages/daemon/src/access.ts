@@ -15,6 +15,8 @@ import * as v from "valibot";
 import {
   directoryEnvironmentId,
   AccessStore,
+  accessTables,
+  markStartupDetail,
   type HostDecision,
   type TrustedHostPairing,
 } from "@kraka/environment";
@@ -58,6 +60,7 @@ export async function openAccessHost(
   now = Date.now,
 ) {
   const dir = await ownedDirectory(resolve(stateDir));
+  markStartupDetail("access.directory");
   const filename = join(dir, "access.sqlite");
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     const stat = await lstat(filename + suffix).catch((e) => {
@@ -67,29 +70,38 @@ export async function openAccessHost(
     if (stat && (!stat.isFile() || stat.nlink !== 1 || stat.isSymbolicLink()))
       throw Error("Invalid state file");
   }
+  markStartupDetail("access.files");
   const db = new Database(filename, { create: true });
   try {
-    db.exec(
-      "PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS host_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),id TEXT NOT NULL,secret TEXT NOT NULL)",
-    );
+    markStartupDetail("access.open");
+    db.run("PRAGMA busy_timeout=5000");
+    markStartupDetail("access.pragma");
     const row = db
       .transaction(() => {
-        const previous = db
+        db.exec(
+          "CREATE TABLE IF NOT EXISTS host_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),id TEXT NOT NULL,secret TEXT NOT NULL)",
+        );
+        markStartupDetail("access.identityTable");
+        let row = db
           .query<{ id: string; secret: string }, []>("SELECT id,secret FROM host_identity")
           .get();
-        if (previous) {
-          directoryEnvironmentId(dir, v.parse(EnvironmentIdSchema, previous.id));
-          return previous;
+        if (row) {
+          directoryEnvironmentId(dir, v.parse(EnvironmentIdSchema, row.id));
+        } else {
+          const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+          row = {
+            id: directoryEnvironmentId(dir, null),
+            secret: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+          };
+          db.run("INSERT INTO host_identity VALUES(1,?,?)", [row.id, row.secret]);
         }
-        const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-        const row = {
-          id: directoryEnvironmentId(dir),
-          secret: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-        };
-        db.run("INSERT INTO host_identity VALUES(1,?,?)", [row.id, row.secret]);
+        markStartupDetail("access.identity");
+        db.exec(accessTables);
+        markStartupDetail("access.tables");
         return row;
       })
       .immediate();
+    markStartupDetail("access.commit");
     const key = createPrivateKey(row.secret);
     const { x, y } = createPublicKey(key).export({ format: "jwk" });
     if (!x || !y) throw Error("Invalid environment public key");
@@ -100,6 +112,7 @@ export async function openAccessHost(
         Buffer.concat([Buffer.from([4]), Buffer.from(x, "base64url"), Buffer.from(y, "base64url")]),
       ),
     });
+    markStartupDetail("access.key");
     const store = new AccessStore(db, identity, now);
     const trusted: TrustedHostPairing = {
       confirm: (input) => store.confirm(input, decision),

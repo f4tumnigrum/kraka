@@ -20,6 +20,11 @@ test(
   "1. two clients see the native end before the matching checkpoint settles",
   () =>
     patchCase(async (s, b) => {
+      const startup = s.f
+        .stderrTail()
+        .split("\n")
+        .find((line) => line.startsWith("Writer startup timing "));
+      if (startup) console.error(startup);
       console.log(git(s.f.cwd, "--version"));
       const common = git(s.f.cwd, "rev-parse", "--path-format=absolute", "--git-common-dir");
       function files(dir: string, prefix = ""): string[] {

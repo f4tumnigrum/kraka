@@ -86,6 +86,11 @@ async function publishPair(common: string, state: string, commands: string) {
   }
 }
 
+export const diffCleanupTables = `
+      CREATE TABLE IF NOT EXISTS diff_cleanup(id TEXT PRIMARY KEY,scratch TEXT NOT NULL,common TEXT NOT NULL,identity TEXT NOT NULL,leftOid TEXT,rightOid TEXT);
+      CREATE TABLE IF NOT EXISTS compared_repositories(identity TEXT PRIMARY KEY,common TEXT NOT NULL,legacyRef TEXT);
+    `;
+
 export class DiffCleanup {
   readonly namespace: string;
   constructor(
@@ -93,10 +98,6 @@ export class DiffCleanup {
     private readonly paths: ReturnType<typeof writerGitPaths>,
   ) {
     this.namespace = `${diffRefs}${paths.writer}/`;
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS diff_cleanup(id TEXT PRIMARY KEY,scratch TEXT NOT NULL,common TEXT NOT NULL,identity TEXT NOT NULL,leftOid TEXT,rightOid TEXT);
-      CREATE TABLE IF NOT EXISTS compared_repositories(identity TEXT PRIMARY KEY,common TEXT NOT NULL,legacyRef TEXT);
-    `);
   }
 
   begin(cwd: string, expectedRepo?: NonNullable<ReturnType<typeof gitRepositoryIdentity>>) {

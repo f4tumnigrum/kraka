@@ -81,7 +81,8 @@ function summaryFrom(row: SummaryParts, version: string) {
 }
 
 export class ToolActivityStorage {
-  constructor(private db: Database) {
+  private constructor(private db: Database) {}
+  static open(db: Database) {
     if (!db.inTransaction)
       throw Error("Activity storage must initialize inside the journal transaction");
     const legacy = db
@@ -105,7 +106,9 @@ export class ToolActivityStorage {
         body_size INTEGER NOT NULL,wire_digest BLOB NOT NULL,PRIMARY KEY(source,version)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS tool_activity_events(
         source_key BLOB PRIMARY KEY,payload_digest BLOB NOT NULL) WITHOUT ROWID;`);
-    if (legacy) this.migrate();
+    const storage = new ToolActivityStorage(db);
+    if (legacy) storage.migrate();
+    return storage;
   }
   private part(bytes: Uint8Array): number {
     const digest = sha(bytes);

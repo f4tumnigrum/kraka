@@ -1,8 +1,11 @@
+import { markStartupDetail } from "./capture-timing";
 import { RoundCaptures } from "./capture-store";
 import { WriterRecovery } from "./writer-recovery";
 import { writerGitPaths } from "./private-git";
-import { DiffCleanup } from "./diff-cleanup";
-import { TodoLedger } from "./todo-ledger";
+import { executorTables } from "./executor-registry";
+import { openCaptureStorage } from "./capture-storage";
+import { DiffCleanup, diffCleanupTables } from "./diff-cleanup";
+import { TodoLedger, todoTables } from "./todo-ledger";
 import { ThreadJournal } from "./thread-journal";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
@@ -32,22 +35,27 @@ import { directoryForThread } from "./worktrees";
 import { worktreeTables, readManaged } from "./worktree-storage";
 import { settingTables } from "./setting-store";
 import { managedView } from "./worktree-git";
+const sessionTables = `CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));`;
 const step = v.parse(DatabaseHeaderSchema.entries.ledger.item, {
   id: "input-attempts",
   from: 1,
   to: 2,
 });
 const catalog = { initial: 1, steps: [step] };
-const upgrade = `
+const upgradeDeliveries = `
 ALTER TABLE deliveries RENAME TO first_deliveries;
 DROP INDEX unfinished;
 CREATE TABLE deliveries(id TEXT PRIMARY KEY, round TEXT NOT NULL, pending INTEGER NOT NULL, frozen TEXT);
 INSERT INTO deliveries SELECT * FROM first_deliveries;
 DROP TABLE first_deliveries;
+`;
+const queueIndexes = `
 CREATE INDEX unfinished ON deliveries(round) WHERE pending=1;
 CREATE INDEX round_thread ON rounds(json_extract(data,'$.threadId'));
 CREATE INDEX unfinished_thread ON rounds(json_extract(data,'$.threadId')) WHERE json_extract(data,'$.attempt.phase.kind') NOT IN ('finished','endedEarly','notDelivered');
 CREATE INDEX message_thread ON messages(json_extract(data,'$.threadId'));
+`;
+const queueTables = `
 CREATE TABLE queues(thread TEXT PRIMARY KEY,version TEXT NOT NULL);
 CREATE TABLE input_decisions(actor TEXT NOT NULL, command TEXT NOT NULL, thread TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(actor,command));
 CREATE TABLE input_guarantees(delivery TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -68,6 +76,7 @@ export function openStore(writer: DirectoryWriter, recovery?: RecoveryScope) {
     create: true,
     strict: true,
   });
+  markStartupDetail("db.open");
   try {
     const tables = db
       .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
@@ -86,29 +95,61 @@ export function openStore(writer: DirectoryWriter, recovery?: RecoveryScope) {
     const compatibility = inspectDatabase(catalog, v.parse(DatabaseHeaderSchema, header));
     if (compatibility.kind === "refuse") throw new Error(compatibility.reason);
     if (!fresh && header.format !== format) throw new Error("invalidLedger");
+    markStartupDetail("db.inspect");
     db.run("PRAGMA journal_mode=WAL");
+    markStartupDetail("db.wal");
     db.run("PRAGMA synchronous=FULL");
-    if (fresh)
-      db.transaction(() => {
-        db.exec(ddl);
-        db.run("PRAGMA user_version=1");
-        db.run("INSERT INTO header VALUES(1,?)", [JSON.stringify(header)]);
-      })();
-    if (compatibility.kind === "migrationRequired")
-      db.transaction(() => {
-        db.exec(upgrade);
-        db.run("UPDATE header SET data=? WHERE id=1", [
-          JSON.stringify({ format: 2, ledger: [step] }),
-        ]);
-        db.run("PRAGMA user_version=2");
-      })();
-    db.exec(worktreeTables);
-    db.exec(settingTables);
-    const store = new FirstSendStore(db, writer);
-    recoverQueues(store, recovery);
+    markStartupDetail("db.synchronous");
+    const store = db
+      .transaction(() => {
+        markStartupDetail("db.begin");
+        if (fresh) {
+          db.exec(ddl);
+          markStartupDetail("db.base");
+          db.run("PRAGMA user_version=1");
+          db.run("INSERT INTO header VALUES(1,?)", [JSON.stringify(header)]);
+        }
+        markStartupDetail("db.header");
+        if (compatibility.kind === "migrationRequired") {
+          db.exec(upgradeDeliveries);
+          markStartupDetail("db.deliveries");
+          db.exec(queueIndexes);
+          markStartupDetail("db.indexes");
+          db.exec(queueTables);
+          markStartupDetail("db.queuesSchema");
+          db.run("UPDATE header SET data=? WHERE id=1", [
+            JSON.stringify({ format: 2, ledger: [step] }),
+          ]);
+          db.run("PRAGMA user_version=2");
+        }
+        markStartupDetail("db.version");
+        db.exec(worktreeTables);
+        markStartupDetail("db.worktrees");
+        db.exec(settingTables);
+        markStartupDetail("db.settings");
+        db.exec(sessionTables);
+        markStartupDetail("db.sessions");
+        db.exec(diffCleanupTables);
+        markStartupDetail("db.diff");
+        const journal = ThreadJournal.open(db, writer.environmentId);
+        markStartupDetail("db.journalSeed");
+        db.exec(todoTables);
+        const store = new FirstSendStore(db, writer, journal);
+        store.todos.recover();
+        markStartupDetail("db.todos");
+        openCaptureStorage(db);
+        markStartupDetail("db.captures");
+        db.exec(executorTables);
+        markStartupDetail("db.executors");
+        recoverQueues(store, recovery);
+        markStartupDetail("db.queueRecovery");
+        return store;
+      })
+      .immediate();
+    markStartupDetail("db.commit");
     return store;
   } catch (e) {
-    db.close();
+    db.close(true);
     throw e;
   }
 }
@@ -167,7 +208,6 @@ export class FirstSendStore {
   readonly gitPaths: ReturnType<typeof writerGitPaths>;
   readonly diffCleanup: DiffCleanup;
   readonly diffReads = new Set<Promise<void>>();
-  readonly sync: ThreadJournal;
   readonly captures: RoundCaptures;
   readonly todos: TodoLedger;
   onQueueChanged?: (thread: Thread["id"]) => void;
@@ -175,13 +215,10 @@ export class FirstSendStore {
   constructor(
     readonly db: Database,
     readonly writer: DirectoryWriter,
+    readonly sync: ThreadJournal,
   ) {
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS codex_bindings(thread TEXT NOT NULL,epoch INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,epoch)); CREATE TABLE IF NOT EXISTS round_stops(thread TEXT NOT NULL,command TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread,command));",
-    );
     this.gitPaths = writerGitPaths(writer.stateDirectory, writer.environmentId);
     this.diffCleanup = new DiffCleanup(db, this.gitPaths);
-    this.sync = new ThreadJournal(db, writer.environmentId);
     this.todos = new TodoLedger(this);
     this.captures = new RoundCaptures(this);
   }
