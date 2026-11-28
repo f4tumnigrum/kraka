@@ -9,7 +9,7 @@ import {
 import type { FirstSendStore } from "./first-send-store";
 export function turnContent(store: FirstSendStore, round: Round, instanceId: ExecutorInstanceId) {
   const items = new Map<NativeItemId, Message>();
-  return (item: NativeItemId, text: string, final: string | null) => {
+  const append = (item: NativeItemId, text: string, final: string | null) => {
     const previous = items.get(item);
     const message = v.parse(MessageSchema, {
       id: previous?.id ?? crypto.randomUUID(),
@@ -31,4 +31,7 @@ export function turnContent(store: FirstSendStore, round: Round, instanceId: Exe
     items.set(item, message);
     store.sync.notify();
   };
+  return Object.assign(append, {
+    text: () => Array.from(items.values(), (message) => message.text).join("\n"),
+  });
 }

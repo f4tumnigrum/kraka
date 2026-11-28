@@ -39,7 +39,11 @@ export interface ThreadReadView {
     changed: SyncPosition;
     operation: import("@kraka/protocol").ContextOperation;
   }[];
-  returns: readonly { source: ThreadId; event: TextReturnedEvent; changed: SyncPosition }[];
+  returns: readonly {
+    source: ThreadId;
+    event: TextReturnedEvent | Extract<ObjectChange, { kind: "child.resultTransfer" }>;
+    changed: SyncPosition;
+  }[];
 }
 export interface AuthorizedScope {
   threadId: ThreadId;

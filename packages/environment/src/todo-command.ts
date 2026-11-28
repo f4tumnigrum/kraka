@@ -26,7 +26,7 @@ import {
   type AuthorizationTarget,
 } from "@kraka/protocol";
 import { type FirstSendStore, readReceipt, readThread } from "./first-send-store";
-import { checkCommand, type LocalActor } from "./command-receipts";
+import { commandIntent, checkCommand, type LocalActor } from "./command-receipts";
 import { advanceQueue, fileInputRound, loadQueue } from "./input-store";
 import { transitionTodo } from "./todo";
 type TodoCommand =
@@ -36,7 +36,8 @@ type TodoCommand =
     >
   | PrivateSecretRequest;
 type Context = {
-  verifiedActor: LocalActor & { deviceId: DeviceId };
+  verifiedActor: LocalActor &
+    ({ deviceId: DeviceId } | { executor: NonNullable<LocalActor["executor"]> });
   signedCommand: TodoCommand;
   writer: FirstSendStore;
 };
@@ -90,7 +91,10 @@ function storePublicReply(
     id: record.messageId,
     roundId,
     version: "1",
-    author: { kind: "person", id: record.authorId },
+    author:
+      record.kind === "todoAnswerRead"
+        ? { kind: "person", id: record.authorId }
+        : { kind: "executor", id: record.executor.executorInstanceId },
     text:
       record.content.kind === "approval"
         ? record.content.choiceKey
@@ -135,14 +139,31 @@ export function acceptTodoReply({
       if (
         actor.environmentId !== writer.writer.environmentId ||
         actor.environmentId !== cmd.environmentId ||
-        cmd.signer.kind !== "device" ||
-        cmd.signer.deviceId !== actor.deviceId
+        (cmd.signer.kind === "device"
+          ? !("deviceId" in actor) || cmd.signer.deviceId !== actor.deviceId || !!actor.executor
+          : !actor.executor ||
+            cmd.signer.principalId !== actor.id ||
+            !writer.services.executorTools.authorizes(cmd.signer, actor.executor) ||
+            actor.executor.threadId !== ids.threadId ||
+            (cmd.method !== "todo.answer" && cmd.method !== "todo.readAnswer"))
       )
         return reject(commandId, { kind: "invalidProof" });
+      if (
+        actor.executor &&
+        !actor.allows(cmd.method === "todo.readAnswer" ? "thread.view" : "thread.reply", target)
+      )
+        return denied(cmd.method === "todo.readAnswer" ? "thread.view" : "thread.reply");
       const row = writer.todos.get(ids.todoRequestId);
       if (!row || row.todo.threadId !== ids.threadId || !readThread(writer.db, ids.threadId))
         return fail("notFound");
       const { todo, binding } = row;
+      if (
+        actor.executor &&
+        (todo.body.kind !== "question" ||
+          binding.attemptId !== actor.executor.attemptId ||
+          binding.instanceId !== actor.executor.executorInstanceId)
+      )
+        return fail("notFound");
       const permission =
         cmd.method === "todo.readAnswer"
           ? "thread.view"
@@ -159,7 +180,19 @@ export function acceptTodoReply({
         )
           return fail("notFound");
         const record = writer.todos.reply(todo.state.answer.content.messageId);
-        return record ? accepted(record) : fail("notFound");
+        if (!record) return fail("notFound");
+        if (!actor.executor) return accepted(record);
+        const intent = commandIntent(actor, cmd.method, target, cmd.payload);
+        const old = readReceipt(writer.db, actor.id, commandId);
+        if (old) return old.intent === intent ? old.receipt : fail("idConflict");
+        const receipt = accepted(record);
+        writer.db.run("INSERT INTO receipts(actor,command,intent,data) VALUES(?,?,?,?)", [
+          actor.id,
+          commandId,
+          intent,
+          JSON.stringify(receipt),
+        ]);
+        return receipt;
       }
       if (cmd.method === "todo.readSecretReceipt") {
         if (!may(permission)) return denied(permission);
@@ -179,7 +212,7 @@ export function acceptTodoReply({
           if (binding.approval && !may(binding.approval.permission))
             return denied(binding.approval.permission);
         }
-        if (prior.intent !== canonicalJson({ method: cmd.method, target, payload }))
+        if (prior.intent !== commandIntent(actor, cmd.method, target, payload))
           return fail("idConflict");
         if (privateRequest && prior.receipt.kind === "accepted") {
           const saved = writer.db
@@ -287,18 +320,18 @@ export function acceptTodoReply({
       const record =
         link.kind === "message"
           ? v.parse(TodoReplyRecordSchema, {
-              kind: "todoAnswerRead",
+              ...("deviceId" in actor
+                ? { kind: "todoAnswerRead", deviceId: actor.deviceId, authorId: actor.id }
+                : { kind: "executorAnswerRead", executor: actor.executor }),
               todoRequestId: todo.id,
               messageId: link.messageId,
-              authorId: actor.id,
-              deviceId: actor.deviceId,
               at,
               content,
             })
           : null;
       const answer: TodoAnswer = {
         authorId: actor.id,
-        deviceId: actor.deviceId,
+        ...("deviceId" in actor && { deviceId: actor.deviceId }),
         at,
         attemptId: v.parse(AttemptIdSchema, crypto.randomUUID()),
         deliveryId: v.parse(DeliveryIdSchema, crypto.randomUUID()),
@@ -321,7 +354,13 @@ export function acceptTodoReply({
     .immediate();
   if (result.kind === "accepted" && result.result.kind === "todoAnswerStored") {
     writer.sync.notify();
-    if (deliver) void writer.todos.dispatch(ids.todoRequestId);
+    if (deliver) {
+      const send = () => {
+        void writer.todos.dispatch(ids.todoRequestId);
+      };
+      if (writer.db.inTransaction) queueMicrotask(send);
+      else send();
+    }
   }
   return result;
 }

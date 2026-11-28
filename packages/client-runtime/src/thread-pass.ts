@@ -1,3 +1,4 @@
+import type { ChildResultTransfer } from "@kraka/protocol";
 import * as v from "valibot";
 import {
   canonicalJson,
@@ -230,6 +231,7 @@ export interface ThreadCache {
   history: Record<string, SavedPage>;
   accepted: Record<string, AcceptedInput>;
   returns: Record<string, TextReturnedEvent>;
+  childTransfers?: Record<string, ChildResultTransfer>;
   contextOperations?: Record<string, import("@kraka/protocol").ContextOperation>;
   summaries: Record<string, Extract<ObjectChange, { kind: "thread.summary" }>["summary"]>;
 }
@@ -337,6 +339,7 @@ export async function installThreadPass(
       rows: { ...old.rows },
       scopes: { ...old.scopes },
       returns: { ...old.returns },
+      childTransfers: { ...old.childTransfers },
       summaries: { ...old.summaries },
     };
     const scope: Membership = {
@@ -374,6 +377,21 @@ export async function installThreadPass(
           case "executor.observation":
             saveRow(cache, { objectType: "timelineItem", value: change.observation });
             break;
+          case "child.resultTransfer": {
+            const t = change.transfer;
+            if (
+              begin.through.scope.kind !== "thread" ||
+              t.parentThreadId !== begin.through.scope.threadId
+            )
+              throw Error("Child return outside parent");
+            const id = JSON.stringify([begin.through.environmentId, t.parentThreadId, t.id]);
+            const earlier = cache.childTransfers[id];
+            if (!earlier || BigInt(t.version) > BigInt(earlier.version))
+              cache.childTransfers[id] = t;
+            else if (earlier.version === t.version && canonicalJson(t) !== canonicalJson(earlier))
+              throw Error("Conflicting child result");
+            break;
+          }
           case "context.operation": {
             const op = change.operation,
               key = JSON.stringify([op.threadId, op.deliveryId]);

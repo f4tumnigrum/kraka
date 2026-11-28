@@ -115,7 +115,9 @@ export function applyInputCommand({
           id: crypto.randomUUID(),
           threadId,
           roundId,
-          author: { kind: "person", id: actor.id },
+          author: actor.executor
+            ? { kind: "executor", id: actor.executor.executorInstanceId }
+            : { kind: "person", id: actor.id },
           ...content,
           version: "1",
         });

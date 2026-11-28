@@ -1,3 +1,5 @@
+import { executorPublicKey, type ExecutorToolHost } from "./executor-tool-host";
+import type { ExecutorToolGrant } from "@kraka/environment";
 import { dispatch } from "./signed-requests/registry";
 import { watchSettings } from "./signed-requests/settings";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
@@ -84,6 +86,7 @@ export async function threadConnection(
     receipt: CommandReceipt,
     deliver: () => void,
   ) => void,
+  toolHost?: ExecutorToolHost,
 ): Promise<SocketApplication | null> {
   if (host.identity.id !== store.writer.environmentId) return null;
   const epoch = v.parse(ConnectionIdSchema, crypto.randomUUID());
@@ -121,6 +124,7 @@ export async function threadConnection(
     beforeSend: () => check(),
     attach(peer, wake) {
       const watch = watchSettings(store);
+      let toolGrant: ExecutorToolGrant | null = null;
       const sessionLifetime = new AbortController();
       let seq = 0,
         session: SessionAuthorized | null = null,
@@ -169,7 +173,12 @@ export async function threadConnection(
       function accept(
         m: SignedRequest | InboundSettingWrite | PrivateSecretRequest | ClientAuthentication,
       ) {
-        const actor = usable(m.signer);
+        const device = usable(m.signer);
+        const executor =
+          toolHost && m.signer.kind === "executor"
+            ? (toolGrant ?? store.services.executorTools.lookup(m.signer))
+            : null;
+        const actor = device ?? executor;
         if (
           !actor ||
           m.environmentId !== host.identity.id ||
@@ -184,16 +193,7 @@ export async function threadConnection(
         )
           throw Error("Invalid signed session");
         if (!boundKey) {
-          const point = Buffer.from(actor.publicKey, "base64url");
-          boundKey = createPublicKey({
-            key: {
-              kty: "EC",
-              crv: "P-256",
-              x: point.subarray(1, 33).toString("base64url"),
-              y: point.subarray(33).toString("base64url"),
-            },
-            format: "jwk",
-          });
+          boundKey = executorPublicKey(actor.publicKey);
         }
         const { signature, ...body } = m;
         if (
@@ -239,6 +239,12 @@ export async function threadConnection(
             environmentSessionId: session.environmentSessionId,
             transportLimits: TRANSPORT_LIMITS,
           });
+          if (executor) {
+            if (!store.services.executorTools.isCurrent(executor))
+              throw Error("Expired executor session");
+            toolGrant = executor;
+            return;
+          }
           subs = new ThreadSubscriptions(
             peer,
             wake,
@@ -303,7 +309,48 @@ export async function threadConnection(
             (id) => subs?.has(id) ?? false,
           );
         } else {
-          if (!session || !subs || !gitStatus) throw Error("Configuration required");
+          if (session && executor && toolHost && toolGrant === executor) {
+            if (m.method === "todo.submitSecret" || m.method === "settings.write") {
+              peer.control({
+                kind: "rejected",
+                commandId: m.commandId,
+                failure: { kind: "unsupported" },
+              });
+              return;
+            }
+            void toolHost
+              .call(executor, m)
+              .then((result) => {
+                if (!session) return;
+                if (result.kind === "accepted" && !toolHost.canDisclose(executor, m)) {
+                  peer.control({
+                    kind: "rejected",
+                    commandId: m.commandId,
+                    failure: { kind: "expired" },
+                  });
+                } else {
+                  const stream = sendLogicalRequest(peer, result);
+                  if (result.kind === "accepted")
+                    disclosures.set(m.commandId, {
+                      stream,
+                      allowed: () => toolHost.canDisclose(executor, m),
+                    });
+                }
+                wake();
+              })
+              .catch(() => {
+                if (session) {
+                  peer.control({
+                    kind: "programError",
+                    commandId: m.commandId,
+                    code: "internalError",
+                  });
+                  wake();
+                }
+              });
+            return;
+          }
+          if (!session || !subs || !gitStatus || !device) throw Error("Configuration required");
           const principal: LocalActor = {
             id: actor.principal.id,
             environmentId: host.identity.id,
@@ -325,12 +372,12 @@ export async function threadConnection(
             startThread,
             loginSession: {
               id: session.environmentSessionId,
-              owner: actor.principal.ownerId,
+              owner: device.principal.ownerId,
               signal: sessionLifetime.signal,
               active: () => session !== null && !!usable(m.signer),
             },
             principal,
-            deviceId: actor.deviceId,
+            deviceId: device.deviceId,
             session,
             subs,
             gitStatus,
@@ -388,6 +435,18 @@ export async function threadConnection(
         expires = Infinity;
       check = () => {
         if (!session) return;
+        if (toolGrant) {
+          for (const [id, entry] of disclosures) {
+            if (
+              entry.stream === undefined
+                ? peer.send.pending.control === 0
+                : !peer.send.snapshot(entry.stream)
+            )
+              disclosures.delete(id);
+            else if (!entry.allowed()) throw Error("Executor authority expired");
+          }
+          return;
+        }
         const next = version.get()?.data_version;
         for (const [id, d] of disclosures) {
           if (
@@ -414,9 +473,13 @@ export async function threadConnection(
       return {
         control(m) {
           if (m.kind === "client.authenticate" || m.kind === "signedRequest") accept(m);
-          else if (m.kind === "transport.content" && session && usable(session.signer))
+          else if (
+            m.kind === "transport.content" &&
+            session &&
+            (toolGrant || usable(session.signer))
+          )
             uploads.declare(m);
-          else if (m.kind === "transport.probe" && session && usable(session.signer))
+          else if (m.kind === "transport.probe" && session && (toolGrant || usable(session.signer)))
             peer.control({ kind: "transport.echo", serial: m.serial });
           else if (m.kind !== "stream.reset") throw Error("Unexpected thread control");
         },

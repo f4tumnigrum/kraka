@@ -37,12 +37,13 @@ export type ReplaySessionHandle = {
 type Session = AdapterSession<"replay", ReplaySessionHandle>;
 type Instance = AdapterInstance<"replay">;
 type ReplayAdapter = ProviderAdapter<"replay", ReplaySessionHandle>;
+type ProvideTools = Extract<AdapterCommand, { capability: "provideTools" }>["request"];
 export type ReplayAdapterFactory = (recording?: ReplayRecording) => ReplayAdapter;
 const denied = (reason: "unsupported" | "invalidState" | "alreadyClosed") =>
   ({ kind: "rejected", reason, message: null }) as const;
 const ok = <T>(value: T) => ({ kind: "ok", value }) as const;
 
-function declaration(at: number): CapabilityDeclaration<"replay"> {
+function declaration(at: number, providesTools: boolean): CapabilityDeclaration<"replay"> {
   const supported = [
     "startSession",
     "submitTextInput",
@@ -51,6 +52,7 @@ function declaration(at: number): CapabilityDeclaration<"replay"> {
     "reportRoundEnd",
     "selectPermissionMode",
   ];
+  if (providesTools) supported.push("provideTools");
   const unsupported = {
     kind: "unsupported",
     reason: "Not supported by the basic-turn recording",
@@ -83,6 +85,7 @@ function declaration(at: number): CapabilityDeclaration<"replay"> {
 
 export function createReplayAdapter(
   recording: ReplayRecording = parseReplayRecording(bundled),
+  installTools?: (session: Session, tools: ProvideTools["tools"]) => Promise<void>,
 ): ReplayAdapter {
   const handles = new WeakSet<ReplaySessionHandle>();
   const matches = (instance: Instance) =>
@@ -145,8 +148,6 @@ export function createReplayAdapter(
   ): Promise<AdapterCallResult<InvocationResult | InstanceServiceResult<InstanceServiceCommand>>> {
     if (
       !("handle" in target) ||
-      command.kind !== "deliverInput" ||
-      command.capability !== "submitTextInput" ||
       permit.capability !== command.capability ||
       permit.capabilityVersion !== 1 ||
       permit.support.kind !== "native" ||
@@ -156,6 +157,12 @@ export function createReplayAdapter(
     if (!owns(target)) return denied("invalidState");
     const h = target.handle;
     if (h.closed) return denied("alreadyClosed");
+    if (command.capability === "provideTools" && installTools) {
+      await installTools(target, command.request.tools);
+      return ok({ kind: "service", result: null });
+    }
+    if (command.kind !== "deliverInput" || command.capability !== "submitTextInput")
+      return denied("unsupported");
     if (
       h.position !== 0 ||
       command.attemptId !== h.attemptId ||
@@ -181,7 +188,9 @@ export function createReplayAdapter(
   }
   const adapter: ReplayAdapter = {
     async capabilities(instance) {
-      return matches(instance) ? ok(declaration(recording.startedAt)) : denied("unsupported");
+      return matches(instance)
+        ? ok(declaration(recording.startedAt, !!installTools))
+        : denied("unsupported");
     },
     open,
     invoke,

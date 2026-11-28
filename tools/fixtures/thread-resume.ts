@@ -19,6 +19,8 @@ import {
   type SubscriptionPage,
   type SyncCursor,
   type EnvironmentIdentity,
+  type ExecutorPrincipal,
+  type SignedRequest,
 } from "@kraka/protocol";
 import { verifyP256 } from "@kraka/protocol/web-crypto";
 import { startPairedProject, type Client } from "./paired-project";
@@ -49,7 +51,13 @@ type Options = {
 export async function connectReplica(
   url: string,
   identity: EnvironmentIdentity,
-  device: Pick<Client, "device" | "principal">,
+  device:
+    | Pick<Client, "device" | "principal">
+    | {
+        principal: ExecutorPrincipal;
+        signer: Extract<SignedRequest["signer"], { kind: "executor" }>;
+        sign: (data: string) => Promise<string>;
+      },
   cache: SqliteThreadCache,
   opts: Options = {},
 ) {
@@ -72,11 +80,15 @@ export async function connectReplica(
     arrival = 0;
   const messages: Observation[] = [],
     heads: SyncCursor[] = [];
-  const signer = {
-    kind: "device" as const,
-    deviceId: device.device.deviceId,
-    keyId: device.device.keyId,
-  };
+  const sign = "device" in device ? (data: string) => device.device.sign(data) : device.sign;
+  const signer =
+    "signer" in device
+      ? device.signer
+      : {
+          kind: "device" as const,
+          deviceId: device.device.deviceId,
+          keyId: device.device.keyId,
+        };
   const fail = (e: unknown) => {
     ready.reject(e);
     socket.terminate();
@@ -153,7 +165,7 @@ export async function connectReplica(
         };
         return v.parse(PrivateSecretRequestSchema, {
           ...req,
-          signature: await device.device.sign(canonicalJson(req)),
+          signature: await sign(canonicalJson(req)),
         });
       };
       const r = new ThreadReplica(
@@ -206,7 +218,7 @@ export async function connectReplica(
             };
             return v.parse(SignedRequestSchema, {
               ...request,
-              signature: await device.device.sign(canonicalJson(request)),
+              signature: await sign(canonicalJson(request)),
             });
           },
           ...(opts.acknowledged ? { acknowledged: opts.acknowledged } : {}),
@@ -230,7 +242,7 @@ export async function connectReplica(
         wireBytes(wire, utf8),
         v.parse(ClientAuthenticationSchema, {
           ...auth,
-          signature: await device.device.sign(canonicalJson(auth)),
+          signature: await sign(canonicalJson(auth)),
         }),
       );
     } catch (err) {

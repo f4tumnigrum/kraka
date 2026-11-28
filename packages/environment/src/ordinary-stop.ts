@@ -166,8 +166,7 @@ export class OrdinaryStops {
       const { attempt } = round,
         phase = attempt.phase;
       const binding = frozenInput(this.store, attempt.deliveryId)?.target;
-      if (!binding?.nativeSessionId || (binding.family !== "codex" && binding.family !== "acp"))
-        return reject("invalidState");
+      if (!binding?.nativeSessionId) return reject("invalidState");
       const endpoint = this.endpoints.get(attempt.attemptId);
       const root =
         "root" in phase
@@ -202,15 +201,20 @@ export class OrdinaryStops {
       if (!this.end(record) && endpoint) dispatch.push({ record, endpoint });
       return { kind: "actionAccepted" };
     });
-    for (const { record, endpoint } of dispatch) {
-      this.arm(record, stopConfirmationMs);
-      void endpoint
-        .interrupt(v.parse(DeliveryIdSchema, crypto.randomUUID()))
-        .then((reached) => {
-          if (reached) this.update(record, { reachedAt: this.time.now() });
-        })
-        .catch(() => {});
-    }
+    const send = () => {
+      for (const { record, endpoint } of dispatch) {
+        if (!this.read(record.threadId, record.stopCommandId)) continue;
+        this.arm(record, stopConfirmationMs);
+        void endpoint
+          .interrupt(v.parse(DeliveryIdSchema, crypto.randomUUID()))
+          .then((reached) => {
+            if (reached) this.update(record, { reachedAt: this.time.now() });
+          })
+          .catch(() => {});
+      }
+    };
+    if (this.store.db.inTransaction) queueMicrotask(send);
+    else send();
     return receipt;
   }
 }

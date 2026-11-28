@@ -22,6 +22,8 @@ import {
   TimelineItemIdSchema,
   ToolActivityBodySchema,
   TextReturnedEventSchema,
+  ChildResultTransferSchema,
+  type ChildResultTransfer,
   keyString,
   rowKey,
   roundForProtocol,
@@ -99,6 +101,7 @@ export class ThreadJournal {
      CREATE TABLE IF NOT EXISTS sync_rows(source TEXT NOT NULL,key TEXT NOT NULL,round TEXT,created TEXT NOT NULL,changed TEXT NOT NULL,version TEXT NOT NULL,payload TEXT,PRIMARY KEY(source,key));
      CREATE TABLE IF NOT EXISTS sync_context_operations(source TEXT NOT NULL,id TEXT PRIMARY KEY,changed TEXT NOT NULL,data TEXT NOT NULL);
      CREATE TABLE IF NOT EXISTS sync_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
+     CREATE TABLE IF NOT EXISTS sync_child_returns(source TEXT NOT NULL,id TEXT NOT NULL,changed TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(source,id));
      CREATE TABLE IF NOT EXISTS sync_anchors(id TEXT PRIMARY KEY,binding TEXT NOT NULL,high TEXT,low TEXT);
      CREATE TABLE IF NOT EXISTS tool_activity_scoped_changes(thread_id TEXT NOT NULL,event_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(thread_id,event_id));`);
       markStartupDetail("db.journal");
@@ -228,6 +231,7 @@ export class ThreadJournal {
     extras: {
       removed?: readonly { source: ThreadId; key: ObjectKey; version: string }[];
       returns?: readonly TextReturnedEvent[];
+      childTransfer?: ChildResultTransfer;
       context?: ContextOperation;
       captureThread?: ThreadId;
       activity?: { item: ToolActivityHistoryItem; round: string | null };
@@ -235,6 +239,7 @@ export class ThreadJournal {
   ) {
     if (!this.db.inTransaction) throw Error("Sync index must share the object write transaction");
     if (
+      !extras.childTransfer &&
       !extras.context &&
       !extras.activity &&
       !rows.length &&
@@ -299,6 +304,13 @@ export class ThreadJournal {
       this.db.run(
         "UPDATE sync_rows SET changed=?,version=?,payload=NULL WHERE source=? AND key=?",
         [position, item.version, item.source, keyString(item.key)],
+      );
+    }
+    if (extras.childTransfer) {
+      const transfer = extras.childTransfer;
+      this.db.run(
+        "INSERT INTO sync_child_returns VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET changed=excluded.changed,data=excluded.data",
+        [transfer.parentThreadId, transfer.id, position, JSON.stringify(transfer)],
       );
     }
     if (extras.context)
@@ -534,6 +546,21 @@ export class ThreadJournal {
               event: v.parse(TextReturnedEventSchema, JSON.parse(r.data)),
             }))
         : [];
+      const childReturns = scope.canRead(scope.threadId)
+        ? this.db
+            .query<{ data: string; changed: string }, [string]>(
+              "SELECT data,changed FROM sync_child_returns WHERE source=?",
+            )
+            .all(scope.threadId)
+            .map((row) => ({
+              source: scope.threadId,
+              changed: v.parse(SyncPositionSchema, row.changed),
+              event: {
+                kind: "child.resultTransfer" as const,
+                transfer: v.parse(ChildResultTransferSchema, JSON.parse(row.data)),
+              },
+            }))
+        : [];
       const operations = scope.canRead(scope.threadId)
         ? this.db
             .query<{ changed: string; data: string }, [string]>(
@@ -545,7 +572,7 @@ export class ThreadJournal {
               operation: v.parse(ContextOperationSchema, JSON.parse(r.data)),
             }))
         : [];
-      return { ...result, rows, deletions, returns, operations };
+      return { ...result, rows, deletions, returns: [...returns, ...childReturns], operations };
     })();
   }
   history(

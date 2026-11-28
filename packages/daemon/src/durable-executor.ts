@@ -1,10 +1,12 @@
 import { PermissionModeSchema } from "@kraka/protocol";
 import * as v from "valibot";
 
+import type { ExecutorToolHost } from "./executor-tool-host";
 import type { ActiveSteers } from "./durable-replay";
 import { DeliveryIdSchema, type Round, type ExecutorTurnUpdate } from "@kraka/protocol";
 import {
   matchesAdapterEvent,
+  prepareChildResultTransfer,
   turnContent,
   savedBinding,
   replaceBinding,
@@ -39,7 +41,7 @@ export async function resumeBinding(
     additionalDirectories: [],
     environment: {},
     model: s.model,
-    permission: s.snapshot.permission,
+    permission: s.sessionPermission,
   });
   return { opened };
 }
@@ -133,6 +135,7 @@ export async function dispatchExecutor(
   stops: OrdinaryStops,
   steers: ActiveSteers,
   prepared?: PreparedSession,
+  toolHost?: ExecutorToolHost,
 ) {
   const thread = readThread(store.db, initial.threadId),
     message = readMessage(store.db, initial.messageId);
@@ -196,8 +199,10 @@ export async function dispatchExecutor(
   const session = opened.value;
   const content = turnContent(store, initial, reg.instanceId);
   const todos = session.todos(store.todos, initial, selection.probe.declaration);
+  let revokeTools: (() => void) | undefined;
   let closing: ReturnType<typeof session.close> | undefined;
   const release = () => {
+    revokeTools?.();
     closing ??= session.close("shutdown");
     void closing.catch(() => {});
   };
@@ -249,6 +254,7 @@ export async function dispatchExecutor(
       return claim;
     })();
     if (claim.kind === "rejected") return;
+    revokeTools = await toolHost?.install(session, binding, initial, selection);
     if (reg.family === "acp") {
       const current = readRound(store.db, roundId);
       if (current)
@@ -257,7 +263,7 @@ export async function dispatchExecutor(
             ...current,
             executor: {
               nativeSessionId: sessionId,
-              selectedMode: snapshot.permission.selected,
+              selectedMode: selection.sessionPermission.selected,
               supportedModes: v.parse(
                 v.array(PermissionModeSchema),
                 selection.probe.declaration.permission.modes,
@@ -300,6 +306,7 @@ export async function dispatchExecutor(
     signal.throwIfAborted();
     if (!isCurrent() || store.directory(thread) !== cwd)
       return failed("invalidState", "Directory changed before delivery");
+    const childSession = store.services.childTransfers.byRound(initial.id);
     const events = session.events()[Symbol.asyncIterator]();
     const first = events.next();
     void first.catch(() => {});
@@ -443,7 +450,7 @@ export async function dispatchExecutor(
           break;
         }
         case "contentDelta":
-          if (reg.family === "acp" && p.role === "assistant")
+          if ((reg.family === "acp" || childSession) && p.role === "assistant")
             content(p.itemId, p.text, p.finalText);
           emit({
             kind: p.finalText === null ? "assistant.delta" : "assistant.final",
@@ -455,7 +462,7 @@ export async function dispatchExecutor(
 
         case "roundEnded": {
           const root = { id: p.nativeRootTurnId, sessionId, beganAt: null };
-          store.db.transaction(() => {
+          const finishRound = () => {
             if (p.outcome.reason === "failed" && p.outcome.failure.kind === "usageLimit")
               store.sync.observeQuota(initial, { resetAt: p.outcome.failure.resetAt });
             report({
@@ -477,7 +484,29 @@ export async function dispatchExecutor(
                   } as const)
                 : { outcome: p.outcome.reason }),
             });
-          })();
+          };
+          revokeTools?.();
+          const child = p.outcome.reason === "completed" && childSession;
+          if (child) {
+            const completed = {
+              ...child,
+              state: {
+                kind: "completed" as const,
+                result: content.text(),
+              },
+            };
+            const prepared = prepareChildResultTransfer(completed);
+            if (
+              prepared.kind !== "ok" ||
+              (await store.services.childTransfers.settle(
+                completed,
+                prepared.value,
+                finishRound,
+              )) === "conflict"
+            )
+              throw Error("Conflicting child completion");
+            await store.services.childTransfers.returnToParent(prepared.value.id);
+          } else store.db.transaction(finishRound)();
           stops.ended(attemptId);
           if (p.outcome.reason === "failed")
             emit({
@@ -512,6 +541,7 @@ export async function dispatchExecutor(
   } finally {
     stops.endpoints.delete(attemptId);
     steers.delete(attemptId);
+    revokeTools?.();
     const endpoint = store.services.context.live.get(thread.id);
     if (endpoint && endpoint.binding === binding) {
       store.services.context.detach(endpoint);

@@ -93,7 +93,11 @@ async function openDurableWriter<H extends object>(
     if (lifecycle?.capture) transaction.captures.hook = lifecycle.capture;
     lifecycle?.opened?.(transaction);
     markStartupDetail("owner.openedHook");
-    const services = openWriterServices(transaction, lifecycle?.loginClock);
+    const services = openWriterServices(
+      transaction,
+      lifecycle?.loginClock,
+      lifecycle?.executorFamilies,
+    );
     const { executors, stops } = services;
     const owner = v.parse(
       localOwnerSchema,

@@ -234,7 +234,8 @@ export function observeNativeThread(options: {
                       });
                       if (
                         receipt.kind !== "accepted" ||
-                        receipt.result.kind !== "todoAnswerRead" ||
+                        (receipt.result.kind !== "todoAnswerRead" &&
+                          receipt.result.kind !== "executorAnswerRead") ||
                         receipt.result.todoRequestId !== id ||
                         receipt.result.messageId !== row.value.state.answer.content.messageId
                       )

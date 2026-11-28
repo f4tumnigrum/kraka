@@ -130,7 +130,9 @@ export function acceptFirstInput({
         worktreeId,
         title: content.text,
         version: "1",
-        lineage: { kind: "root" },
+        lineage: verifiedActor.executor
+          ? { kind: "child", parentThreadId: verifiedActor.executor.threadId }
+          : { kind: "root" },
         lifecycle: {
           archivedAt: null,
           state: {
@@ -152,7 +154,9 @@ export function acceptFirstInput({
         roundId,
         ...content,
         version: "1",
-        author: { kind: "person", id: verifiedActor.id },
+        author: verifiedActor.executor
+          ? { kind: "executor", id: verifiedActor.executor.executorInstanceId }
+          : { kind: "person", id: verifiedActor.id },
       });
       const round = v.parse(RoundSchema, {
         id: roundId,

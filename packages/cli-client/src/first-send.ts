@@ -46,15 +46,25 @@ const helloSchema = v.strictObject({
 export async function connectCommands(
   instance: { environmentId: string; instanceId: string; endpoint: string },
   signer: v.InferOutput<typeof RequestSignerSchema>,
-  privateKeyPath: string,
+  signingKey: string | ((body: string) => Promise<string>),
   onUpdate?: (event: ExecutorTurnUpdate) => void,
   onTextReturned?: (commandId: CommandReceipt["commandId"], result: TextReturnResult) => void,
 ) {
-  const key = createPrivateKey(readFileSync(privateKeyPath));
+  const key = typeof signingKey === "string" ? createPrivateKey(readFileSync(signingKey)) : null;
+  const signBody =
+    typeof signingKey === "function"
+      ? signingKey
+      : (body: string) => {
+          if (!key) throw Error("Missing local signing key");
+          return sign("sha256", Buffer.from(body), { key, dsaEncoding: "ieee-p1363" }).toString(
+            "base64url",
+          );
+        };
   const socket = new WebSocket(instance.endpoint);
   const ready = Promise.withResolvers<v.InferOutput<typeof helloSchema>>();
   let hello: v.InferOutput<typeof helloSchema> | undefined;
   let sequence = 0;
+  let sending = Promise.resolve();
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<CommandReceipt>>>();
   const pages = new Map<string, ReturnType<typeof Promise.withResolvers<HistoryPage>>>();
   const snapshots = new Map<string, ReturnType<typeof Promise.withResolvers<SubscriptionPage>>>();
@@ -215,33 +225,38 @@ export async function connectCommands(
       }
     },
     async send(method: string, payload: unknown, id: string = crypto.randomUUID(), minor = 0) {
-      if (!hello) throw new Error("Missing writer hello");
       const commandId = v.parse(CommandIdSchema, id);
-      const body = {
-        kind: "signedRequest",
-        protocolVersion: { major: 1, minor },
-        environmentId: instance.environmentId,
-        connectionId: hello.connectionId,
-        challengeId: hello.challengeId,
-        challenge: hello.challenge,
-        signer,
-        sequence: ++sequence,
-        commandId,
-        method,
-        payload,
-      };
-      const request = {
-        ...body,
-        signature: sign("sha256", Buffer.from(canonicalJson(body)), {
-          key,
-          dsaEncoding: "ieee-p1363",
-        }).toString("base64url"),
-      };
+      if (pending.has(commandId)) throw Error("Command already outstanding");
       const waiter = Promise.withResolvers<CommandReceipt>();
-      if (pending.has(commandId)) throw new Error("Command already outstanding");
+      void waiter.promise.catch(() => {});
       pending.set(commandId, waiter);
-      try {
+      const write = sending.then(async () => {
+        if (!hello || socket.readyState !== WebSocket.OPEN) throw Error("Writer connection closed");
+        const body = {
+          kind: "signedRequest",
+          protocolVersion: { major: 1, minor },
+          environmentId: instance.environmentId,
+          connectionId: hello.connectionId,
+          challengeId: hello.challengeId,
+          challenge: hello.challenge,
+          signer,
+          sequence: sequence + 1,
+          commandId,
+          method,
+          payload,
+        };
+        const request = { ...body, signature: await signBody(canonicalJson(body)) };
+        if (socket.readyState !== WebSocket.OPEN) throw Error("Writer connection closed");
         socket.send(JSON.stringify(request));
+        sequence = body.sequence;
+        return request;
+      });
+      sending = write.then(
+        () => {},
+        () => {},
+      );
+      try {
+        const request = await write;
         return { request, receipt: await within(waiter.promise, 10000, "Command receipt") };
       } finally {
         pending.delete(commandId);
