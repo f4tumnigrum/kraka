@@ -1,3 +1,4 @@
+import { finishedCapture } from "./fixtures/first-send-client";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { CommandIdSchema, GitObjectIdSchema } from "@kraka/protocol";
@@ -466,14 +467,17 @@ test(
         const task = await cli(writer, "standalone", isolated);
         const id = task.request.payload.worktreeId;
         if (!id) throw Error("Expected standalone checkout");
-        await idle(writer);
+        const captureId = await finishedCapture(writer.client, task.ids);
         const m = readClaim(stateDir, id);
         expect(managedView(m).availability).toBe("usable");
         expect(
           git(m.directory.realPath, "config", "--file", "setup.cfg", "--get", "kraka.setup"),
         ).toBe("completed");
         expect(git(m.directory.realPath, "rev-parse", "HEAD")).toBe(repo.base);
-        expect(roundInfo(stateDir, m).round?.attempt.phase.kind).toBe("finished");
+        expect(roundInfo(stateDir, m).round?.attempt.phase).toMatchObject({
+          kind: "finished",
+          captureId,
+        });
       } finally {
         await writer.close();
       }

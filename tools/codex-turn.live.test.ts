@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { openReceiptReader, readRound } from "@kraka/environment";
+import { finishedCapture } from "./fixtures/first-send-client";
 import { accepted } from "./fixtures/first-send";
 import { codexFixture, buildPeer, peerLedger, type Profile } from "./fixtures/codex-turn";
 import { fixture, terminate, withState } from "./fixtures/replay-process";
@@ -212,11 +213,13 @@ test("4. effective ask policy, early root, original tool and assistant frames, a
       { clientId: ids.deliveryId },
     ]);
     expect(f.ledger.rows().filter((r) => r.event === "root")).toHaveLength(1);
+    const captureId = await finishedCapture(f.client, ids);
     await f.stop();
     const db = openReceiptReader(f.stateDir);
     try {
       expect(readRound(db, ids.roundId)?.attempt.phase).toMatchObject({
         kind: "finished",
+        captureId,
         receipt: null,
         endedAt: 1767225603000,
         endTimeEvidence: {
@@ -271,12 +274,13 @@ test("existing-thread input uses its original Codex registration and records one
       attemptId: second.attemptId,
     });
     expect((await f.client.send("input.send", payload, "second-input")).receipt).toEqual(receipt);
+    const captureId = await finishedCapture(f.client, { ...second, threadId: first.threadId });
     const history = await f.client.readInputHistory(first.threadId, second.roundId);
     expect(history.rounds[0]?.attempts).toMatchObject([
       {
         attemptId: second.attemptId,
         deliveryId: second.deliveryId,
-        phase: { kind: expect.stringMatching(/^(closing|finished)$/) },
+        phase: { kind: "finished", captureId },
       },
     ]);
     expect(

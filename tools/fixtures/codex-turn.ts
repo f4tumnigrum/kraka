@@ -168,12 +168,7 @@ export async function codexFixture(
         payload,
         send: () => client.send("thread.start", payload),
         async waitTerminal() {
-          const end = performance.now() + 8000;
-          while (!updates.some((e) => e.kind === "round.ended" || e.kind === "executor.failed")) {
-            if (performance.now() > end)
-              throw new Error(`Missing terminal update: ${JSON.stringify(updates)}`);
-            await Bun.sleep(3);
-          }
+          await events.until((e) => e.kind === "round.ended" || e.kind === "executor.failed");
         },
         async close() {
           if (profile.gate) ledger.release(profile.gate);

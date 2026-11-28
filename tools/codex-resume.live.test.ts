@@ -1,3 +1,4 @@
+import { finishedCapture } from "./fixtures/first-send-client";
 import { test, expect } from "bun:test";
 import { readRound, openReceiptReader } from "@kraka/environment";
 import { runCodexCase as run } from "./fixtures/codex-resume";
@@ -140,6 +141,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
       timedOutAt: null,
       reachedAt: expect.any(Number),
     });
+    const captureId = await finishedCapture(s.client, first);
     await s.restart();
     expect(
       accepted((await s.client.send("round.readStop", payload)).receipt, "stopResult"),
@@ -148,6 +150,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     try {
       expect(readRound(db, first.roundId)?.attempt.phase).toMatchObject({
         kind: "finished",
+        captureId,
         endTimeEvidence: "endTimeEvidence" in ended ? ended.endTimeEvidence : null,
       });
     } finally {
@@ -194,6 +197,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     const r = await s.start("unavailable");
     s.action(r.turn.handle, "finish");
     await s.updates.until((e) => e.kind === "round.ended");
+    const captureId = await finishedCapture(s.client, r);
     await s.restart();
     expect((await s.input(r.threadId, "retry")).receipt).toMatchObject({
       kind: "rejected",
@@ -201,7 +205,7 @@ test("2. S-STATE-017 natural completion wins an interrupt while the public attem
     });
     expect(
       (await s.client.readInputHistory(r.threadId, r.roundId)).rounds[0]?.attempt,
-    ).toMatchObject({ attemptId: r.attemptId, phase: { kind: "finished" } });
+    ).toMatchObject({ attemptId: r.attemptId, phase: { kind: "finished", captureId } });
     expect(s.events.items.filter((e) => e.event === "turn")).toHaveLength(1);
   });
 }, 45000);

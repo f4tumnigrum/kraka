@@ -8,7 +8,9 @@ import {
   type TextReturnResult,
   SettingCheckoutSchema,
   SubscriptionPageSchema,
+  ControlMessageSchema,
   type SubscriptionPage,
+  type Round,
   HistoryPageSchema,
   type HistoryPage,
   ExecutorTurnUpdateSchema,
@@ -56,6 +58,7 @@ export async function connectCommands(
   const pending = new Map<string, ReturnType<typeof Promise.withResolvers<CommandReceipt>>>();
   const pages = new Map<string, ReturnType<typeof Promise.withResolvers<HistoryPage>>>();
   const snapshots = new Map<string, ReturnType<typeof Promise.withResolvers<SubscriptionPage>>>();
+  const staged = new Map<string, SubscriptionPage>();
   function fail(reason: Error) {
     ready.reject(reason);
     for (const request of pending.values()) request.reject(reason);
@@ -84,11 +87,25 @@ export async function connectCommands(
         const page = v.parse(SubscriptionPageSchema, raw);
         const waiter = snapshots.get(page.subscriptionId);
         if (!waiter) throw Error("Unexpected subscription page");
-        waiter.resolve(page);
+        staged.set(page.subscriptionId, page);
         return;
       }
-      if (["subscription.begin", "subscription.seal", "subscription.ended"].includes(raw.kind))
+      if (raw.kind === "subscription.seal") {
+        const seal = v.parse(ControlMessageSchema, raw);
+        if (seal.kind !== "subscription.seal") throw Error("Expected subscription seal");
+        const page = staged.get(seal.subscriptionId);
+        if (
+          !page ||
+          page.passId !== seal.passId ||
+          seal.pages !== 1 ||
+          !Bun.deepEquals(page.through, seal.cursor)
+        )
+          throw Error("Unexpected input subscription seal");
+        staged.delete(seal.subscriptionId);
+        snapshots.get(seal.subscriptionId)?.resolve(page);
         return;
+      }
+      if (["subscription.begin", "subscription.ended"].includes(raw.kind)) return;
       if (raw.kind === "history.page") {
         const page = v.parse(HistoryPageSchema, raw);
         const waiter = pages.get(page.threadId);
@@ -125,9 +142,9 @@ export async function connectCommands(
     close() {
       socket.terminate();
     },
-    async subscribedRounds(threadId: string) {
-      const subscriptionId = crypto.randomUUID(),
-        waiter = Promise.withResolvers<SubscriptionPage>();
+    async subscribedRounds(threadId: string, until: (rounds: Round[]) => boolean = () => true) {
+      const subscriptionId = crypto.randomUUID();
+      let waiter = Promise.withResolvers<SubscriptionPage>();
       snapshots.set(subscriptionId, waiter);
       void waiter.promise.catch(() => {});
       try {
@@ -138,15 +155,34 @@ export async function connectCommands(
           1,
         );
         if (receipt.kind !== "accepted") throw Error("Input subscription rejected");
-        const page = await within(waiter.promise, 5000, "Input subscription");
-        await this.send("subscription.close", { subscriptionId });
-        return page.changes.flatMap((change) =>
-          change.kind === "object.replace" && change.object.objectType === "round"
-            ? [change.object.value]
-            : [],
-        );
+        for (;;) {
+          const page = await within(waiter.promise, 10000, "Input subscription");
+          const rounds = page.changes.flatMap((change) =>
+            change.kind === "object.replace" && change.object.objectType === "round"
+              ? [change.object.value]
+              : [],
+          );
+          if (until(rounds)) return rounds;
+          waiter = Promise.withResolvers<SubscriptionPage>();
+          snapshots.set(subscriptionId, waiter);
+          void waiter.promise.catch(() => {});
+          const pass = { subscriptionId, passId: page.passId };
+          for (const [method, payload] of [
+            ["subscription.pageSaved", { ...pass, pageNumber: page.pageNumber }],
+            ["subscription.installed", { ...pass, cursor: page.through }],
+          ] as const) {
+            if ((await this.send(method, payload)).receipt.kind !== "accepted")
+              throw Error("Input subscription acknowledgement rejected");
+          }
+        }
       } finally {
-        snapshots.delete(subscriptionId);
+        try {
+          if (socket.readyState === WebSocket.OPEN)
+            await this.send("subscription.close", { subscriptionId });
+        } finally {
+          snapshots.delete(subscriptionId);
+          staged.delete(subscriptionId);
+        }
       }
     },
     async readInputHistory(threadId: string, roundId?: string) {

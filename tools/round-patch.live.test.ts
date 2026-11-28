@@ -64,8 +64,20 @@ test(
           endedAt: ended.endedAt,
         });
       }
+      const sawClosing = Promise.withResolvers<void>();
+      const installed = s.client.subscribedRounds(t.threadId, (rounds) => {
+        const phase = rounds.find((r) => r.id === t.roundId && r.attempt.attemptId === t.attemptId)
+          ?.attempt.phase;
+        if (phase?.kind === "closing") sawClosing.resolve();
+        return phase?.kind === "finished";
+      });
+      await sawClosing.promise;
       b.release(hit.token);
       b.hold = null;
+      expect((await installed).find((r) => r.id === t.roundId)?.attempt.phase).toMatchObject({
+        kind: "finished",
+        captureId: hit.id,
+      });
       const { round, capture } = await finished(a, t.roundId);
       expect((await finished(other, t.roundId)).capture).toEqual(capture);
       expect(round.attempt.phase).toMatchObject({
