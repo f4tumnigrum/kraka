@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { Journal } from "./route-network";
@@ -47,17 +47,34 @@ export function peerLedger(path: string) {
           .slice(0, -1)
           .map((s) => v.parse(rowSchema, JSON.parse(s)))
       : [];
-  return {
-    rows,
-    release(name: string) {
-      writeFileSync(`${path}.${name}.release`, "released");
+  return { rows };
+}
+export function peerSignals(hold?: string) {
+  const events = new Journal<string>();
+  const released = Promise.withResolvers<void>();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const event = new URL(req.url).pathname.slice(1);
+      events.push(event);
+      if (event === hold) await released.promise;
+      return new Response(null, { status: 204 });
     },
+  });
+  return {
+    url: server.url.href,
     async wait(event: string) {
-      const until = performance.now() + 8000;
-      while (!rows().some((r) => r.event === event)) {
-        if (performance.now() > until) throw new Error(`Missing peer event ${event}`);
-        await Bun.sleep(3);
+      try {
+        await events.until((name) => name === event, 0, 8000);
+      } catch (cause) {
+        throw Error(`Missing peer event ${event}`, { cause });
       }
+    },
+    release: () => released.resolve(),
+    async close() {
+      released.resolve();
+      await server.stop(true);
     },
   };
 }
@@ -89,7 +106,9 @@ export async function codexFixture(
     undefined,
     profile.capture,
   );
+  let signals: ReturnType<typeof peerSignals> | undefined;
   try {
+    if (profile.gate) signals = peerSignals(`gate.${profile.gate}`);
     const { publication: instance } = await launch.ready();
     const events = new Journal<ExecutorTurnUpdate>();
     const updates = events.items;
@@ -113,6 +132,7 @@ export async function codexFixture(
         PEER_PROFILE: { kind: "literal", value: profile.kind ?? "ready" },
         PEER_RECORDING: { kind: "literal", value: join(root, fixture) },
         PEER_VERSION: { kind: "literal", value: profile.version ?? "0.156.0" },
+        ...(signals && { PEER_SIGNALS: { kind: "literal", value: signals.url } }),
         PEER_GATE: { kind: "literal", value: profile.gate ?? "" },
         SYNTHETIC_CODEX: { kind: "secret", binding: credential },
       };
@@ -156,6 +176,7 @@ export async function codexFixture(
         ...launch,
         instance,
         ledger,
+        signals,
         client,
         cwd,
         stateDir,
@@ -173,9 +194,13 @@ export async function codexFixture(
           );
         },
         async close() {
-          if (profile.gate) ledger.release(profile.gate);
+          signals?.release();
           client.close();
-          await launch.stop();
+          try {
+            await launch.stop();
+          } finally {
+            await signals?.close();
+          }
         },
       };
     } catch (error) {
@@ -183,7 +208,11 @@ export async function codexFixture(
       throw error;
     }
   } catch (error) {
-    await launch.stop();
+    try {
+      await launch.stop();
+    } finally {
+      await signals?.close();
+    }
     throw error;
   }
 }

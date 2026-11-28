@@ -112,6 +112,7 @@ export function pathTo(origin: string) {
   let target = origin;
   const peers = new Set<Bun.ServerWebSocket<ProxyConnection>>();
   const records: Traffic[] = [];
+  const closes = new Journal<Traffic>();
   let hold: "server.hello" | "session.configuration" | null = null;
   const held: Array<() => void> = [];
   const frames = new Journal<{ kind: string; frame: unknown }>();
@@ -163,6 +164,7 @@ export function pathTo(origin: string) {
       },
       close(ws) {
         ws.data.record.closed = true;
+        closes.push(ws.data.record);
         peers.delete(ws);
         ws.data.upstream?.terminate();
       },
@@ -171,6 +173,7 @@ export function pathTo(origin: string) {
   return {
     origin: `http://127.0.0.1:${server.port}`,
     records,
+    closes,
     frames,
     point(at: string) {
       target = at;

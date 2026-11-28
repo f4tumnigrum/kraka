@@ -1,3 +1,4 @@
+import { observation } from "./observation";
 import { join } from "node:path";
 import * as v from "valibot";
 import { ThreadReplica, type ThreadCacheStore } from "../../packages/client-runtime/src";
@@ -51,6 +52,7 @@ export async function connectReplica(
   cache: SqliteThreadCache,
   opts: Options = {},
 ) {
+  const observed = observation();
   const nonce = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const socket = new WebSocket(url.replace("/commands", "/ws") + "?nonce=" + nonce);
   socket.binaryType = "arraybuffer";
@@ -102,6 +104,7 @@ export async function connectReplica(
         }
         replica.peer.input(wire);
         replica.peer.pump();
+        observed.changed();
         return;
       }
       const frame = decodeFrame(wire, utf8);
@@ -205,11 +208,13 @@ export async function connectReplica(
           ...(opts.acknowledged ? { acknowledged: opts.acknowledged } : {}),
           installed(head) {
             heads.push(head);
+            observed.changed();
             opts.installed?.(head);
           },
           ...(opts.pageStaged ? { pageStaged: opts.pageStaged } : {}),
           received(kind, message) {
             messages.push({ kind, message, at: arrival });
+            observed.changed();
             opts.received?.(kind, message, arrival);
           },
         },
@@ -243,8 +248,12 @@ export async function connectReplica(
       cache,
       bytes: () => bytes,
       replyBytes: () => replyBytes,
+      until: observed.until,
       async at(position: string) {
-        await until(() => heads.some((h) => h.through === position), "installed " + position);
+        await observed.until(
+          () => heads.some((h) => h.through === position),
+          "installed " + position,
+        );
         return heads.find((h) => h.through === position)!;
       },
       async close() {
@@ -255,13 +264,6 @@ export async function connectReplica(
   } catch (e) {
     socket.terminate();
     throw e;
-  }
-}
-export async function until(done: () => boolean, label: string) {
-  const end = performance.now() + 4500;
-  while (!done()) {
-    if (performance.now() > end) throw Error("Timeout waiting for " + label);
-    await Bun.sleep(1);
   }
 }
 export async function threadFixture<T>(

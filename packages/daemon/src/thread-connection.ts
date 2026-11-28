@@ -1,3 +1,5 @@
+import { dispatch } from "./signed-requests/registry";
+import { watchSettings } from "./signed-requests/settings";
 import { createPublicKey, randomBytes, verify } from "node:crypto";
 import * as v from "valibot";
 import {
@@ -13,9 +15,7 @@ import {
   TRANSPORT_LIMITS,
   TOOL_ACTIVITY_DETAIL_MINOR,
   RequestUploads,
-  sendLogicalControl,
   SETTING_GENERATION_MINOR,
-  settingReceiptForVersion,
   type SubscriptionPage,
   type SessionAuthorized,
   type SignedRequest,
@@ -25,23 +25,15 @@ import {
   type ProjectId,
   type CommandReceipt,
   type CommandId,
-  DiffResultSchema,
   type WorkspaceTargetSchema,
   workspaceAuthorizationTarget,
 } from "@kraka/protocol";
 import {
-  acceptTodoReply,
   type GitStatusCache,
   LocalDiffService,
-  applyInputCommand,
   type LocalActor,
   readProject,
   readThread,
-  renameThread,
-  resolveDiffDirectory,
-  settingCommand,
-  watchSettingFile,
-  applyThreadChange,
   type FirstSendStore,
 } from "@kraka/environment";
 import { ThreadSubscriptions } from "./thread-subscriptions";
@@ -126,8 +118,7 @@ export async function threadConnection(
     epoch,
     beforeSend: () => check(),
     attach(peer, wake) {
-      let watching: string | null = null,
-        stopWatching: (() => void) | undefined;
+      const watch = watchSettings(store);
       let seq = 0,
         session: SessionAuthorized | null = null,
         subs: ThreadSubscriptions | null = null,
@@ -172,51 +163,6 @@ export async function threadConnection(
       const allowsWorkspace = (target: WorkspaceTarget) =>
         allowsTarget(workspaceAuthorizationTarget(target), "thread.view");
       const diffService = new LocalDiffService(store.diffCleanup);
-      async function readDiff(
-        request: Extract<SignedRequest, { method: "checkpoint.diff" }>,
-      ): Promise<CommandReceipt> {
-        const { commandId } = request;
-        const { query, cursor } = request.payload;
-        const unavailable = (reason: string) =>
-          v.parse(DiffResultSchema, {
-            kind: "unavailable",
-            request: query,
-            from: null,
-            to: null,
-            reason,
-          });
-        if (!allows(query.threadId, "thread.view"))
-          return { kind: "rejected", commandId, failure: { kind: "notFound" } };
-        const directoryDiff = session?.features.includes("directoryDiff") ?? false;
-        if ("directoryId" in query && !directoryDiff)
-          return {
-            kind: "rejected",
-            commandId,
-            failure: { kind: "unsupported" },
-          };
-        const directory = resolveDiffDirectory(store, query);
-        const actor = { scope: visibility(), directoryDiff };
-        const diff = !directory
-          ? unavailable("invalidated")
-          : query.kind === "round" || query.kind === "roundRange"
-            ? await store.captures.readCaptureRange({
-                thread: query.threadId,
-                worktree: directory,
-                fromCaptureId: query.kind === "round" ? query.captureId : query.fromCaptureId,
-                toCaptureId: query.kind === "round" ? query.captureId : query.toCaptureId,
-                single: query.kind === "round",
-                cursor,
-                actor,
-                reader: diffService,
-              })
-            : await diffService.readLocalDiff({
-                actor,
-                query,
-                cursor,
-                resolvedDirectory: directory,
-              });
-        return { kind: "accepted", commandId, result: { kind: "checkpointDiff", diff } };
-      }
       function accept(
         m: SignedRequest | InboundSettingWrite | PrivateSecretRequest | ClientAuthentication,
       ) {
@@ -354,264 +300,64 @@ export async function threadConnection(
             (id) => subs?.has(id) ?? false,
           );
         } else {
-          if (!session || !subs) throw Error("Configuration required");
-          if (m.method === "settings.read" || m.method === "settings.write") {
-            const principal = actor.principal.id;
-            const local: LocalActor = {
-              id: principal,
-              environmentId: host.identity.id,
-              allows(permission, target) {
-                if (target.kind === "project") {
-                  if (!readProject(store.db, target.projectId)) return false;
-                  host.store.provisionProject(target.projectId);
-                }
-                return !!host.store.ceiling(principal, target, permission);
-              },
-            };
-            const execute = () =>
-              settingCommand(
-                { actor: local, transaction: store, commandId: m.commandId },
-                m.method,
-                m.payload,
-              );
-            const receipt = settingReply ? settingReply(m, execute) : execute();
-            if (
-              receipt.kind === "accepted" &&
-              (receipt.result.kind === "settingRead" || receipt.result.kind === "settingSaved")
-            ) {
-              const rb = receipt.result.readback,
-                context = rb.checkout ?? rb.target;
-              const key = context.kind === "checkout" ? canonicalJson(context) : null;
-              if (key !== watching) {
-                stopWatching?.();
-                watching = key;
-                stopWatching =
-                  context.kind === "checkout" ? watchSettingFile(store, context) : undefined;
-              }
-            }
-            sendLogicalControl(peer, settingReceiptForVersion(receipt, m.protocolVersion.minor));
-            return;
-          }
-          if (
-            m.method === "todo.answer" ||
-            m.method === "todo.decide" ||
-            m.method === "todo.readAnswer" ||
-            m.method === "todo.readSecretReceipt" ||
-            m.method === "todo.submitSecret"
-          ) {
-            const proceed = () => {
-              const result = host.store.db
-                .transaction(() =>
-                  acceptTodoReply({
-                    verifiedActor: {
-                      id: actor.principal.id,
-                      deviceId: actor.deviceId,
-                      environmentId: host.identity.id,
-                      allows: (permission, target) =>
-                        target.kind === "thread" && allows(target.threadId, permission),
-                    },
-                    signedCommand: m,
-                    writer: store,
-                  }),
-                )
-                .immediate();
-              const stream = sendLogicalRequest(peer, result);
-              const thread =
-                m.method === "todo.submitSecret" ? m.payload.target.threadId : m.payload.threadId;
-              if (
-                result.kind === "accepted" &&
-                (result.result.kind === "todoAnswerRead" || result.result.kind === "secretReceipt")
-              ) {
-                const right =
-                  result.result.kind === "secretReceipt" ? "owner.decide" : "thread.view";
-                disclosures.set(m.commandId, { stream, allowed: () => allows(thread, right) });
-              } else if (result.kind === "rejected" && result.failure.kind === "todoChanged") {
-                const required = m.method === "todo.answer" ? "thread.reply" : "owner.decide";
-                const action = store.todos.get(result.failure.current.id)?.binding.approval
-                  ?.permission;
-                disclosures.set(m.commandId, {
-                  stream,
-                  allowed: () =>
-                    allows(thread, "thread.view") &&
-                    allows(thread, required) &&
-                    (!action || allows(thread, action)),
-                });
-              }
-              if (result.kind === "accepted" && result.result.kind === "todoAnswerStored") {
-                const todo = store.todos.get(result.result.todoRequestId)?.todo;
-                if (todo?.state.kind === "answered" && todo.state.route.kind === "message")
-                  schedule(todo.threadId, m.commandId);
-              }
-              wake();
-            };
-            if (beforeTodo && (m.method === "todo.answer" || m.method === "todo.decide"))
-              beforeTodo(m.commandId, proceed);
-            else proceed();
-            return;
-          }
-          let result = gitStatus?.handle(m) ?? null;
-          if (
-            !result &&
-            (m.method === "subscription.openThread" ||
-              m.method === "subscription.openList" ||
-              m.method === "tool.readActivity") &&
-            gitStatus?.has(m.payload.subscriptionId)
-          )
-            result = {
-              kind: "rejected",
-              commandId: m.commandId,
-              failure: { kind: "invalidState" },
-            };
-          if (m.method === "checkpoint.diff") {
-            const scope = visibility();
-            const allowed = () =>
-              scope === visibility() && allows(m.payload.query.threadId, "thread.view");
-            const work = readDiff(m)
-              .then((receipt) => {
-                if (!session) return;
-                if (receipt.kind === "accepted" && !allowed())
-                  peer.control({
-                    kind: "rejected",
-                    commandId: m.commandId,
-                    failure: { kind: "notFound" },
-                  });
-                else {
-                  const stream = sendLogicalRequest(peer, receipt);
-                  if (receipt.kind === "accepted")
-                    disclosures.set(m.commandId, { stream, allowed });
-                }
+          if (!session || !subs || !gitStatus) throw Error("Configuration required");
+          const principal: LocalActor = {
+            id: actor.principal.id,
+            environmentId: host.identity.id,
+            allows: (permission, target) =>
+              target.kind === "thread" && allows(target.threadId, permission),
+          };
+          const disclose = (receipt: CommandReceipt, allowed: () => boolean) => {
+            const stream = sendLogicalRequest(peer, receipt);
+            disclosures.set(m.commandId, { stream, allowed });
+          };
+          const result = dispatch(m, {
+            store,
+            host,
+            principal,
+            deviceId: actor.deviceId,
+            session,
+            subs,
+            gitStatus,
+            peer,
+            wake,
+            active: () => session !== null,
+            diffService,
+            visibility,
+            allows,
+            disclose,
+            disclosures,
+            failed(commandId) {
+              if (session) {
+                peer.control({ kind: "programError", commandId, code: "internalError" });
                 wake();
-              })
-              .catch(() => {
-                if (session) {
-                  peer.control({
-                    kind: "programError",
-                    commandId: m.commandId,
-                    code: "internalError",
-                  });
-                  wake();
-                }
-              });
-            store.diffReads.add(work);
-            void work.finally(() => store.diffReads.delete(work));
-            return;
-          }
-          if (!result) result = subs.handle(m);
-          if (
-            !result &&
-            (m.method === "round.stop" ||
-              m.method === "round.readStop" ||
-              m.method === "input.steer")
-          ) {
-            const principal: LocalActor = {
-              id: actor.principal.id,
-              environmentId: host.identity.id,
-              allows: (permission, target) =>
-                target.kind === "thread" && allows(target.threadId, permission),
-            };
-            result =
-              (m.method === "input.steer"
-                ? steerCommand?.(principal, m)
-                : stopCommand?.(principal, m)) ?? null;
-          }
-          if (!result && m.method === "thread.changeLifecycle") {
-            result = applyThreadChange(
-              {
-                actor: {
-                  id: actor.principal.id,
-                  environmentId: host.identity.id,
-                  allows: (right, target) =>
-                    target.kind === "thread" && allows(target.threadId, right),
-                },
-                commandId: m.commandId,
-                transaction: store,
-              },
-              m.payload,
-              visibility(),
-            );
-          }
-          if (
-            result?.kind === "accepted" &&
-            (result.result.kind === "earlierSettled" || result.result.kind === "threadChanged")
-          ) {
-            const authorizedAt = visibility();
-            const stream = sendLogicalRequest(peer, result);
-            disclosures.set(m.commandId, { stream, allowed: () => authorizedAt === visibility() });
-            wake();
-            return;
-          }
-          if (!result && m.method === "thread.rename")
-            result = renameThread({
-              actor: {
-                id: actor.principal.id,
-                environmentId: host.identity.id,
-                allows: () => allows(m.payload.threadId, "thread.send"),
-              },
-              commandId: m.commandId,
-              transaction: store,
-              ...m.payload,
-            });
-          if (
-            !result &&
-            session.features.includes("queueEditing") &&
-            (m.method === "input.editQueued" ||
-              m.method === "input.cancelQueued" ||
-              m.method === "input.reorderQueue")
-          )
-            result = applyInputCommand({
-              actor: {
-                id: actor.principal.id,
-                environmentId: host.identity.id,
-                allows: (right) => allows(m.payload.threadId, right),
-              },
-              transaction: store,
-              command: m,
-            });
-          if (!result && m.method === "input.send") {
-            const permitted = allows(m.payload.threadId, "thread.send");
-            const injected = permitted ? fixtureCommand?.(m, store) : null;
-            if (injected) result = injected;
-            else {
-              void sendInput(
-                {
-                  id: actor.principal.id,
-                  environmentId: host.identity.id,
-                  allows: () => allows(m.payload.threadId, "thread.send"),
-                },
-                m,
-              ).then(
-                (receipt) => {
-                  if (receipt.kind === "accepted") schedule(m.payload.threadId, m.commandId);
-                  const deliver = () => {
-                    if (session) {
-                      peer.control(receipt);
-                      wake();
-                    }
-                  };
-                  if (beforeInputReceipt) beforeInputReceipt(m, receipt, deliver);
-                  else deliver();
-                },
-                () => {
-                  if (session) {
-                    peer.control({
-                      kind: "programError",
-                      commandId: m.commandId,
-                      code: "internalError",
-                    });
-                    wake();
-                  }
-                },
+              }
+            },
+            schedule,
+            sendInput,
+            stopCommand,
+            steerCommand,
+            settingReply,
+            watch,
+            fixtureCommand,
+            beforeTodo,
+            beforeInputReceipt,
+          });
+          if (result === undefined) return;
+          if (result?.kind === "accepted") {
+            if (result.result.kind === "earlierSettled" || result.result.kind === "threadChanged") {
+              const scope = visibility();
+              disclose(result, () => scope === visibility());
+              wake();
+              return;
+            }
+            if (result.result.kind === "gitStatus") {
+              disclose(
+                result,
+                () => m.method === "git.readStatus" && allowsWorkspace(m.payload.target),
               );
               return;
             }
-          }
-          if (result?.kind === "accepted" && result.result.kind === "gitStatus") {
-            const stream = sendLogicalRequest(peer, result);
-            disclosures.set(m.commandId, {
-              stream,
-              allowed: () => m.method === "git.readStatus" && allowsWorkspace(m.payload.target),
-            });
-            return;
           }
           peer.control(
             result ?? {
@@ -666,7 +412,7 @@ export async function threadConnection(
           uploads.drop(id);
         },
         close() {
-          stopWatching?.();
+          watch.close();
           session = null;
           clearInterval(timer);
           diffService.close();

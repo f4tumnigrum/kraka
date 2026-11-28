@@ -98,7 +98,6 @@ export async function idle(f: Pick<Fixture, "instance">) {
   const deadline = performance.now() + 30000;
   while (performance.now() < deadline) {
     if (await confirmWriter(f.instance.stateDirectory, deadline, true)) return;
-    await Bun.sleep(15);
   }
   throw Error("Writer did not become idle");
 }

@@ -1,0 +1,11 @@
+name: Ordinary live suites
+description: Run each suite in the shell it declares and check its passing groups.
+runs:
+  using: composite
+  steps:
+    - name: Live suites using the platform default
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -e {0}' }}
+      run: bun tools/run-live.ts default
+    - name: Live suites using Bash
+      shell: bash
+      run: bun tools/run-live.ts bash

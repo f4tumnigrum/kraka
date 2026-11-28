@@ -1,8 +1,10 @@
+import { Readable } from "node:stream";
 import { chromium } from "playwright";
 import { join } from "node:path";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { terminate } from "./replay-process";
+import { createInterface } from "node:readline";
+import { terminate, within } from "./replay-process";
 import * as v from "valibot";
 const sock = "/fixture/mobile.sock";
 let browser: Bun.Subprocess | undefined;
@@ -54,25 +56,15 @@ const control = createServer(async (req, res) => {
           ],
           { stdout: "ignore", stderr: "pipe" },
         );
-        const exited = browser.exited.then(() => {
-          throw Error("Chromium exited before CDP");
+        const ready = Promise.withResolvers<void>();
+        const lines = createInterface({
+          input: Readable.fromWeb(browser.stderr as ReadableStream<Uint8Array>),
         });
-        await Promise.race([
-          (async () => {
-            for (let i = 0; i < 100; i++) {
-              if (
-                await fetch("http://127.0.0.1:9222/json/version").then(
-                  (r) => r.ok,
-                  () => false,
-                )
-              )
-                return;
-              await Bun.sleep(50);
-            }
-            throw Error("CDP not ready");
-          })(),
-          exited,
-        ]);
+        lines.on("line", (line) => {
+          if (line.includes("DevTools listening on ws://")) ready.resolve();
+        });
+        lines.on("close", () => ready.reject(Error("Chromium exited before CDP")));
+        await within(ready.promise, 5000, "Chromium DevTools endpoint");
         break;
       }
       case "/stop":
