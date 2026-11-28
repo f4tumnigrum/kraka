@@ -1,13 +1,7 @@
 import { randomInt } from "node:crypto";
 import { createInterface } from "node:readline";
 import { clientDeviceFile, openDeviceCredentials, ownedDirectory } from "@kraka/cli-client";
-import {
-  createPairingInvite,
-  openStore,
-  openWriter,
-  readManaged,
-  registerProject,
-} from "@kraka/environment";
+import { createPairingInvite, openStore, openWriter, registerProject } from "@kraka/environment";
 import {
   CommandIdSchema,
   DEFAULT_DEVICE_PERMISSIONS,
@@ -125,6 +119,22 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
     );
     cleanup.push(() => work.close());
     host.port.openThread = (nonce) => work.openThread(nonce, true);
+    host.port.login = (device, req, session) =>
+      executors.track(
+        executors.login.command(
+          {
+            actor: {
+              id: device.principal.id,
+              environmentId,
+              allows: (right, target) => !!host.store.ceiling(device.principal.id, target, right),
+            },
+            transaction: store,
+            commandId: req.commandId,
+          },
+          session,
+          req,
+        ),
+      );
     const access = host.port.request;
     host.port.request = (device, r) => {
       const actor = {
@@ -136,22 +146,10 @@ export async function startForeground(stateDir: string, mode: "print" | "open") 
         ) => Boolean(host.store.ceiling(device.principal.id, object, right)),
       };
       const context = { actor, transaction: store, commandId: r.commandId };
-      if (r.method === "thread.start")
-        return work.startThread(actor, r).then((receipt) => {
-          if (receipt.kind === "accepted" && receipt.result.kind === "threadStarted") {
-            const id = r.payload.worktreeId;
-            const claim = id && readManaged(store.db, id);
-            if (
-              claim &&
-              (claim.claim.phase.kind === "building" || claim.claim.phase.kind === "preparing")
-            )
-              void work.resume(claim);
-            else work.schedule(receipt.result.threadId, r.commandId);
-          }
-          return receipt;
-        });
+      if (r.method === "thread.start") return work.startAndSchedule(actor, r);
       if (r.method === "executor.configure") return executors.configure(context, r.payload);
-      if (r.method === "executor.refresh") return executors.refresh(context, r.payload);
+      if (r.method === "executor.refresh")
+        return executors.refresh(context, r.payload, device.principal.ownerId);
       if (r.method === "project.register") {
         const response = registerProject({ ...context, environmentId, ...r.payload });
         if (response.kind === "accepted" && response.result.kind === "projectRegistered")

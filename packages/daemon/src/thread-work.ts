@@ -60,6 +60,7 @@ export type ReplayWriter<H extends object> = {
   confirmFencedAbsence?: (id: import("@kraka/protocol").DeliveryId) => Promise<boolean>;
 } | null;
 export type WriterLifecycle = {
+  loginClock?: import("./instance-login").LoginClock;
   accessHost?: Awaited<ReturnType<typeof openAccessHost>>;
   queueChanged?: (threadId: ThreadId) => void;
   preparation?: PreparationHook;
@@ -412,6 +413,22 @@ export function threadWork<H extends object>(
       },
     );
   }
+  async function startAndSchedule(
+    principal: LocalActor,
+    req: Extract<SignedRequest, { method: "thread.start" }>,
+  ) {
+    const receipt = await startThread(principal, req);
+    if (receipt.kind === "accepted" && receipt.result.kind === "threadStarted") {
+      const claim = req.payload.worktreeId && readManaged(transaction.db, req.payload.worktreeId);
+      if (
+        claim &&
+        (claim.claim.phase.kind === "building" || claim.claim.phase.kind === "preparing")
+      )
+        void resume(claim);
+      else schedule(receipt.result.threadId, req.commandId);
+    }
+    return receipt;
+  }
   const openThread = (nonce: string, reportPermissions = false) =>
     threadConnection(
       transaction,
@@ -420,6 +437,8 @@ export function threadWork<H extends object>(
       schedule,
       sendInput,
       gitStatusCache,
+      executors,
+      startAndSchedule,
       lifecycle?.threadCommand,
       lifecycle?.inspectPage,
       lifecycle?.beforeTodo,
@@ -502,6 +521,7 @@ export function threadWork<H extends object>(
   timer.unref();
   return {
     openThread,
+    startAndSchedule,
     startThread,
     schedule,
     resume,
