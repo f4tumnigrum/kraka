@@ -150,6 +150,7 @@ export async function switchThreadSession(
     previewId,
     commandId,
   }: { actor: LocalActor; previewId: SessionTransitionPreview["id"]; commandId: CommandId },
+  accepted?: (receipt: CommandReceipt) => void,
 ): Promise<CommandReceipt> {
   const saved = loadPreview(store, previewId, actor.id);
   if (!saved || saved.preview.kind === "reject") return reject(commandId, "notFound");
@@ -198,6 +199,7 @@ export async function switchThreadSession(
     ["thread.view"],
   );
   if (!claimed) return receipt;
+  accepted?.(receipt);
   let channel: TransitionChannel | null = null,
     retained = false,
     dispatched = false;

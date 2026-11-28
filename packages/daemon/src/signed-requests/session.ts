@@ -80,12 +80,26 @@ export const session: Handler<
     return;
   }
   if (!host) return reject("unsupported");
-  const work = switchThreadSession(store, host, {
-    actor: principal,
-    previewId: m.payload.previewId,
-    commandId: m.commandId,
-  });
-  const delivery = work.then(disclose, () => c.failed(m.commandId));
+  let sent = false;
+  const work = switchThreadSession(
+    store,
+    host,
+    {
+      actor: principal,
+      previewId: m.payload.previewId,
+      commandId: m.commandId,
+    },
+    (receipt) => {
+      sent = true;
+      disclose(receipt);
+    },
+  );
+  const delivery = work.then(
+    (receipt) => {
+      if (!sent) disclose(receipt);
+    },
+    () => c.failed(m.commandId),
+  );
   jobs.add(delivery);
   void delivery.finally(() => jobs.delete(delivery)).catch(() => {});
 };

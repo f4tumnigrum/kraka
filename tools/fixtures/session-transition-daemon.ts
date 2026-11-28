@@ -1,6 +1,12 @@
 import { join } from "node:path";
 import * as v from "valibot";
-import { readThread, type FirstSendStore, type LocalActor } from "@kraka/environment";
+import {
+  InstancePublicationSchema,
+  type InstancePublication,
+  readThread,
+  type FirstSendStore,
+  type LocalActor,
+} from "@kraka/environment";
 import { startWriter } from "../../packages/daemon/src/first-send";
 import { SqliteThreadCache } from "../../packages/cli-client/src/thread-cache";
 import { startPairedProject } from "./paired-project";
@@ -196,9 +202,86 @@ async function setup(dir: string) {
       get client() {
         return daemon.conn.client;
       },
-      async restart() {
+      async crashAfterInjection(previewId: string) {
+        const projectId = readThread(store.db, tid)?.projectId;
         await daemon.close();
-        daemon = await open();
+        const publication = Promise.withResolvers<InstancePublication>(),
+          injected = Promise.withResolvers<void>();
+        const child = Bun.spawn(
+          [process.execPath, join(import.meta.dir, "crash-transition-writer.ts"), stateDir],
+          {
+            stdin: "ignore",
+            stdout: "ignore",
+            stderr: "inherit",
+            async ipc(raw: unknown) {
+              const r = v.parse(
+                v.union([
+                  v.object({ publication: InstancePublicationSchema }),
+                  v.object({
+                    id: v.string(),
+                    peer: v.string(),
+                    call: v.record(v.string(), v.unknown()),
+                  }),
+                ]),
+                raw,
+              );
+              if ("publication" in r) {
+                publication.resolve(r.publication);
+                return;
+              }
+              try {
+                const value = await call(r.peer, r.call);
+                child.send({ id: r.id, value });
+              } catch (error) {
+                const handoff = v.safeParse(
+                  v.object({
+                    kind: v.literal("invoke"),
+                    cmd: v.object({ request: v.object({ kind: v.literal("handoff") }) }),
+                  }),
+                  r.call,
+                );
+                if (handoff.success) injected.resolve();
+                else injected.reject(error);
+              }
+            },
+          },
+        );
+        let connection: Awaited<ReturnType<typeof connectReplica>> | undefined;
+        try {
+          const pub = await within(publication.promise, 10000, "crash writer ready");
+          const owner = await connectFirstSend(stateDir, pub);
+          try {
+            for (const instance of states.keys())
+              accepted(
+                (await owner.send("executor.refresh", { instanceId: instance, projectId })).receipt,
+                "executorRefreshed",
+              );
+          } finally {
+            owner.close();
+          }
+          connection = await connectReplica(pub.endpoint, pairing.identity, pairing.owner, cache, {
+            minor: 2,
+          });
+          const receipt = await connection.client.rpc(
+            "thread.switchSession",
+            { previewId },
+            command("switch"),
+          );
+          await within(injected.promise, 10000, "durable injection before killing writer");
+          const op = accepted(
+            await connection.client.rpc("thread.readSessionTransition", {
+              threadId: tid,
+              operationId: command("switch"),
+            }),
+            "sessionTransition",
+          ).transition;
+          return { receipt, op };
+        } finally {
+          await connection?.close();
+          child.kill("SIGKILL");
+          await child.exited;
+          daemon = await open();
+        }
       },
       async revise(instance: string, patch: object) {
         states.set(

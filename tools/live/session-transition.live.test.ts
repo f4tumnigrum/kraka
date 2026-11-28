@@ -27,6 +27,7 @@ test("1. compatible continuation reuses, changes model or resumes the verified n
       expect(p.kind).toBe(scenario);
       if (p.kind === "changeModel") expect(p.effectiveAt).toBe("nextTurn");
       accepted(await f.switch(p.id), "sessionSwitchAccepted");
+      await f.waitForInput("alpha");
       expect(await f.read()).toMatchObject({
         kind: scenario,
         target: { model: payload.model },
@@ -56,6 +57,7 @@ test(
       expect(p.entries.map((e) => String(e.id))).toEqual(["U1", "U2", "A2"]);
       expect(await f.ledger("beta")).toEqual([]);
       accepted(await f.switch(p.id), "sessionSwitchAccepted");
+      await f.waitForInput("beta");
       const op = await f.read();
       if (op.kind !== "createWithHandoff") throw Error(op.kind);
       expect(op).toMatchObject({
@@ -211,16 +213,14 @@ test(
       await f.revise("beta", { drop: true });
       const p = await f.preview();
       if (p.kind !== "createWithHandoff") throw Error(p.kind);
-      const receipt = await f.switch(p.id),
-        op = await f.read();
+      const { receipt, op } = await f.crashAfterInjection(p.id);
       if (op.kind !== "createWithHandoff") throw Error(op.kind);
-      await f.restart();
       f.store.db.run(
         "UPDATE messages SET data=json_set(data,'$.text','changed','$.version','3') WHERE id='A2'",
       );
       expect(await f.switch(p.id)).toEqual(receipt);
       expect(await f.read()).toEqual(op);
-      expect(op.injection).toBe("unknown");
+      expect(op.injection).toBe("pending");
       expect(op.currentBinding).toEqual(original);
       const frozen = await new HandoffDeliveries(f.store).read(op.deliveryId);
       expect(frozen?.handoffEntries).toEqual(p.entries);
