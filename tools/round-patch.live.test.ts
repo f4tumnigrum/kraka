@@ -108,7 +108,7 @@ test(
       expect(added.filter((f) => f.startsWith("refs/kraka/checkpoints/"))).toHaveLength(2);
       for (const file of added)
         expect(file).toMatch(
-          /^(?:refs\/kraka\/checkpoints\/[0-9a-f/]+\/(?:before|after)|objects\/[0-9a-f]{2}\/[0-9a-f]+)$/,
+          /^(?:refs\/kraka\/checkpoints\/w-[0-9a-f]{64}\/[0-9a-f]{64}\/[0-9a-f]{64}\/(?:before|after)|objects\/[0-9a-f]{2}\/[0-9a-f]+)$/,
         );
       expect((await finished(legacy, t.roundId)).capture.result).toEqual({
         kind: "missing",

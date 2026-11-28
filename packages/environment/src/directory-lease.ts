@@ -4,6 +4,7 @@ import {
   recordCaptureWait,
   type GitStep,
 } from "./capture-timing";
+import { privateHooks } from "./private-git";
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, toNamespacedPath } from "node:path";
@@ -11,13 +12,7 @@ import { createHash } from "node:crypto";
 import * as v from "valibot";
 import { GitObjectIdSchema, type DirectoryBinding, type EnvironmentId } from "@kraka/protocol";
 import { physicalDirectory } from "./project-directory";
-import {
-  runGit,
-  gitCheckoutArgs,
-  gitPath,
-  gitProcessError,
-  type GitProcessResult,
-} from "./git-process";
+import { runGit, gitCheckoutArgs, gitProcessError, type GitProcessResult } from "./git-process";
 import { worktreeWorkerCommand } from "./worktree-worker";
 
 export type LeaseKey = Pick<DirectoryBinding, "directoryId" | "generation"> & {
@@ -45,7 +40,7 @@ const transfer = v.object({
   env: v.record(v.string(), v.string()),
   timeout: v.number(),
 });
-function installObjects(path: string, req: v.InferOutput<typeof transfer>) {
+function installObjects(path: string, state: string, req: v.InferOutput<typeof transfer>) {
   const index = req.env.GIT_INDEX_FILE;
   if (!index) throw Error("Missing private index");
   const scratch = dirname(index),
@@ -53,7 +48,7 @@ function installObjects(path: string, req: v.InferOutput<typeof transfer>) {
   const config = [
     ...gitCheckoutArgs(req.checkout),
     "-c",
-    "core.hooksPath=" + gitPath(join(scratch, "hooks")),
+    privateHooks(state),
     "-c",
     "core.fsync=loose-object,reference",
   ];
@@ -141,7 +136,7 @@ export async function runDirectoryWriter(raw: unknown) {
         throw Error("Directory replaced");
       const r =
         "commit" in req
-          ? installObjects(task.path, req)
+          ? installObjects(task.path, task.state, req)
           : runGit(task.path, req.args, {
               env: req.env,
               ...(req.input ? { input: Buffer.from(req.input, "base64") } : {}),

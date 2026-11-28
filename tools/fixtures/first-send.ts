@@ -137,6 +137,7 @@ export function launchWriter(
   };
   return {
     child,
+    stderr,
     started,
     ready,
     stderrTail: () => stderrTail,

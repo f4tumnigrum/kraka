@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { privateDirectory, privateHooks } from "./private-git";
 import { existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { GitObjectIdSchema, type DirectoryBinding } from "@kraka/protocol";
 import * as v from "valibot";
@@ -60,6 +61,7 @@ export async function captureBoundary({
   scratch,
   seal,
   recover,
+  legacyRef,
   remember,
   source,
   bindSource,
@@ -73,6 +75,7 @@ export async function captureBoundary({
   scratch: string;
   seal: CaptureSeal | null;
   recover: boolean;
+  legacyRef?: string;
   source: RepositoryIdentity | null;
   bindSource: (repo: RepositoryIdentity) => void;
   remember: (seal: CaptureSeal) => void;
@@ -88,9 +91,11 @@ export async function captureBoundary({
     throw Error("wrongCapture");
   const index = join(scratch, plan.privateIndexPath),
     objects = join(scratch, plan.privateObjectDirectory);
-  const hooks = join(dirname(index), "hooks");
+  let hooks: string;
   try {
-    mkdirSync(hooks, { recursive: true, mode: 0o700 });
+    privateDirectory(scratch);
+    privateDirectory(dirname(index));
+    hooks = privateHooks(dirname(scratch));
   } catch (cause) {
     throw Error("index.prepare", { cause });
   }
@@ -146,7 +151,7 @@ export async function captureBoundary({
       [
         ...checkoutArgs,
         "-c",
-        "core.hooksPath=" + gitPath(hooks),
+        hooks,
         "-c",
         "core.fsync=loose-object,reference",
         "-c",
@@ -294,6 +299,10 @@ export async function captureBoundary({
   )
     throw Error("lease.revalidate");
   const point = { ref: plan.ref, commit, tree: seal.tree };
+  if (legacyRef) {
+    const old = await lease.git([...checkoutArgs, "rev-parse", "--verify", "--quiet", legacyRef]);
+    if (old.exitCode === 0 && old.stdout.toString().trim() !== commit) throw Error("idConflict");
+  }
   const existing = recover
     ? await lease.git([...checkoutArgs, "rev-parse", "--verify", "--quiet", plan.ref])
     : null;
@@ -316,7 +325,13 @@ export async function captureBoundary({
         "--no-dangling",
         commit,
       ]);
-      const published = await run(["update-ref", plan.ref, commit, "0".repeat(commit.length)]);
+      const published = await run([
+        "update-ref",
+        "--no-deref",
+        plan.ref,
+        commit,
+        "0".repeat(commit.length),
+      ]);
       if (published.exitCode !== 0) {
         remaining();
         publicationError = gitProcessError("ref.update-ref", published);

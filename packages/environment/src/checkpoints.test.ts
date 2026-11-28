@@ -1,5 +1,8 @@
 import { git, seedGit } from "../../../tools/fixtures/isolated-start";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { writerGitPaths } from "./private-git";
+import { DiffCleanup } from "./diff-cleanup";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -67,6 +70,24 @@ function step(state: CaptureState, event: CaptureEvent): CaptureState {
   if (r.kind === "rejected") throw new Error(r.reason);
   return r.value;
 }
+
+test("copied environment identities have distinct checkpoint refs in each state directory", () => {
+  const first = mkdtempSync(join(tmpdir(), "kraka-writer-refs-"));
+  try {
+    const second = join(first, "copy");
+    mkdirSync(second);
+    const environmentId = v.parse(EnvironmentIdSchema, "same-environment");
+    const ref = (state: string) =>
+      checkpointRef(
+        { ...key, environmentId, writer: writerGitPaths(state, environmentId).writer },
+        "before",
+      );
+    expect(ref(first)).toBe(ref(join(first, ".")));
+    expect(ref(first)).not.toBe(ref(second));
+  } finally {
+    rmSync(first, { recursive: true, force: true });
+  }
+});
 
 test("uses the newly published baseline for each attempt, including edits made between rounds", () => {
   const next = {
@@ -307,6 +328,7 @@ test("a newly settled capture can finalize its matching round and joint rollback
 
 test("a shallow commit retains its verified right endpoint when its actual first parent is absent", async () => {
   const root = mkdtempSync(join(tmpdir(), "kraka-shallow-"));
+  const db = new Database(":memory:");
   const git = (...args: string[]) => {
     const r = Bun.spawnSync(["git", "-C", root, ...args], {
       env: {
@@ -334,8 +356,10 @@ test("a shallow commit retains its verified right endpoint when its actual first
       threadId: key.threadId,
       worktreeId: key.worktreeId,
     });
-    const service = new LocalDiffService();
-    const diff = service.readLocalDiff({
+    const service = new LocalDiffService(
+      new DiffCleanup(db, writerGitPaths(root, "shallow-fixture")),
+    );
+    const diff = await service.readLocalDiff({
       actor: { scope: "viewer", directoryDiff: false },
       query,
       cursor: null,
@@ -357,6 +381,7 @@ test("a shallow commit retains its verified right endpoint when its actual first
       to: { relation: "commit", oid: git("rev-parse", "HEAD") },
     });
   } finally {
+    db.close(true);
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -376,9 +401,10 @@ test("both capture and attempt identities must match; a conflicting baseline can
   ).toEqual({ kind: "rejected", reason: "idConflict" });
 });
 
-test("a range cursor keeps the first before and the fixed last after across pages", () => {
+test("a range cursor keeps the first before and the fixed last after across pages", async () => {
   const dir = mkdtempSync(join(tmpdir(), "kraka-capture-pages-")),
-    service = new LocalDiffService();
+    db = new Database(":memory:"),
+    service = new LocalDiffService(new DiffCleanup(db, writerGitPaths(dir, "range-fixture")));
   try {
     const repo = seedGit(dir),
       left = v.parse(GitObjectIdSchema, repo.base);
@@ -424,20 +450,22 @@ test("a range cursor keeps the first before and the fixed last after across page
       },
       captureRange: () => ({ pair }),
     };
-    const page = service.readLocalDiff({ ...input, cursor: null });
+    const page = await service.readLocalDiff({ ...input, cursor: null });
     if (page.kind !== "changed" || !page.next) throw Error("Missing range cursor");
     expect(Buffer.byteLength(page.patch)).toBe(10_000_000);
     expect(page.truncated).toBe(true);
     writeFileSync(join(repo.path, "large"), "later version\n");
     git(repo.path, "commit", "-qam", "later");
     expect(
-      service.readLocalDiff({
-        ...input,
-        query: { ...query, toCaptureId: key.id },
-        cursor: page.next,
-      }).kind,
+      (
+        await service.readLocalDiff({
+          ...input,
+          query: { ...query, toCaptureId: key.id },
+          cursor: page.next,
+        })
+      ).kind,
     ).toBe("unavailable");
-    const end = service.readLocalDiff({
+    const end = await service.readLocalDiff({
       ...input,
       cursor: page.next,
       captureRange: () => {
@@ -451,6 +479,7 @@ test("a range cursor keeps the first before and the fixed last after across page
     expect(end.next).toBeNull();
   } finally {
     service.close();
+    db.close(true);
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -44,7 +44,11 @@ export function revParseLines(stdout: Buffer): string[] {
 }
 export function gitRepositoryIdentity(directory: string) {
   const r = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  return r.exitCode === 0 ? physicalDirectory(r.stdout.toString().trimEnd()) : null;
+  return r.exitCode === 0
+    ? physicalDirectory(
+        r.stdout.toString().replace(process.platform === "win32" ? /\r?\n$/ : /\n$/, ""),
+      )
+    : null;
 }
 
 export type GitProcessResult = {

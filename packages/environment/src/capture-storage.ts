@@ -33,7 +33,7 @@ function captureSource(db: Database, binding: string, repo: string) {
 export function bindCaptureSource(
   db: Database,
   binding: DirectoryBinding,
-  repo: RepositoryIdentity | null,
+  repo: (RepositoryIdentity & { writer: string }) | null,
 ) {
   return captureSource(db, JSON.stringify(binding), repo ? JSON.stringify(repo) : "");
 }

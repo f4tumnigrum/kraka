@@ -813,7 +813,7 @@ async function openDurableWriter<H extends object>(
     mark("listener");
     const published = Promise.withResolvers<void>();
     let instance: ReturnType<typeof lock.publish>;
-    let captureRecovery: Promise<void>;
+    let startupRecovery: Promise<void>;
     try {
       const closing = transaction.db
         .query<{ data: string }, []>(
@@ -821,8 +821,10 @@ async function openDurableWriter<H extends object>(
         )
         .all()
         .map(({ data }) => v.parse(RoundSchema, JSON.parse(data)));
-      captureRecovery = transaction.captures
-        .registerRecovery(published.promise, closing)
+      transaction.captures.registerRecovery(closing);
+      transaction.diffCleanup.registerRecovery(transaction.recovery);
+      startupRecovery = published.promise
+        .then(() => transaction.recovery.run(controller.signal))
         .finally(() => {
           startupRecoveryPending = false;
         });
@@ -882,7 +884,12 @@ async function openDurableWriter<H extends object>(
         controller.abort();
         try {
           await server.stop(true);
-          await Promise.allSettled([captureRecovery, ...turns.values(), ...preparing.values()]);
+          await Promise.allSettled([
+            startupRecovery,
+            ...turns.values(),
+            ...preparing.values(),
+            ...transaction.diffReads,
+          ]);
           await Promise.allSettled(opening.values());
           for (const r of prepared.values())
             if (r.opened.kind === "ok") await r.adapter.close(r.opened.value, "shutdown");

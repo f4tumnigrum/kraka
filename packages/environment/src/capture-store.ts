@@ -56,7 +56,26 @@ import { resolveDiffDirectory } from "./git-workspace";
 import { gitRepositoryIdentity, gitProcessError, runGit } from "./git-process";
 
 const version = v.parse(ObjectVersionSchema, "1");
-const physical = v.strictObject({ realPath: v.string(), identity: v.string() });
+const sourceSchema = v.object({
+  realPath: v.string(),
+  identity: v.string(),
+  writer: v.optional(v.string()),
+});
+function captureSource(text: string) {
+  const { writer, ...repo } = v.parse(sourceSchema, JSON.parse(text));
+  return { writer, repo };
+}
+function storedCheckpointRef(
+  path: string,
+  key: Pick<CaptureState["key"], "id" | "threadId" | "writer" | "environmentId">,
+  boundary: Boundary,
+  legacy: boolean,
+) {
+  const ref = checkpointRef(key, boundary);
+  if (!legacy || runGit(path, ["show-ref", "--exists", ref]).exitCode !== 2) return ref;
+  const { writer, ...oldKey } = key;
+  return checkpointRef(oldKey, boundary);
+}
 const ownersSchema = v.array(v.tuple([v.string(), FileOwnershipSchema]));
 function apply(state: CaptureState, event: CaptureEvent) {
   const next = transitionCapture(state, event);
@@ -101,6 +120,7 @@ export class RoundCaptures {
   }
   private initial(round: Round, binding: DirectoryBinding, id: CaptureId) {
     return beginCapture({
+      writer: this.store.gitPaths.writer,
       environmentId: this.store.writer.environmentId,
       id,
       roundId: round.id,
@@ -127,14 +147,6 @@ export class RoundCaptures {
     }
     this.store.db.run("DELETE FROM capture_cleanup WHERE path=?", [path]);
   }
-  private cleanSettled() {
-    for (const { path } of this.store.db
-      .query<{ path: string }, []>("SELECT path FROM capture_cleanup")
-      .all())
-      this.clean(path);
-  }
-  private readonly restarting = new Map<string, Promise<void>>();
-
   // A project can register the same physical checkout as a managed worktree.
   // Read its saved identity here; validation against disk belongs inside the lease.
   private recoveryDirectory(thread: Thread) {
@@ -147,30 +159,22 @@ export class RoundCaptures {
   }
 
   waitForRecovery(threadId: Thread["id"]) {
-    if (!this.restarting.size) return;
+    if (!this.store.recovery.pending) return;
     const thread = readThread(this.store.db, threadId);
-    return thread && this.restarting.get(this.recoveryDirectory(thread));
+    return thread && this.store.recovery.wait(this.recoveryDirectory(thread));
   }
 
-  registerRecovery(published: Promise<void>, closing: Round[]) {
-    const start = published.then(() => {
-      if (!this.signal?.aborted) this.cleanSettled();
-    });
-    const enqueue = (thread: Thread, work: () => Promise<void>) => {
-      const key = this.recoveryDirectory(thread);
-      const previous = this.restarting.get(key) ?? start;
-      this.restarting.set(
-        key,
-        previous.then(() => {
-          if (!this.signal?.aborted) return work();
-        }),
-      );
-    };
+  registerRecovery(closing: Round[]) {
+    const recovery = this.store.recovery;
+    for (const { path } of this.store.db
+      .query<{ path: string }, []>("SELECT path FROM capture_cleanup")
+      .all())
+      recovery.register("capture-scratch", () => this.clean(path));
     for (const row of pendingBaselines(this.store.db)) {
       const round = readRound(this.store.db, row.round);
       const thread = round && readThread(this.store.db, round.threadId);
       if (round?.attempt.attemptId === row.attempt && thread)
-        enqueue(thread, async () => {
+        recovery.register(this.recoveryDirectory(thread), async () => {
           const active = readRound(this.store.db, round.id);
           const current = readIntent(this.store.db, round.id, row.attempt);
           if (
@@ -185,23 +189,12 @@ export class RoundCaptures {
     for (const round of closing) {
       const thread = readThread(this.store.db, round.threadId);
       if (!thread) throw Error("Unknown capture thread");
-      enqueue(thread, async () => {
+      recovery.register(this.recoveryDirectory(thread), async () => {
         const current = readRound(this.store.db, round.id);
         if (current?.attempt.attemptId === round.attempt.attemptId)
           await this.finish(current, true);
       });
     }
-    const jobs = [start];
-    for (const [key, done] of this.restarting)
-      jobs.push(
-        done.then(() => {
-          this.restarting.delete(key);
-        }),
-      );
-    return Promise.allSettled(jobs).then((results) => {
-      for (const result of results)
-        if (result.status === "rejected") console.error("Checkpoint restart failed", result.reason);
-    });
   }
 
   async before(round: Round) {
@@ -318,7 +311,7 @@ export class RoundCaptures {
     let state = this.initial(round, binding, v.parse(CaptureIdSchema, row.id));
     const key = state.key;
     const ids = { id: key.id, attemptId: key.attemptId };
-    const scratch = join(this.store.writer.stateDirectory, "capture-scratch");
+    const scratch = this.store.gitPaths.captureScratch;
     let tmp = join(scratch, captureDirectory(key, boundary));
     const queueCleanup = () => db.run("INSERT OR IGNORE INTO capture_cleanup VALUES(?)", [tmp]);
     const settled = (capture: CheckpointCapture, owners?: Map<string, FileOwnership>) => {
@@ -341,6 +334,8 @@ export class RoundCaptures {
       queueCleanup();
     };
     try {
+      const source = row.repo ? captureSource(row.repo) : null;
+      if (source?.writer && source.writer !== key.writer) throw Error("sourceRepositoryChanged");
       const seal = row.seal ? decodeSeal(row.seal) : null;
       const layout = captureLayout(scratch, key, boundary, seal);
       if (layout === "legacy") tmp = join(scratch, captureDirectory(key, boundary, layout));
@@ -362,11 +357,11 @@ export class RoundCaptures {
           if (boundary === "after") {
             if (
               !row.baseline ||
-              !row.repo ||
-              !Bun.deepEquals(gitRepositoryIdentity(path), JSON.parse(row.repo))
+              !source ||
+              !Bun.deepEquals(gitRepositoryIdentity(path), source.repo)
             )
               throw Error("baselineUnavailable");
-            const ref = checkpointRef(key, "before"),
+            const ref = storedCheckpointRef(path, key, "before", !source.writer),
               commit = v.parse(GitObjectIdSchema, row.baseline);
             const found = await lease.git([
               "--no-replace-objects",
@@ -380,7 +375,11 @@ export class RoundCaptures {
             const working = apply(state, {
               ...ids,
               kind: "baselinePublished",
-              point: { ref, commit, tree: v.parse(GitObjectIdSchema, tree) },
+              point: {
+                ref: checkpointRef(key, "before"),
+                commit,
+                tree: v.parse(GitObjectIdSchema, tree),
+              },
             });
             state = apply(working, { ...ids, kind: "rootEnded" });
           }
@@ -393,11 +392,24 @@ export class RoundCaptures {
             layout,
             seal,
             recover,
-            source: row.repo ? v.parse(physical, JSON.parse(row.repo)) : null,
+            source: source?.repo ?? null,
+            ...(recover &&
+              source &&
+              !source.writer && {
+                legacyRef: checkpointRef(
+                  {
+                    environmentId: this.store.writer.environmentId,
+                    threadId: thread.id,
+                    id: key.id,
+                  },
+                  boundary,
+                ),
+              }),
             bindSource: (repo) => {
               if (!row.repo) {
-                row.source = bindCaptureSource(db, binding, repo);
-                row.repo = JSON.stringify(repo);
+                const saved = { ...repo, writer: this.store.gitPaths.writer };
+                row.source = bindCaptureSource(db, binding, saved);
+                row.repo = JSON.stringify(saved);
                 db.run("UPDATE capture_intents SET source=? WHERE round=? AND attempt=?", [
                   row.source,
                   round.id,
@@ -601,11 +613,24 @@ export class RoundCaptures {
     const physicalRepo = gitRepositoryIdentity(worktree.path);
     const point = (row: ReturnType<typeof find>, boundary: Boundary, id: CaptureId) => {
       const data = boundary === "before" ? row?.baseline : row?.end;
-      if (!row?.repo || !data || !Bun.deepEquals(physicalRepo, JSON.parse(row.repo))) return null;
+      if (!row?.repo || !data) return null;
+      const source = captureSource(row.repo);
+      if (
+        (source.writer && source.writer !== this.store.gitPaths.writer) ||
+        !Bun.deepEquals(physicalRepo, source.repo)
+      )
+        return null;
       const commit = v.parse(GitObjectIdSchema, data);
-      const ref = checkpointRef(
-        { environmentId: this.store.writer.environmentId, threadId: thread, id },
+      const ref = storedCheckpointRef(
+        worktree.path,
+        {
+          writer: this.store.gitPaths.writer,
+          environmentId: this.store.writer.environmentId,
+          threadId: thread,
+          id,
+        },
         boundary,
+        !source.writer,
       );
       const r = runGit(worktree.path, ["rev-parse", "--verify", ref]);
       const t = runGit(worktree.path, [
@@ -645,7 +670,6 @@ export class RoundCaptures {
       !a ||
       !b ||
       comparePositions(first.created, last.created) > 0 ||
-      first.repo !== last.repo ||
       !first.end ||
       !last.baseline
     )

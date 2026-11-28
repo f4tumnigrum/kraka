@@ -94,7 +94,7 @@ export function setupPolicy(f: Fixture, setup: string[], prefix?: string) {
     }),
   );
 }
-export async function idle(f: Fixture) {
+export async function idle(f: Pick<Fixture, "instance">) {
   const deadline = performance.now() + 30000;
   while (performance.now() < deadline) {
     if (await confirmWriter(f.instance.stateDirectory, deadline, true)) return;

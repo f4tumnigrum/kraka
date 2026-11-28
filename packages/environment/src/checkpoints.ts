@@ -18,6 +18,7 @@ import { ok, reject, unexpected, type TransitionResult } from "./result";
 
 export type CaptureKey = Pick<CheckpointCapture, "id" | "roundId" | "attemptId"> & {
   threadId: ThreadId;
+  writer?: string;
   environmentId?: import("@kraka/protocol").EnvironmentId;
   worktreeId: WorktreeId | null;
   projectRoot?: Extract<DirectoryBinding, { kind: "projectRoot" }>;
@@ -49,14 +50,16 @@ export function beginCapture(key: CaptureKey): CaptureState {
 
 /** A committed operation ID survives a restart. Removing a thread releases its refs; unreachable objects follow Git GC. */
 export function checkpointRef(
-  key: Pick<CaptureKey, "environmentId" | "threadId" | "id">,
+  key: Pick<CaptureKey, "environmentId" | "threadId" | "id" | "writer">,
   boundary: Boundary,
 ): string {
   return [
     "refs/kraka/checkpoints",
-    ...(key.environmentId
-      ? [new Bun.CryptoHasher("sha256").update(key.environmentId).digest("hex")]
-      : []),
+    ...(key.writer
+      ? [key.writer]
+      : key.environmentId
+        ? [new Bun.CryptoHasher("sha256").update(key.environmentId).digest("hex")]
+        : []),
     new Bun.CryptoHasher("sha256").update(key.threadId).digest("hex"),
     new Bun.CryptoHasher("sha256").update(key.id).digest("hex"),
     boundary,
@@ -69,7 +72,9 @@ export function captureDirectory(
   boundary: Boundary,
   layout: CaptureLayout = "compact",
 ) {
-  const ref = checkpointRef(key, boundary);
+  // Scratch already lives under the writer state. Keep its address across ref-format upgrades.
+  const { environmentId, threadId, id } = key;
+  const ref = checkpointRef({ ...(environmentId && { environmentId }), threadId, id }, boundary);
   return layout === "legacy"
     ? ref.slice("refs/kraka/".length)
     : new Bun.CryptoHasher("sha256").update(ref).digest("hex");
